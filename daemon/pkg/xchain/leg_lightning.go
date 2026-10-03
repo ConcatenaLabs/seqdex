@@ -106,13 +106,15 @@ type LNLeg interface {
 type clnLNLeg struct {
 	rpc *lnRPC
 	// assetID is the 32-byte hex Sequentia asset id this leg is denominated in
-	// (as displayed). "" means the policy asset (BTC / L-BTC). When set, Pay and
-	// PayHash route in this asset via SeqLN's Step-1 `asset=` param, so the same
-	// leg abstraction serves both the BTC leg and a Sequentia asset leg.
+	// (as displayed), the Sequence token's included. "" means the node's network
+	// has no assets: Bitcoin on a Bitcoin Lightning node. When set, Pay and
+	// PayHash route in this asset, and holds and invoices are made in it, via
+	// SeqLN's `asset` parameter. A leg with no asset on a Sequentia node makes no
+	// hold and no invoice: no asset is ever a default.
 	assetID string
-	// timing is the chain this leg's HTLCs expire on: Bitcoin for the policy-asset
-	// leg of a real BTC-LN node, Sequentia slots for an issued-asset leg. Every
-	// timelock this leg pays with or holds against is converted through it.
+	// timing is the chain this leg's HTLCs expire on: Bitcoin for the leg of a
+	// real BTC-LN node, Sequentia slots for an asset leg. Every timelock this leg
+	// pays with or holds against is converted through it.
 	timing ChainTiming
 }
 
@@ -123,22 +125,20 @@ var _ LNLeg = (*clnLNLeg)(nil)
 func (l *clnLNLeg) Timing() ChainTiming { return l.timing }
 
 // NewCLNLNLeg builds a Lightning leg backed by the CLN node whose lightning-rpc
-// socket is at socketPath (e.g. <lightning-dir>/<network>/lightning-rpc). It is
-// denominated in the policy asset (BTC on a --network=bitcoin/testnet4 node).
+// socket is at socketPath (e.g. <lightning-dir>/<network>/lightning-rpc), for a
+// Bitcoin Lightning node (--network=bitcoin/testnet4), whose channels hold
+// Bitcoin and nothing else. On a Sequentia node use NewCLNAssetLNLeg, with the
+// Sequence token's id for a leg in the token: this leg names no asset, so it
+// refuses to make a hold or an invoice there.
 func NewCLNLNLeg(socketPath string) *clnLNLeg {
 	return &clnLNLeg{rpc: &lnRPC{socketPath: socketPath, timeout: 120 * time.Second}, timing: BTCTiming}
 }
 
-// NewCLNLNLegOn is NewCLNLNLeg for a policy-asset node on a chain other than
-// Bitcoin (a SeqLN node's own policy asset): the timelocks expire in that chain's
-// blocks.
-func NewCLNLNLegOn(socketPath string, timing ChainTiming) *clnLNLeg {
-	return &clnLNLeg{rpc: &lnRPC{socketPath: socketPath, timeout: 120 * time.Second}, timing: timing}
-}
-
-// NewCLNAssetLNLeg builds a Lightning leg denominated in a Sequentia issued
-// asset (assetIDHex = the 32-byte hex asset id). Pay/PayHash route only over
-// channels of that asset. This is the asset side of a pure-LN swap.
+// NewCLNAssetLNLeg builds a Lightning leg denominated in a Sequentia asset
+// (assetIDHex = the 32-byte hex asset id, as displayed; the Sequence token is
+// named by its id like any other asset). Pay/PayHash route only over channels of
+// that asset, and holds and invoices are made in it. This is the asset side of a
+// pure-LN swap.
 func NewCLNAssetLNLeg(socketPath, assetIDHex string) *clnLNLeg {
 	return &clnLNLeg{
 		rpc:     &lnRPC{socketPath: socketPath, timeout: 120 * time.Second},
@@ -155,6 +155,38 @@ func (l *clnLNLeg) NodeID() (string, error) {
 		return "", err
 	}
 	return res.ID, nil
+}
+
+// networkHasAssets reports whether a node on this network holds channels in
+// several assets: Sequentia (and Elements-derived Liquid) networks do, Bitcoin
+// networks do not.
+func networkHasAssets(network string) bool {
+	return strings.HasPrefix(network, "sequentia") || strings.HasPrefix(network, "liquid")
+}
+
+// legAsset is the asset this leg's holds and invoices are made in, lower-case:
+// the leg's asset id, or "" on a node whose network has no assets. On a Sequentia
+// node a leg that names no asset is refused rather than letting the node choose
+// one (a hold that names none is in whatever single asset the node's channels
+// hold, which is the node's choice and not the swap's).
+func (l *clnLNLeg) legAsset() (string, error) {
+	if l.assetID != "" {
+		a := strings.ToLower(l.assetID)
+		if len(a) != 64 || strings.Trim(a, "0123456789abcdef") != "" {
+			return "", fmt.Errorf("%w: leg asset %q is not a 32-byte hex asset id", ErrLNHoldAsset, l.assetID)
+		}
+		return a, nil
+	}
+	var gi struct {
+		Network string `json:"network"`
+	}
+	if err := l.rpc.call(&gi, "getinfo", map[string]interface{}{}); err != nil {
+		return "", fmt.Errorf("getinfo: %w", err)
+	}
+	if networkHasAssets(gi.Network) {
+		return "", fmt.Errorf("%w: the node is on %s, where channels hold several assets, and this leg names none; build the leg with the asset id (the Sequence token's too)", ErrLNHoldAsset, gi.Network)
+	}
+	return "", nil
 }
 
 // ReconnectPeers re-establishes the transport connection to any channel peer that
@@ -289,6 +321,13 @@ func (l *clnLNLeg) pay(bolt11 string, wantHash []byte, amountMsat uint64, maxDel
 		params["maxdelay"] = maxDelay
 	}
 	if err := l.rpc.call(&res, "pay", params); err != nil {
+		// A SIGNER'S DECLINE IS FINAL, AND NOTHING WAS SENT. `pay` asks the signer
+		// (preapproveinvoice) before it offers any HTLC; on a keyless node the device
+		// declines a payment over its limit for the asset. The direct-hop fallback
+		// below would only ask again and be declined again, so report it as it is.
+		if isDeclined(err) {
+			return nil, fmt.Errorf("%w: pay: %v (on a keyless node this is the device's payment limit for the asset)", ErrLNPayDeclined, err)
+		}
 		// AN ERROR FROM `pay` IS NOT A FAILED PAYMENT. The socket read is deadline-bound
 		// while `pay` legitimately runs longer (a retrying route, an HTLC held in flight),
 		// and CLN itself answers code 200 for "timed out, still in progress". Treating
@@ -357,7 +396,9 @@ func (l *clnLNLeg) pay(bolt11 string, wantHash []byte, amountMsat uint64, maxDel
 // directHop builds a single-hop sendpay route over our OWN (possibly private/
 // unannounced) channel to a directly-connected payee — the payee is the final hop,
 // so it receives amountMsat with no routing fee. Used when getroute can't see the
-// channel (private + asset-aware routing uses only the gossip graph).
+// channel (private + asset-aware routing uses only the gossip graph). A channel
+// that names another asset than the leg's is never used: listpeerchannels names a
+// channel's asset in channel_asset, except for the Sequence token's channels.
 func (l *clnLNLeg) directHop(destNodeID string, amountMsat uint64, finalCltv uint32) (json.RawMessage, error) {
 	var res struct {
 		Channels []struct {
@@ -366,6 +407,7 @@ func (l *clnLNLeg) directHop(destNodeID string, amountMsat uint64, finalCltv uin
 			ShortChannelID string `json:"short_channel_id"`
 			Direction      int    `json:"direction"`
 			SpendableMsat  uint64 `json:"spendable_msat"`
+			ChannelAsset   string `json:"channel_asset"`
 		} `json:"channels"`
 	}
 	if err := l.rpc.call(&res, "listpeerchannels", map[string]interface{}{"id": destNodeID}); err != nil {
@@ -376,6 +418,9 @@ func (l *clnLNLeg) directHop(destNodeID string, amountMsat uint64, finalCltv uin
 		delay = 18
 	}
 	for _, c := range res.Channels {
+		if l.assetID != "" && c.ChannelAsset != "" && !strings.EqualFold(c.ChannelAsset, l.assetID) {
+			continue // a channel in another asset
+		}
 		if c.PeerID == destNodeID && c.State == "CHANNELD_NORMAL" && c.ShortChannelID != "" && c.SpendableMsat >= amountMsat {
 			hop := map[string]interface{}{
 				"id": destNodeID, "channel": c.ShortChannelID, "direction": c.Direction,
@@ -478,7 +523,19 @@ func (l *clnLNLeg) PayHash(destNodeID string, paymentHash []byte, amountMsat uin
 		route.Route = []json.RawMessage{hop}
 	}
 
-	// 2. Send the HTLC to the bare hash along that route.
+	// 2. Ask the node's signer to approve the payment. On a keyless node the
+	//    device signs a commitment that adds an HTLC we offer only for a payment
+	//    hash it approved (`pay` and `keysend` ask it themselves; a bare
+	//    `sendpay` does not), and it approves only within its payment limit for
+	//    the asset. Without this the device refuses the commitment, the payee is
+	//    never paid, and the channel has no owner until the peer reconnects. A
+	//    decline here comes before any HTLC exists, so nothing was sent. On a node
+	//    with its own hsm_secret the signer approves every payment.
+	if err := l.preapprove(destNodeID, phHex, amountMsat); err != nil {
+		return nil, err
+	}
+
+	// 3. Send the HTLC to the bare hash along that route.
 	sparams := map[string]interface{}{
 		"route":        route.Route,
 		"payment_hash": phHex,
@@ -510,7 +567,7 @@ func (l *clnLNLeg) PayHash(destNodeID string, paymentHash []byte, amountMsat uin
 	}
 sent:
 
-	// 3. Block until the payee resolves it (settle => complete, cancel => fail).
+	// 4. Block until the payee resolves it (settle => complete, cancel => fail).
 	//    A HODL payee holds the HTLC until its device settles, which can far
 	//    outlast one socket read (seen live: the mixed same-chain maker died
 	//    here at the 120s read deadline while the payment sat legitimately
@@ -547,12 +604,50 @@ sent:
 	return pre, nil
 }
 
+// preapprove asks the node's signer to approve paying amountMsat to destNodeID on
+// paymentHash (`preapprovekeysend`), before a bare-hash `sendpay`. A decline is
+// ErrLNPayDeclined. A node without the command (a Lightning implementation that
+// predates it, so its signer checks nothing) is let through.
+func (l *clnLNLeg) preapprove(destNodeID, paymentHashHex string, amountMsat uint64) error {
+	err := l.rpc.call(nil, "preapprovekeysend", map[string]interface{}{
+		"destination":  destNodeID,
+		"payment_hash": paymentHashHex,
+		"amount_msat":  amountMsat,
+	})
+	if err == nil || isUnknownMethod(err) {
+		return nil
+	}
+	if isDeclined(err) {
+		return fmt.Errorf("%w: %d msat to %s on hash %s, in asset %q: %v (on a keyless node this is the device's payment limit for the asset)",
+			ErrLNPayDeclined, amountMsat, destNodeID, paymentHashHex, l.assetID, err)
+	}
+	return fmt.Errorf("preapprovekeysend: %w", err)
+}
+
+// isDeclined reports whether a CLN error is a signer's refusal to approve a
+// payment: PAY_INVOICE_PREAPPROVAL_DECLINED (213) from `preapproveinvoice` or
+// `pay`, PAY_KEYSEND_PREAPPROVAL_DECLINED (214) from `preapprovekeysend` or
+// `keysend`.
+func isDeclined(err error) bool {
+	var re *rpcErr
+	if errors.As(err, &re) {
+		return re.Code == 213 || re.Code == 214
+	}
+	return false
+}
+
 func (l *clnLNLeg) CreateHoldInvoice(paymentHash []byte, amountMsat uint64, cltvExpiry uint32, label, description string) (string, error) {
-	// Drives a holdinvoice plugin. Method/param names follow the common CLN
-	// holdinvoice plugin (create by payment_hash; the plugin owns the hold via
-	// the htlc_accepted hook). Adjust to the deployed plugin if it differs.
+	// Drives the holdinvoice-seq plugin (create by payment_hash; the plugin owns
+	// the hold via the htlc_accepted hook). On a Sequentia node the hold names
+	// this leg's asset, so the plugin holds only HTLCs that arrive in it and
+	// refuses any other; a leg that names no asset there makes no hold at all.
+	asset, err := l.legAsset()
+	if err != nil {
+		return "", fmt.Errorf("holdinvoice: %w", err)
+	}
 	var res struct {
 		Bolt11 string `json:"bolt11"`
+		Asset  string `json:"asset"`
 	}
 	params := map[string]interface{}{
 		"payment_hash": hex.EncodeToString(paymentHash),
@@ -563,8 +658,18 @@ func (l *clnLNLeg) CreateHoldInvoice(paymentHash []byte, amountMsat uint64, cltv
 	if cltvExpiry != 0 {
 		params["cltv"] = cltvExpiry
 	}
+	if asset != "" {
+		params["asset"] = asset
+	}
 	if err := l.rpc.call(&res, "holdinvoice", params); err != nil {
 		return "", fmt.Errorf("holdinvoice (plugin present?): %w", err)
+	}
+	// The plugin answers with the asset it registered the hold in. One that does
+	// not (it predates assets and ignored the parameter) holds any asset, so it
+	// cannot be trusted with this leg.
+	if !strings.EqualFold(res.Asset, asset) {
+		_ = l.CancelHold(paymentHash)
+		return "", fmt.Errorf("%w: holdinvoice registered the hold in asset %q, not %q (is holdinvoice-seq current?)", ErrLNHoldAsset, res.Asset, asset)
 	}
 	return res.Bolt11, nil
 }
@@ -585,6 +690,9 @@ type HeldInfo struct {
 	ReceivedMsat uint64
 	CltvExpiry   uint32
 	Tip          uint32
+	// Asset is the asset the hold is in (lower-case hex), "" on a network with
+	// no assets. WaitHeldInfo returns a hold only when it is the leg's asset.
+	Asset string
 }
 
 // WaitHeldInfo blocks until the hold on paymentHash is accepted and returns what
@@ -592,7 +700,16 @@ type HeldInfo struct {
 // (holdinvoicewait, each call bounded so the socket read never outlives it);
 // against a plugin without that method it polls holdinvoicelookup instead,
 // tightly for the first second and then once a second.
+//
+// A hold that is accepted in another asset than the leg's, or that names no asset
+// on a network with assets, is refused with ErrLNHoldAsset: the caller then
+// cancels it and never settles, so the preimage is never revealed for a payment
+// in the wrong asset.
 func (l *clnLNLeg) WaitHeldInfo(paymentHash []byte, timeout time.Duration) (HeldInfo, error) {
+	want, err := l.legAsset()
+	if err != nil {
+		return HeldInfo{}, err
+	}
 	start := time.Now()
 	deadline := start.Add(timeout)
 	phHex := hex.EncodeToString(paymentHash)
@@ -604,6 +721,7 @@ func (l *clnLNLeg) WaitHeldInfo(paymentHash []byte, timeout time.Duration) (Held
 			ReceivedMsat uint64 `json:"received_msat"`
 			CltvExpiry   uint32 `json:"cltv_expiry"`
 			Blockheight  uint32 `json:"blockheight"`
+			Asset        string `json:"asset"`
 		}
 		var err error
 		if canWait {
@@ -623,7 +741,10 @@ func (l *clnLNLeg) WaitHeldInfo(paymentHash []byte, timeout time.Duration) (Held
 				map[string]interface{}{"payment_hash": phHex})
 		}
 		if err == nil && res.State == "accepted" {
-			info := HeldInfo{ReceivedMsat: res.ReceivedMsat, CltvExpiry: res.CltvExpiry, Tip: res.Blockheight}
+			if got := strings.ToLower(res.Asset); got != want {
+				return HeldInfo{}, fmt.Errorf("%w: the hold on %s is accepted in asset %q, this leg is in %q; refusing it (the preimage stays withheld)", ErrLNHoldAsset, phHex, got, want)
+			}
+			info := HeldInfo{ReceivedMsat: res.ReceivedMsat, CltvExpiry: res.CltvExpiry, Tip: res.Blockheight, Asset: want}
 			if info.ReceivedMsat == 0 {
 				info.ReceivedMsat = res.AmountMsat // a plugin without the received field
 			}
@@ -708,11 +829,20 @@ func (l *clnLNLeg) localScids() []string {
 }
 
 func (l *clnLNLeg) CreateInvoice(preimage []byte, amountMsat uint64, cltvExpiry uint32, label, description string) (string, error) {
+	// The invoice names this leg's asset, so the node takes a payment for it only
+	// in that asset; a leg that names no asset on a Sequentia node makes none.
+	asset, err := l.legAsset()
+	if err != nil {
+		return "", fmt.Errorf("invoice: %w", err)
+	}
 	params := map[string]interface{}{
 		"amount_msat": amountMsat,
 		"label":       label,
 		"description": description,
 		"preimage":    hex.EncodeToString(preimage),
+	}
+	if asset != "" {
+		params["asset"] = asset
 	}
 	if scids := l.localScids(); len(scids) > 0 {
 		params["exposeprivatechannels"] = scids
