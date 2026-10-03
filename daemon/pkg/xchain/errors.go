@@ -93,6 +93,18 @@ var (
 	// cancel that hold on this error — that is the one outcome that loses money —
 	// but treat the swap as in flight and resolve it from listpays.
 	ErrLNPayUnresolved = errors.New("xchain: outgoing Lightning payment still pending (neither complete nor failed)")
+
+	// ErrLNPayDeclined means the paying node's signer declined the payment before
+	// any HTLC was offered. On a keyless (device-signed) node that is the device's
+	// payment limit for the asset; nothing was sent, so the caller may cancel
+	// whatever it holds against this payment.
+	ErrLNPayDeclined = errors.New("xchain: the paying node's signer declined the payment (nothing was sent)")
+
+	// ErrLNHoldAsset means a hold cannot be made or trusted in this leg's asset:
+	// the leg names no asset on a network that has several, or the hold that was
+	// accepted is in another asset than the leg's. The holder must not settle it,
+	// so the preimage is never revealed for a payment in the wrong asset.
+	ErrLNHoldAsset = errors.New("xchain: Lightning hold is not in this leg's asset")
 )
 
 // isTxNotFoundRPC reports whether err is the node's "transaction not found"

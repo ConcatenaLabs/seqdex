@@ -46,8 +46,8 @@ func TestLNLegAssetPayLive(t *testing.T) {
 	copy(p[:], []byte("m1-asset-pay-preimage-32bytes!!!"))
 	h := sha256.Sum256(p[:])
 
-	// Payee issues an asset invoice on P (invoice creation is asset-blind).
-	payee := NewCLNLNLeg(payeeSock)
+	// Payee issues an invoice on P in the same asset.
+	payee := NewCLNAssetLNLeg(payeeSock, asset)
 	label := "m1-assetpay-" + hex.EncodeToString(h[:4])
 	bolt11, err := payee.CreateInvoice(p[:], amt, 0, label, "m1 asset pay")
 	if err != nil {
@@ -78,7 +78,7 @@ func TestLNLegPayHashLive(t *testing.T) {
 	secret := make([]byte, 32)
 	secret[0] = 0xa5
 
-	payee := NewCLNLNLeg(payeeSock) // holds; the invoice-issuing side is asset-blind
+	payee := NewCLNAssetLNLeg(payeeSock, asset) // holds in the asset it is paid in
 	payer := NewCLNAssetLNLeg(payerSock, asset)
 
 	payeeID, err := payee.NodeID()
