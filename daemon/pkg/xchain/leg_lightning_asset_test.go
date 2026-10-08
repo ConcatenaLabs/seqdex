@@ -336,3 +336,78 @@ func TestDirectHopKeepsToTheLegsAsset(t *testing.T) {
 		t.Fatal("a leg in a third asset found a direct hop over another asset's channel")
 	}
 }
+
+// invoiceIn answers `decode` with an invoice paid in asset (none when ""), and
+// `pay` with a completed payment whose preimage hashes to h32.
+func invoiceIn(asset string) func(string, map[string]interface{}) (interface{}, *rpcErr) {
+	return func(m string, p map[string]interface{}) (interface{}, *rpcErr) {
+		switch m {
+		case "decode":
+			r := map[string]interface{}{"type": "bolt11 invoice", "valid": true, "payment_hash": hex.EncodeToString(h32),
+				"amount_msat": 5000, "payee": "03bb", "payment_secret": strings.Repeat("11", 32)}
+			if asset != "" {
+				r["asset"] = asset
+			}
+			return r, nil
+		case "pay":
+			return map[string]interface{}{"status": "complete", "payment_preimage": hex.EncodeToString([]byte("p"))}, nil
+		}
+		return paying(false)(m, p)
+	}
+}
+
+// An invoice in another asset than the leg's is refused before anything is
+// sent: no `pay`, no approval, no HTLC.
+func TestPayRefusesAnInvoiceInAnotherAsset(t *testing.T) {
+	f := startScriptCLN(t, invoiceIn(silv))
+	_, err := NewCLNAssetLNLeg(f.path, gold).Pay("lnsqrt1", h32, 5000)
+	if !errors.Is(err, ErrLNLegInvalid) || !strings.Contains(err.Error(), "paid in asset "+silv+", this leg pays in "+gold) {
+		t.Fatalf("err = %v, want the asset refusal", err)
+	}
+	t.Logf("refused: %v", err)
+	for _, m := range []string{"pay", "sendpay", "preapprovekeysend", "preapproveinvoice"} {
+		if n := len(f.called(m)); n != 0 {
+			t.Fatalf("%s called %d times for an invoice in another asset", m, n)
+		}
+	}
+	// A leg that names no asset pays no invoice that names one.
+	_, err = NewCLNLNLeg(f.path).Pay("lnsqrt1", h32, 5000)
+	if !errors.Is(err, ErrLNLegInvalid) || !strings.Contains(err.Error(), "this leg names no asset") {
+		t.Fatalf("no-asset leg: err = %v, want the asset refusal", err)
+	}
+	if n := len(f.called("pay")); n != 0 {
+		t.Fatalf("pay called %d times", n)
+	}
+}
+
+// An invoice in the leg's asset is paid with `asset` set to that asset, the
+// invoice's (the id compared without regard to case).
+func TestPayNamesTheInvoicesAsset(t *testing.T) {
+	f := startScriptCLN(t, invoiceIn(strings.ToUpper(gold)))
+	if _, err := NewCLNAssetLNLeg(f.path, gold).Pay("lnsqrt1", h32, 5000); err != nil {
+		t.Fatalf("pay: %v", err)
+	}
+	pays := f.called("pay")
+	if len(pays) != 1 || pays[0]["asset"] != gold {
+		t.Fatalf("pay params = %v, want asset %s", pays, gold)
+	}
+}
+
+// A node that predates the field reports no asset: the leg pays as before,
+// naming its own asset; on Bitcoin a leg with no asset names none.
+func TestPayWhereTheNodeReportsNoAsset(t *testing.T) {
+	f := startScriptCLN(t, invoiceIn(""))
+	if _, err := NewCLNAssetLNLeg(f.path, gold).Pay("lnsqrt1", h32, 5000); err != nil {
+		t.Fatalf("pay: %v", err)
+	}
+	if _, err := NewCLNLNLeg(f.path).Pay("lntb1", h32, 5000); err != nil {
+		t.Fatalf("bitcoin pay: %v", err)
+	}
+	pays := f.called("pay")
+	if len(pays) != 2 || pays[0]["asset"] != gold {
+		t.Fatalf("pay params = %v", pays)
+	}
+	if _, ok := pays[1]["asset"]; ok {
+		t.Fatalf("a Bitcoin leg named an asset: %v", pays[1])
+	}
+}

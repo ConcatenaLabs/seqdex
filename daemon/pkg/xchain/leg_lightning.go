@@ -236,6 +236,10 @@ type decodedInvoice struct {
 	Payee         string `json:"payee"`
 	PaymentSecret string `json:"payment_secret"`
 	MinFinalCltv  uint32 `json:"min_final_cltv_expiry"`
+	// Asset is the asset the invoice is paid in, from its `a` field: on a
+	// Sequentia network the node decodes no invoice without one. Empty on a
+	// network without assets, and from a node that predates the field.
+	Asset string `json:"asset"`
 }
 
 // decode runs CLN's `decode` (the older `decodepay` is not on all builds).
@@ -303,6 +307,16 @@ func (l *clnLNLeg) pay(bolt11 string, wantHash []byte, amountMsat uint64, maxDel
 	if maxDelay != 0 && minFinal > maxDelay {
 		return nil, fmt.Errorf("%w: invoice min_final_cltv %d exceeds the %d-block cap", ErrLNLegInvalid, minFinal, maxDelay)
 	}
+	// The invoice names the asset it is paid in, and the leg pays only in its
+	// own: an invoice in another asset is refused here, before anything is sent,
+	// and `pay` is told the leg's asset, which is then the invoice's. A leg that
+	// names no asset pays no invoice that names one.
+	if dec.Asset != "" && !strings.EqualFold(dec.Asset, l.assetID) {
+		if l.assetID == "" {
+			return nil, fmt.Errorf("%w: the invoice is paid in asset %s and this leg names no asset", ErrLNLegInvalid, dec.Asset)
+		}
+		return nil, fmt.Errorf("%w: the invoice is paid in asset %s, this leg pays in %s", ErrLNLegInvalid, dec.Asset, l.assetID)
+	}
 	var res struct {
 		Status       string `json:"status"`
 		PaymentPre   string `json:"payment_preimage"`
@@ -315,7 +329,7 @@ func (l *clnLNLeg) pay(bolt11 string, wantHash []byte, amountMsat uint64, maxDel
 		params["amount_msat"] = amountMsat // amountless invoice
 	}
 	if l.assetID != "" {
-		params["asset"] = l.assetID // route in this leg's Sequentia asset (Step 1)
+		params["asset"] = l.assetID // the leg's asset, which the invoice names (checked above)
 	}
 	if maxDelay != 0 {
 		params["maxdelay"] = maxDelay

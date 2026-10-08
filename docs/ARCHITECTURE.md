@@ -308,7 +308,10 @@ stalling. The hashlock is abstracted (`primitive.go`) so an adaptor-signature
 `chain.go` speaks to an Elements-format parent; `chain_bitcoin.go` /
 `leg_bitcoin.go` / `btc_backend.go` implement the same leg on a real `bitcoind`
 (regtest or testnet4). `submarine.go` swaps the on-chain BTC leg for an `LNLeg`
-(`leg_lightning.go`, a CLN JSON socket client).
+(`leg_lightning.go`, a CLN JSON socket client). On a Sequentia node a Lightning
+leg is in one asset: its holds and invoices name it, a hold accepted in another
+asset is refused, and it pays only an invoice whose `a` field names that asset,
+refusing any other before an HTLC exists.
 
 ## 6. The `min_anchor_depth` dial (0-conf honesty)
 

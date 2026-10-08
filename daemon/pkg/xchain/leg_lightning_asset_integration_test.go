@@ -114,3 +114,45 @@ func TestLNLegPayHashLive(t *testing.T) {
 	}
 	t.Logf("PayHash OK: paid bare hash in asset %s, recovered preimage on settle", asset[:12])
 }
+
+// TestLNLegAssetPayOtherAssetLive: an invoice the payee makes in another asset
+// (SEQLN_ASSET_ID_OTHER) is refused by the payer's asset leg before anything is
+// sent: no `pay`, so no payment attempt is recorded on the payer.
+func TestLNLegAssetPayOtherAssetLive(t *testing.T) {
+	payerSock, payeeSock, asset, amt := assetLegEnv(t)
+	other := os.Getenv("SEQLN_ASSET_ID_OTHER")
+	if other == "" {
+		t.Skip("set SEQLN_ASSET_ID_OTHER")
+	}
+	var p [32]byte
+	copy(p[:], []byte("l15-other-asset-preimage-32bytes"))
+	h := sha256.Sum256(p[:])
+	// The payee need hold no channel in the other asset: allow_unfunded.
+	var inv struct {
+		Bolt11 string `json:"bolt11"`
+	}
+	if err := NewCLNAssetLNLeg(payeeSock, other).rpc.call(&inv, "invoice", map[string]interface{}{
+		"amount_msat": amt, "label": "l15-other-" + hex.EncodeToString(h[:4]), "description": "l15 other asset",
+		"preimage": hex.EncodeToString(p[:]), "asset": other, "allow_unfunded": true}); err != nil {
+		t.Fatalf("payee invoice in the other asset: %v", err)
+	}
+	bolt11 := inv.Bolt11
+	payer := NewCLNAssetLNLeg(payerSock, asset)
+	_, err := payer.Pay(bolt11, h[:], amt)
+	if err == nil {
+		t.Fatalf("the %s leg paid an invoice in %s", asset[:8], other[:8])
+	}
+	t.Logf("refused: %v", err)
+	var sp struct {
+		Payments []struct {
+			Status string `json:"status"`
+		} `json:"payments"`
+	}
+	if err := payer.rpc.call(&sp, "listsendpays", map[string]interface{}{"payment_hash": hex.EncodeToString(h[:])}); err != nil {
+		t.Fatalf("listsendpays: %v", err)
+	}
+	t.Logf("payer's payment attempts for the hash: %d", len(sp.Payments))
+	if len(sp.Payments) != 0 {
+		t.Fatalf("the payer sent %d HTLC(s) for an invoice in another asset", len(sp.Payments))
+	}
+}
