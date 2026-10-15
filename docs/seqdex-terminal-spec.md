@@ -293,7 +293,7 @@ placed as **BTC**, so it rests in the **BTC/<quote>** book and never in the dist
 **SBTC/<quote>** book (for users who explicitly chose SBTC). The order carries its book `pair`
 separately from its locked `asset_b` (the SBTC id) plus a `peg_out_on_fill` marker (true only for
 pegged-BTC orders → the taker receives real BTC on fill). BTC/SBTC is a real,
-redundant-but-allowed pair. Full detail: `the Sequentia node repo: doc/sequentia/sbtc-peg-design.md` §5.1.
+redundant-but-allowed pair. Full detail: §5.1 of the [SBTC design](https://github.com/ConcatenaLabs/sbtc-bridge/blob/master/DESIGN.md).
 
 SBTC is **NOT** Elements' native consensus peg (dormant here, federation-based, coupled to
 the policy asset). It is an **independent, application-level bridge** — a normal reissuable
@@ -302,7 +302,7 @@ custodies the reserve BTC on Bitcoin, no closer to consensus than any third-part
 there is zero consensus change. It is a **trusted** bridge (no BTC peg can be trustless
 without Bitcoin covenants). SBTC is otherwise a normal, UNPRIVILEGED asset (native BTC stays
 privileged), and its wrap/unwrap is exposed publicly (e.g. confidential-tx use). Full design:
-`sbtc-peg-design.md` in the Sequentia node repo, `doc/sequentia/`.
+[`DESIGN.md`](https://github.com/ConcatenaLabs/sbtc-bridge/blob/master/DESIGN.md) in the sbtc-bridge repo.
 
 ---
 
