@@ -8,7 +8,7 @@ Status: canonical execution plan. Produced by a 53-agent audit (8 subsystem audi
 blocker/major finding adversarially re-verified against code and branches, plus a read-only
 live-box probe and a completeness critic) against the canonical spec set:
 `seqdex-terminal-spec.md`, `seqdex-orderbook-design.md`, `cross-chain-orderbook-consolidation.md`,
-`sbtc-peg-design.md` (Sequentia node repo, `doc/sequentia/`), `simplicity-dex-covenant-offers-design.md`,
+the [SBTC design](https://github.com/ConcatenaLabs/sbtc-bridge/blob/master/DESIGN.md) (`DESIGN.md` in the sbtc-bridge repo), `simplicity-dex-covenant-offers-design.md`,
 `seqln-phase2-dex-integration.md`.
 
 When this plan and the terminal spec disagree, the spec wins. Every claim below carries
@@ -209,7 +209,7 @@ with corrections (the corrected form is what is stated here).
   client that misses a >256-event burst renders a silently stale book with no re-snapshot
   signal.
 
-### T6. SBTC silent peg: loop broken at the taker, binding missing (sbtc-peg-design 5/5.1)
+### T6. SBTC silent peg: loop broken at the taker, binding missing (the SBTC design 5/5.1)
 
 - BLOCKER (V): the web reverse QUOTE path (`fetchRQuote`/`findReverseOffer`) reads only the
   `(asset,'BTC')` orientation, so a pegged covenant resting under `('BTC',asset)` is
@@ -355,7 +355,7 @@ Each item names its repo(s). Deploy pipeline as always: laptop commit -> push ->
    placeholder-done entries from chain state; never delete a sentinel in a catch block.
 5. SBTC mis-sell binding (both wallets + relay validator): a taker path may only treat a
    BTC-advertised covenant as pegged BTC if `covenant.asset_a == SBTC id`; otherwise refuse
-   the row. Update sbtc-peg-design 5.1 to the `advertise_sell_as` mechanism with this
+   the row. Update the SBTC design 5.1 to the `advertise_sell_as` mechanism with this
    binding as a MUST.
 6. Land the uncommitted seqdex sub-asset SELL state-file work (tests already pass).
 7. Relay WS namespace filter (seqdex): subscribers receive only their chosen namespace's

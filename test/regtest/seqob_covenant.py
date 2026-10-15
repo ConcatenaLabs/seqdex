@@ -21,7 +21,7 @@ leaf tree {FILL, REFUND}:
 
 Design points enforced by the FILL leaf (see
 docs/simplicity-dex-covenant-offers-design.md, sections 1-2, and
-the node repo's doc/sequentia/openamp-design.md section 6):
+section 6 of DESIGN.md in the openamp repository):
 
   * Explicit-only. Every introspected asset/value prefix must be 0x01. A blinded
     (confidential) credit output the covenant cannot read is rejected.
