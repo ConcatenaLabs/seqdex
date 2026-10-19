@@ -174,8 +174,7 @@ func (s *scannerService) listenToReports(chReports <-chan scanner.Report) {
 		}
 
 		tx := r.Transaction
-		txid := tx.TxHash().String()
-		txHex, _ := tx.ToHex()
+		txid, txHex := networkTx(tx)
 
 		s.log("received report for tx %s", txid)
 
