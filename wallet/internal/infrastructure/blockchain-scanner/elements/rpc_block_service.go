@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/vulpemventures/go-elements/block"
 	log "github.com/sirupsen/logrus"
+	"github.com/vulpemventures/go-elements/block"
 	"github.com/vulpemventures/go-elements/transaction"
 	"github.com/vulpemventures/neutrino-elements/pkg/blockservice"
 )
