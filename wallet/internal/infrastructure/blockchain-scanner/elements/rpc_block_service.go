@@ -6,6 +6,7 @@ import (
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/vulpemventures/go-elements/block"
+	log "github.com/sirupsen/logrus"
 	"github.com/vulpemventures/go-elements/transaction"
 	"github.com/vulpemventures/neutrino-elements/pkg/blockservice"
 )
@@ -23,8 +24,9 @@ import (
 // `getblock <hash> 2` (verbosity 2, JSON containing each transaction's raw
 // hex), and reconstruct the *block.Block the scanner consumes:
 //   - Header.Height / Header.Timestamp from the JSON block fields, and
-//   - TransactionsData from go-elements transaction.NewTxFromHex on each tx hex
-//     (Sequentia txs are standard Elements and parse fine).
+//   - TransactionsData from decodeSequentiaTx on each tx hex (go-elements, after
+//     removing the issuance denomination byte it does not know; see
+//     sequentia_tx.go). A tx that still does not decode is logged and skipped.
 // The scanner only reads block.TransactionsData.Transactions and
 // block.Header.Height (see neutrino-elements scanner.extractBlockMatches), so a
 // header carrying those fields is sufficient.
@@ -83,10 +85,19 @@ func (b *rpcBlockService) GetBlock(
 		if !ok {
 			return nil, fmt.Errorf("getblock tx entry missing hex (need verbosity 2)")
 		}
-		tx, err := transaction.NewTxFromHex(txHex)
+		txid, _ := txMap["txid"].(string)
+		tx, err := decodeSequentiaTx(txHex)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse block tx: %w", err)
+			// Skip it rather than fail the block: the scanner retries a failed
+			// block forever, so one undecodable tx would stall every request
+			// behind it.
+			log.WithError(err).Warnf(
+				"skipping undecodable tx %s in block %s (height %d)",
+				txid, hash, height,
+			)
+			continue
 		}
+		rememberNetworkTx(tx, txid, txHex)
 		txs = append(txs, tx)
 	}
 

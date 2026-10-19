@@ -218,7 +218,7 @@ func (s *service) GetUtxos(utxoList []domain.Utxo) ([]domain.Utxo, error) {
 		}
 
 		txHex, _ := m["hex"].(string)
-		tx, err := transaction.NewTxFromHex(txHex)
+		tx, err := decodeSequentiaTx(txHex)
 		if err != nil {
 			return nil, fmt.Errorf("parse prevout tx %s: %w", key.TxID, err)
 		}
