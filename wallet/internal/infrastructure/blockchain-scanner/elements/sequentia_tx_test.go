@@ -79,8 +79,9 @@ func TestNetworkTxRestoresTxid(t *testing.T) {
 func TestDecodeSequentiaTxWithoutIssuance(t *testing.T) {
 	plain := transaction.NewTx(2)
 	plain.AddInput(transaction.NewTxInput(make([]byte, 32), 1))
+	explicitAsset := append([]byte{1}, make([]byte, 32)...)
 	plain.AddOutput(transaction.NewTxOutput(
-		make([]byte, 33), []byte{1, 0, 0, 0, 0, 0, 0, 0, 1}, []byte{0x51},
+		explicitAsset, []byte{1, 0, 0, 0, 0, 0, 0, 0, 1}, []byte{0x51},
 	))
 	plainHex, err := plain.ToHex()
 	require.NoError(t, err)
