@@ -1,14 +1,17 @@
 package watcher
 
 import (
-	"strconv"
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/aejkcs50/seqdex/daemon/pkg/covenant"
 )
 
 // rpcChain is a ChainView backed by an Elements/Sequentia node's JSON-RPC. It
@@ -103,10 +106,12 @@ type txout struct {
 }
 
 type rawtx struct {
-	Confirmations int `json:"confirmations"`
+	Confirmations int    `json:"confirmations"`
+	BlockHash     string `json:"blockhash"`
 	Vin           []struct {
-		TxID string `json:"txid"`
-		Vout uint32 `json:"vout"`
+		TxID        string   `json:"txid"`
+		Vout        uint32   `json:"vout"`
+		TxInWitness []string `json:"txinwitness"`
 	} `json:"vin"`
 	Vout []struct {
 		N            uint32      `json:"n"`
@@ -164,8 +169,145 @@ func (c *rpcChain) Inspect(txid string, vout uint32, orderSPKHex, assetADisplay 
 				break
 			}
 		}
+		// What the record of the fill is read from: the spender's outputs as the
+		// order's leaf reads them, the witness of the input that spent the order,
+		// and what the order's outpoint held.
+		sp := &SpenderTx{Txid: spender, Input: k}
+		for _, w := range spenderTx.Vin[k].TxInWitness {
+			b, err := hex.DecodeString(w)
+			if err != nil {
+				return st, fmt.Errorf("spender %s input %d witness: %w", spender, k, err)
+			}
+			sp.Witness = append(sp.Witness, b)
+		}
+		for _, o := range spenderTx.Vout {
+			sp.Outputs = append(sp.Outputs, outputOf(o.Asset, o.Value, o.ScriptPubKey.Hex))
+		}
+		var prev rawtx
+		if err := c.call(&prev, "getrawtransaction", txid, true); err != nil {
+			return st, fmt.Errorf("getrawtransaction %s: %w", txid, err)
+		}
+		for _, o := range prev.Vout {
+			if o.N == vout {
+				sp.PrevValue = coinsToAtoms(o.Value)
+			}
+		}
+		st.Spender = sp
 	}
 	return st, nil
+}
+
+// outputOf reads a decoded output as a FILL leaf reads it: an asset and value
+// the node shows are explicit, a missing one is a commitment.
+func outputOf(assetDisplay string, value json.Number, spkHex string) covenant.Output {
+	var out covenant.Output
+	if b, err := hex.DecodeString(assetDisplay); err == nil && len(b) == 32 {
+		for i := 0; i < 32; i++ {
+			out.Asset[i] = b[31-i]
+		}
+		out.AssetExplicit = true
+	}
+	if strings.TrimSpace(value.String()) != "" {
+		out.Value = coinsToAtoms(value)
+		out.ValueExplicit = true
+	}
+	out.Script, _ = hex.DecodeString(spkHex)
+	return out
+}
+
+// TxStatus reports where txid stands at the live tip: in a block of the active
+// chain (with that block's height, anchor and certification), in the mempool,
+// or neither. A node without -txindex cannot tell a confirmed transaction from
+// an absent one; that is reported as an error, never as an absence.
+func (c *rpcChain) TxStatus(txid string) (TxStatus, error) {
+	var ts TxStatus
+	var tx rawtx
+	if err := c.call(&tx, "getrawtransaction", txid, true); err != nil {
+		if strings.Contains(err.Error(), "txindex") {
+			return ts, err
+		}
+		if strings.Contains(err.Error(), "No such mempool or blockchain transaction") {
+			return ts, nil // neither in the chain nor in the mempool
+		}
+		return ts, err
+	}
+	if tx.BlockHash != "" {
+		var hdr struct {
+			Confirmations int64  `json:"confirmations"`
+			Height        int64  `json:"height"`
+			AnchorHeight  *int64 `json:"anchorheight"`
+			PosCertified  *bool  `json:"poscertified"`
+		}
+		if err := c.call(&hdr, "getblockheader", tx.BlockHash, true); err != nil {
+			return ts, err
+		}
+		if hdr.Confirmations > 0 {
+			ts.InChain = true
+			ts.Block, ts.Height, ts.Confirmations = tx.BlockHash, hdr.Height, hdr.Confirmations
+			if hdr.AnchorHeight != nil {
+				ts.BlockAnchor = *hdr.AnchorHeight
+			}
+			if hdr.PosCertified != nil {
+				ts.CertPresent = true
+				ts.Certified = *hdr.PosCertified
+				if !ts.Certified {
+					ts.Certified = c.certifiedAbove(hdr.Height, hdr.Confirmations)
+				}
+			}
+			return ts, nil
+		}
+		// Its block left the active chain: it is in the mempool again, or gone.
+	}
+	var entry json.RawMessage
+	if err := c.call(&entry, "getmempoolentry", txid); err == nil {
+		ts.InMempool = true
+	}
+	return ts, nil
+}
+
+// certifiedAbove reports whether a block above height (on the active chain, up
+// to the tip and at most certLookback blocks) is quorum-certified: a certified
+// block cannot be left without leaving its ancestors.
+func (c *rpcChain) certifiedAbove(height, confirmations int64) bool {
+	top := height + confirmations - 1
+	if top > height+certLookback {
+		top = height + certLookback
+	}
+	for h := height + 1; h <= top; h++ {
+		var bh string
+		if err := c.call(&bh, "getblockhash", h); err != nil {
+			return false
+		}
+		var hdr struct {
+			PosCertified *bool `json:"poscertified"`
+		}
+		if err := c.call(&hdr, "getblockheader", bh, true); err != nil {
+			return false
+		}
+		if hdr.PosCertified != nil && *hdr.PosCertified {
+			return true
+		}
+	}
+	return false
+}
+
+// certLookback bounds how far above a block TxStatus looks for a certificate.
+const certLookback = 144
+
+// Anchor reads the tip's Bitcoin anchor (getanchorstatus). A chain without
+// Bitcoin anchoring answers Anchored false.
+func (c *rpcChain) Anchor() (AnchorTip, error) {
+	var a struct {
+		AnchorHeight int64  `json:"anchorheight"`
+		AnchorStatus string `json:"anchorstatus"`
+	}
+	if err := c.call(&a, "getanchorstatus"); err != nil {
+		if strings.Contains(err.Error(), "not enabled") {
+			return AnchorTip{}, nil
+		}
+		return AnchorTip{}, err
+	}
+	return AnchorTip{Anchored: true, Height: a.AnchorHeight, Status: a.AnchorStatus}, nil
 }
 
 // findSpender returns the txid + decoded tx that spends (txid,vout), searching
@@ -258,4 +400,18 @@ func coinsToAtoms(v json.Number) uint64 {
 		return 0
 	}
 	return w*1e8 + f
+}
+
+// GenesisHash is the genesis block hash (display hex) of the chain a view
+// built by NewRPCChain reads.
+func GenesisHash(v ChainView) (string, error) {
+	c, ok := v.(*rpcChain)
+	if !ok {
+		return "", fmt.Errorf("not a node RPC view")
+	}
+	var h string
+	if err := c.call(&h, "getblockhash", 0); err != nil {
+		return "", err
+	}
+	return h, nil
 }

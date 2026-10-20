@@ -182,8 +182,9 @@ func TestIncomingCovenantVsInteractiveRestingNoOwner(t *testing.T) {
 
 // A COVENANT cross is PLANNED (the Match carries the fill + covenant terms) but the matcher commits NO
 // trade-truth. A cross becomes a trade only once it SETTLES on-chain, and it is recorded then — reorg-
-// safely — by the chain watcher (RerestCovenantRemainder / RemoveCovenantFilled off the order's live
-// size). Recording at match would double-count with the watcher and surface trades that never settled.
+// safely — by the chain watcher, with the fill's record read from the filling transaction
+// (RecordCovenantFill). Recording at match would double-count with the watcher and surface trades
+// that never settled.
 func TestCovenantCrossPlansNoMutation(t *testing.T) {
 	s := offerstore.New(nil)
 	m := New(s)

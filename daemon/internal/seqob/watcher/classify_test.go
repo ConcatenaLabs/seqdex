@@ -2,11 +2,9 @@ package watcher
 
 import (
 	"encoding/hex"
-	"fmt"
 	"testing"
 
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
-	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offerstore"
 	"github.com/aejkcs50/seqdex/daemon/pkg/covenant"
 )
 
@@ -127,84 +125,23 @@ func TestClassify_Ghost_NoSpender(t *testing.T) {
 
 // --- loop routing: ReconcileOnce classifies each covenant and drives the book.
 
-type call struct {
-	op   string
-	key  offerstore.Key
-	txid string
-	vout uint32
-	size uint64
-}
-
-type fakeBook struct {
-	covs  []CovEntry
-	calls []call
-}
-
-func (b *fakeBook) SnapshotCovenants() []CovEntry { return b.covs }
-func (b *fakeBook) ReconcileLive(k offerstore.Key, active uint64) error {
-	b.calls = append(b.calls, call{op: "live", key: k, size: active})
-	return nil
-}
-func (b *fakeBook) RerestRemainder(k offerstore.Key, txid string, vout uint32, size uint64) error {
-	b.calls = append(b.calls, call{op: "rerest", key: k, txid: txid, vout: vout, size: size})
-	return nil
-}
-func (b *fakeBook) RemoveFilled(k offerstore.Key, spender string) error {
-	b.calls = append(b.calls, call{op: "filled", key: k, txid: spender})
-	return nil
-}
-func (b *fakeBook) HoldForSpend(k offerstore.Key, spender string) error {
-	b.calls = append(b.calls, call{op: "hold", key: k, txid: spender})
-	return nil
-}
-func (b *fakeBook) RemoveGhost(k offerstore.Key, reason string) error {
-	b.calls = append(b.calls, call{op: "ghost", key: k})
-	return nil
-}
-func (b *fakeBook) HoldGhost(k offerstore.Key, reason string) error {
-	b.calls = append(b.calls, call{op: "holdghost", key: k})
-	return nil
-}
-
-// fakeChain returns a canned CovState per outpoint. terms carry NUMS + a valid
-// 32-byte program so expectFromTerms/Derive succeed; the fake ignores the derived
-// spk (it returns states verbatim).
-type fakeChain struct {
-	hash   string
-	height int64
-	states map[string]CovState
-}
-
-func (f *fakeChain) Tip() (string, int64, error) { return f.hash, f.height, nil }
-func (f *fakeChain) Inspect(txid string, vout uint32, _, _ string) (CovState, error) {
-	return f.states[fmt.Sprintf("%s:%d", txid, vout)], nil
-}
-
 func TestReconcileOnce_RoutesAllStates(t *testing.T) {
 	// Four covenant orders, one per outpoint, exercising each verdict.
-	mk := func(id, txid string, vout uint32) CovEntry {
-		return CovEntry{
-			Key:    offerstore.Key{MakerPubkey: "mk", OfferID: id},
-			Terms:  sampleTerms(txid, vout),
-			Active: 90_000_000,
-		}
-	}
-	book := &fakeBook{covs: []CovEntry{
-		mk("live", "aa", 0),
-		mk("part", "bb", 0),
-		mk("full", "cc", 0),
-		mk("ghost", "dd", 0),
-	}}
+	book := newFakeBook(
+		mkEntry("live", "aa", 0, 90_000_000),
+		mkEntry("part", "bb", 0, 90_000_000),
+		mkEntry("full", "cc", 0, 90_000_000),
+		mkEntry("ghost", "dd", 0, 90_000_000),
+	)
 	liveExp, err := expectFromTerms(sampleTerms("aa", 0))
 	if err != nil {
 		t.Fatalf("expect: %v", err)
 	}
-	chain := &fakeChain{hash: "tip1", height: 100, states: map[string]CovState{
-		"aa:0": {Unspent: true, Value: 90_000_000, AssetDisplay: liveExp.AssetADisplay, SPKHex: liveExp.OrderSPKHex},
-		"bb:0": {SpenderTxid: "sp_bb", SpenderConfirmed: true, Remainder: RemainderOut{Present: true, Vout: 1, Value: 60_000_000}},
-		"cc:0": {SpenderTxid: "sp_cc", SpenderConfirmed: true},
-		"dd:0": {SpenderTxid: ""},
-	}}
+	chain := newFakeChain()
+	chain.states["aa:0"] = CovState{Unspent: true, Value: 90_000_000, AssetDisplay: liveExp.AssetADisplay, SPKHex: liveExp.OrderSPKHex}
+	chain.spend(t, []spent{{"bb", 0, 90_000_000, 30_000_000}}, "sp_bb", 50, 100)
+	chain.spend(t, []spent{{"cc", 0, 90_000_000, 90_000_000}}, "sp_cc", 50, 100)
+	chain.states["dd:0"] = CovState{SpenderTxid: ""}
 
 	w := New(chain, book, nil)
 	stats, err := w.ReconcileOnce()
@@ -216,19 +153,25 @@ func TestReconcileOnce_RoutesAllStates(t *testing.T) {
 	}
 	got := map[string]call{}
 	for _, c := range book.calls {
-		got[c.key.OfferID] = c
+		if c.op != "anchorconfs" && c.op != "record" {
+			got[c.key.OfferID] = c
+		}
 	}
 	if got["live"].op != "live" || got["live"].size != 90_000_000 {
 		t.Fatalf("live routing: %+v", got["live"])
 	}
-	if got["part"].op != "rerest" || got["part"].txid != "sp_bb" || got["part"].vout != 1 || got["part"].size != 60_000_000 {
+	if got["part"].op != "repoint" || got["part"].txid != "sp_bb" || got["part"].vout != 1 || got["part"].size != 60_000_000 {
 		t.Fatalf("partial routing: %+v", got["part"])
 	}
-	if got["full"].op != "filled" || got["full"].txid != "sp_cc" {
+	// A full fill confirmed but not final is held, not removed.
+	if got["full"].op != "hold" || got["full"].txid != "sp_cc" {
 		t.Fatalf("filled routing: %+v", got["full"])
 	}
 	if got["ghost"].op != "ghost" {
 		t.Fatalf("ghost routing: %+v", got["ghost"])
+	}
+	if len(book.fills) != 2 {
+		t.Fatalf("records: %+v", book.fills)
 	}
 }
 
@@ -236,14 +179,12 @@ func TestReconcileOnce_RoutesAllStates(t *testing.T) {
 // fill) is HELD (reversible), not permanently invalidated, so it can re-open if the fill re-confirms.
 // An ORIGINAL-funding ghost (never re-rested, so it never really settled) is still removed.
 func TestReconcileOnce_ReRestedGhostIsHeld(t *testing.T) {
-	book := &fakeBook{covs: []CovEntry{
-		{Key: offerstore.Key{MakerPubkey: "mk", OfferID: "rerested"}, Terms: sampleTerms("ee", 0), Active: 60_000_000, ReRested: true},
-		{Key: offerstore.Key{MakerPubkey: "mk", OfferID: "original"}, Terms: sampleTerms("ff", 0), Active: 90_000_000},
-	}}
-	chain := &fakeChain{hash: "tip1", height: 100, states: map[string]CovState{
-		"ee:0": {SpenderTxid: ""}, // remainder gone, no spender -> Ghost
-		"ff:0": {SpenderTxid: ""}, // original gone, no spender -> Ghost
-	}}
+	re := mkEntry("rerested", "ee", 0, 60_000_000)
+	re.ReRested = true
+	book := newFakeBook(re, mkEntry("original", "ff", 0, 90_000_000))
+	chain := newFakeChain()
+	chain.states["ee:0"] = CovState{SpenderTxid: ""} // remainder gone, no spender -> Ghost
+	chain.states["ff:0"] = CovState{SpenderTxid: ""} // original gone, no spender -> Ghost
 	if _, err := New(chain, book, nil).ReconcileOnce(); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -260,8 +201,9 @@ func TestReconcileOnce_ReRestedGhostIsHeld(t *testing.T) {
 }
 
 func TestReconcileOnce_ReadsLiveTipAndDetectsReorg(t *testing.T) {
-	chain := &fakeChain{hash: "tipA", height: 100, states: map[string]CovState{}}
-	w := New(chain, &fakeBook{}, nil)
+	chain := newFakeChain()
+	chain.hash, chain.height = "tipA", 100
+	w := New(chain, newFakeBook(), nil)
 	s1, _ := w.ReconcileOnce()
 	if s1.ReorgSeen {
 		t.Fatalf("first pass should not flag a reorg")

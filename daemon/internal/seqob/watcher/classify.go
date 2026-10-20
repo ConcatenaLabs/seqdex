@@ -30,7 +30,11 @@
 // lives in watcher.go.
 package watcher
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/aejkcs50/seqdex/daemon/pkg/covenant"
+)
 
 // State is the reconciled classification of one resting covenant outpoint.
 type State int
@@ -110,6 +114,38 @@ type CovState struct {
 	SpenderTxid      string // the tx that spends the outpoint; "" if none found
 	SpenderConfirmed bool   // the spender has >=1 confirmation
 	Remainder        RemainderOut
+	// Spender is what the fill's record is read from, when the spender was found
+	// and decoded.
+	Spender *SpenderTx
+}
+
+// SpenderTx is the transaction that spent a covenant outpoint, as the record of
+// the fill needs it.
+type SpenderTx struct {
+	Txid      string
+	Input     uint32            // k: the input that spent the order
+	Witness   [][]byte          // that input's witness stack
+	Outputs   []covenant.Output // every output, as the order's leaf reads it
+	PrevValue uint64            // what the spent outpoint held of asset A
+}
+
+// TxStatus is where a transaction stands at the live tip.
+type TxStatus struct {
+	InChain       bool // in a block of the active chain
+	InMempool     bool
+	Block         string
+	Height        int64
+	Confirmations int64
+	BlockAnchor   int64 // the Bitcoin anchor height its block commits
+	CertPresent   bool  // the node reports quorum certification
+	Certified     bool  // its block, or one above it, is quorum-certified
+}
+
+// AnchorTip is the Bitcoin anchor of the node's tip.
+type AnchorTip struct {
+	Anchored bool   // false on a chain without Bitcoin anchoring
+	Height   int64  // the anchor height the tip commits
+	Status   string // getanchorstatus: "ok" once the node checked it against Bitcoin
 }
 
 // Expect is the covenant's expected program, derived from the resting offer's

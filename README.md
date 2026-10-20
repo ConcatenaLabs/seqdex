@@ -72,8 +72,10 @@ suites:
 - Covenant-funded passive resting orders (tapscript introspection covenants):
   permissionless fills, partial fills with a re-rested remainder, joint
   settlement of two passive orders by `seqob-settler`, the continuous matcher
-  in the relay, the chain-watcher (ghost removal, remainder re-resting, reorg
-  re-opening), and the rail-crossing bridge. Proven at consensus level by
+  in the relay, the chain-watcher (a record of each fill read from the filling
+  transaction's outputs, final once certified and anchor-buried, undone with
+  its trade when its block leaves the chain; ghost removal, remainder
+  re-resting), and the rail-crossing bridge. Proven at consensus level by
   `test/regtest/feature_seqob_*.py` against a real node.
 - Cross-chain order-book settlement over the relay courier, both directions:
   forward (taker pays BTC, receives the asset) and reverse (taker sells the

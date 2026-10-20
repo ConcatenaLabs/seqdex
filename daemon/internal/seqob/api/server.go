@@ -245,7 +245,7 @@ func (s *Server) markets() []*seqobv1.Market {
 	return s.store.MarketsFiltered(func(o *seqobv1.Offer) bool { return s.offerLiftable(o, now) })
 }
 
-// handleOrderbook serves /v1/market/{base}/{quote}/{orderbook|trades|candles}.
+// handleOrderbook serves /v1/market/{base}/{quote}/{orderbook|trades|candles|fills}.
 func (s *Server) handleOrderbook(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		httpErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -254,7 +254,7 @@ func (s *Server) handleOrderbook(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/v1/market/")
 	parts := strings.Split(rest, "/")
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" {
-		httpErr(w, http.StatusNotFound, "expected /v1/market/{base}/{quote}/{orderbook|trades|candles}")
+		httpErr(w, http.StatusNotFound, "expected /v1/market/{base}/{quote}/{orderbook|trades|candles|fills}")
 		return
 	}
 	pair := &seqobv1.AssetPair{BaseAsset: parts[0], QuoteAsset: parts[1]}
@@ -269,8 +269,10 @@ func (s *Server) handleOrderbook(w http.ResponseWriter, r *http.Request) {
 		s.handleTrades(w, r, pair)
 	case "candles":
 		s.handleCandles(w, r, pair)
+	case "fills":
+		s.handleFills(w, r, pair)
 	default:
-		httpErr(w, http.StatusNotFound, "expected /v1/market/{base}/{quote}/{orderbook|trades|candles}")
+		httpErr(w, http.StatusNotFound, "expected /v1/market/{base}/{quote}/{orderbook|trades|candles|fills}")
 	}
 }
 
@@ -292,6 +294,21 @@ func (s *Server) handleTrades(w http.ResponseWriter, r *http.Request, pair *seqo
 		out = append(out, tradeJSON{Ts: t.TS.Unix(), Price: t.Price, Size: t.Size})
 	}
 	writeJSON(w, map[string]interface{}{"base": pair.BaseAsset, "quote": pair.QuoteAsset, "trades": out})
+}
+
+// handleFills serves the records of the pair's covenant fills, oldest first:
+// GET /v1/market/{base}/{quote}/fills?limit=N. Each is read from the filling
+// transaction's outputs (the maker's credit at 2k, the order resting again or
+// the gap at 2k+1), names its taker (an on-chain fill, or an Arca operator's
+// round, whose takers hold leaves of its batch), and says where it stands:
+// confirmed, final (certified and its anchor buried) or undone (its block left
+// the chain), as the chain watcher last saw it.
+func (s *Server) handleFills(w http.ResponseWriter, r *http.Request, pair *seqobv1.AssetPair) {
+	limit := 100
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 && v <= 1000 {
+		limit = v
+	}
+	writeJSON(w, map[string]interface{}{"base": pair.BaseAsset, "quote": pair.QuoteAsset, "fills": s.store.CovenantFills(pair, limit)})
 }
 
 // handleCandles serves OHLCV bucketed from the trades: GET

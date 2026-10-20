@@ -12,12 +12,19 @@ internal/seqob/watcher, run as a goroutine inside seqobd when it is given
 PRODUCTION Go watcher against a regtest node and asserts, over the relay's REST
 book, each reconciliation outcome:
 
-  1. FULL FILL   — a covenant is filled fully on-chain -> watcher REMOVES it.
+  1. FULL FILL   — a covenant is filled fully on-chain -> the watcher records
+                   the fill from the transaction's outputs (credit at 2k, gap at
+                   2k+1), holds the order while the fill is not final, and
+                   REMOVES it once the fill is final.
   2. PARTIAL     — a partial fill re-creates a smaller remainder covenant at a
                    new outpoint (txid:2k+1) -> watcher RE-RESTS the order at the
                    new outpoint, and that remainder is itself fillable.
   3. UNCONFIRMED — a fill is broadcast but NOT confirmed -> the order is held
                    pending (not declared filled); once confirmed it settles.
+  5. UNDO        — a confirmed partial fill's block leaves the chain -> the
+                   record is UNDONE, its trade retracted, and the order rests
+                   again at its own outpoint with its whole size; the fill,
+                   mined again, is recorded again.
   4. GHOST       — the funding is UNDONE (invalidateblock + a double-spend of the
                    funding input, so the covenant UTXO is gone at the tip and no
                    spender exists) -> watcher REMOVES it. This is the
@@ -25,6 +32,10 @@ book, each reconciliation outcome:
                    Bitcoin-driven reorg can vanish a covenant's funding UTXO in
                    real time, and a resting order backed by a UTXO that no longer
                    exists is the dangerous case a taker could try to fill).
+
+This chain has no Bitcoin anchor, so a fill's depth is counted in the chain's
+own blocks above it, against the relay's -fill-anchor-depth (2): a fill is
+final two blocks after the block that holds it.
 
 The FILL spends are built from the SAME production Go covenant builder the other
 covenant tests use (daemon/pkg/covenant). Requires the Go toolchain and a configured, built
@@ -205,6 +216,29 @@ class SeqObWatcherTest(BitcoinTestFramework):
             if o["offer_id"] == offer_id:
                 return o
         return None
+
+    def fills(self):
+        url = "%s/v1/market/%s/%s/fills" % (self.relay_http, self.A_display, self.B_display)
+        with urllib.request.urlopen(url, timeout=5) as r:
+            return json.loads(r.read().decode())["fills"]
+
+    def trades(self):
+        url = "%s/v1/market/%s/%s/trades" % (self.relay_http, self.A_display, self.B_display)
+        with urllib.request.urlopen(url, timeout=5) as r:
+            return json.loads(r.read().decode())["trades"]
+
+    def wait_fills(self, predicate, what, timeout=25):
+        deadline = time.time() + timeout
+        last = None
+        while time.time() < deadline:
+            last = self.fills()
+            if predicate(last):
+                return last
+            time.sleep(0.5)
+        raise AssertionError("timed out waiting for: %s (last fills: %s)" % (what, json.dumps(last)))
+
+    def fill_of(self, fills, offer_id, txid):
+        return [f for f in fills if f["offer_id"] == offer_id and f["txid"] == txid]
 
     def wait_book(self, predicate, what, timeout=25):
         """Poll the relay book until predicate(book) is truthy (the watcher runs
@@ -406,11 +440,24 @@ class SeqObWatcherTest(BitcoinTestFramework):
         self.wait_book(lambda b: any(o["offer_id"] == "full" for o in b.get("offers", [])),
                        "covenant 'full' resting")
         # Fill it fully on-chain (maker offline) and confirm.
-        node.sendrawtransaction(self.build_full_fill(txid, vout, locked))
+        ftxid = node.sendrawtransaction(self.build_full_fill(txid, vout, locked))
         self.generate(node, 1)
+        rec = self.wait_fills(lambda fs: self.fill_of(fs, "full", ftxid), "the record of 'full''s fill")
+        rec = self.fill_of(rec, "full", ftxid)[0]
+        assert_equal((rec["input"], rec["credit"]["vout"], rec["state"]), (0, 0, "confirmed"))
+        assert_equal(rec["filled"], locked)
+        assert_equal(rec["credit"]["script"], maker_spk.hex())
+        assert_equal(rec["gap"]["vout"], 1)
+        assert_equal(rec["taker"]["via"], "chain")
+        assert self.offer_in_book("full") is not None, "a fill not yet final must not remove the order"
+        self.log.info("  record: input %d, credit %d at output %d, gap at %d, %s (depth %d of %d); order held",
+                      rec["input"], rec["credit"]["value"], rec["credit"]["vout"], rec["gap"]["vout"],
+                      rec["state"], rec["anchor_depth"], rec["required_depth"])
+        self.generate(node, 2)
         self.wait_book(lambda b: all(o["offer_id"] != "full" for o in b.get("offers", [])),
-                       "watcher removes fully-filled 'full'")
-        self.log.info("  OK: watcher removed the fully-filled covenant order")
+                       "watcher removes fully-filled 'full' once its fill is final")
+        self.wait_fills(lambda fs: any(f["state"] == "final" for f in self.fill_of(fs, "full", ftxid)), "'full''s fill final")
+        self.log.info("  OK: watcher removed the fully-filled covenant order once its fill was final")
 
         # ================= SCENARIO 2: PARTIAL -> RE-REST =================
         self.log.info("SCENARIO 2: partial fill -> watcher re-rests the remainder at its new outpoint")
@@ -466,7 +513,7 @@ class SeqObWatcherTest(BitcoinTestFramework):
             (FEE, b"", None),
         ], wit2)
         node.sendrawtransaction(tx.serialize().hex())
-        self.generate(node, 1)
+        self.generate(node, 3)
         self.wait_book(lambda b: all(o["offer_id"] != "part" for o in b.get("offers", [])),
                        "watcher removes the re-filled remainder")
         self.log.info("  OK: re-rested remainder was fillable; watcher removed it after the fill")
@@ -485,8 +532,8 @@ class SeqObWatcherTest(BitcoinTestFramework):
         assert self.offer_in_book("pend") is not None, \
             "an unconfirmed fill must not remove the order (mempool spend is reversible)"
         self.log.info("  OK: order stayed present (held pending) while the fill was only in the mempool")
-        # Now confirm the fill -> watcher removes it.
-        self.generate(node, 1)
+        # Now confirm the fill, and bury it -> watcher removes it.
+        self.generate(node, 3)
         self.wait_book(lambda b: all(o["offer_id"] != "pend" for o in b.get("offers", [])),
                        "watcher removes 'pend' once the fill confirms")
         self.log.info("  OK: once the fill confirmed, the watcher settled/removed the order")
@@ -537,8 +584,55 @@ class SeqObWatcherTest(BitcoinTestFramework):
         self.log.info("  OK: watcher removed the GHOST order whose funding was undone by the reorg "
                       "(anchoring-supremacy safety case)")
 
+        # ================= SCENARIO 5: a confirmed fill UNDONE by a reorg =================
+        self.log.info("SCENARIO 5: a confirmed partial fill's block leaves the chain -> the record is undone, the order rests again")
+        txid5, vout5, _, _, _ = self.fund_covenant()
+        self.relay_post(self.maker_priv, self.covenant_offer("undo", txid5, vout5))
+        self.wait_book(lambda b: any(o["offer_id"] == "undo" for o in b.get("offers", [])), "covenant 'undo' resting")
+        f5 = 30 * COIN
+        plan5 = self.cov_fill(locked=N, filled=f5, k=0)
+        req5, rem5 = ceil_price(f5), N - f5
+        wit5 = [bytes.fromhex(plan5["fill_leaf"]), bytes.fromhex(plan5["control_block"])]
+        b_in = self.fresh_segwit_utxo(100, self.B_display)
+        b_amt = int(satoshi_round(b_in["amount"]) * COIN)
+        btc = self.fresh_segwit_utxo(1)
+        btc_amt = int(satoshi_round(btc["amount"]) * COIN)
+        tx = self.assemble_fill((txid5, vout5), [b_in, btc], [
+            (req5, maker_spk, self.B_OUT),
+            (rem5, order_spk, self.A_OUT),
+            (f5, self.wallet_spk(), self.A_OUT),
+            (b_amt - req5, self.wallet_spk(), self.B_OUT),
+            (btc_amt - FEE, self.wallet_spk(), self.BTC_OUT),
+            (FEE, b"", None),
+        ], wit5)
+        utxid = node.sendrawtransaction(tx.serialize().hex())
+        fill_block = self.generate(node, 1)[0]
+        self.wait_book(lambda b: any(o["offer_id"] == "undo" and o["covenant"]["covenant_txid"] == utxid for o in b.get("offers", [])),
+                       "'undo' re-rested at %s:1" % utxid)
+        trades_before = len(self.trades())
+        rec = self.fill_of(self.fills(), "undo", utxid)[0]
+        assert_equal((rec["state"], rec["rest"]["vout"], rec["remainder"]), ("confirmed", 1, rem5))
+        node.invalidateblock(fill_block)  # the fill goes back to the mempool
+        self.wait_fills(lambda fs: any(f["state"] == "undone" for f in self.fill_of(fs, "undo", utxid)), "'undo''s fill undone")
+        rec = [f for f in self.fill_of(self.fills(), "undo", utxid) if f["state"] == "undone"][0]
+        self.log.info("  record undone: %s", rec["reason"])
+        assert "left the active chain" in rec["reason"], rec
+        self.wait_book(lambda b: any(o["offer_id"] == "undo" and o["covenant"]["covenant_txid"] == txid5 for o in b.get("offers", [])),
+                       "'undo' back at its own outpoint %s:%d" % (txid5, vout5))
+        assert_equal(len(self.trades()), trades_before - 1)
+        self.log.info("  OK: the order rests again at %s:%d and its trade is retracted", txid5, vout5)
+        # Mined again: recorded again, as a new fill, and re-rested again.
+        node.reconsiderblock(fill_block)
+        self.wait_fills(lambda fs: any(f["state"] in ("confirmed", "final") for f in self.fill_of(fs, "undo", utxid)),
+                        "'undo''s fill recorded again")
+        self.wait_book(lambda b: any(o["offer_id"] == "undo" and o["covenant"]["covenant_txid"] == utxid for o in b.get("offers", [])),
+                       "'undo' re-rested again at %s:1" % utxid)
+        assert_equal(len(self.trades()), trades_before)
+        self.log.info("  OK: mined again, the fill is recorded again and the order rests at %s:1", utxid)
+
         self.log.info("SeqOB chain-watcher proven: the resting covenant book is reconciled to actual "
-                      "chain state — fills removed, partials re-rested, unconfirmed spends held, and "
+                      "chain state — fills recorded and removed once final, partials re-rested, "
+                      "unconfirmed spends held, fills whose block leaves the chain undone, and "
                       "reorg-vanished funding (ghosts) removed.")
 
 

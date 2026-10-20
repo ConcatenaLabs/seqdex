@@ -364,12 +364,10 @@ func (m *Matcher) walk(incoming *seqobv1.Offer) ([]Match, uint64) {
 		// The matcher is PURE plan + emit: it computes the crossing and advertises the Match, but commits
 		// NO trade-truth (no decrement, no RecordTrade). A cross is only a trade once it SETTLES on-chain,
 		// and only that is recorded by the party that owns the settlement:
-		//   - COVENANT resting order: the chain watcher, on the FILL's confirmation (RerestCovenantRemainder /
-		//     RemoveCovenantFilled), which records a DELTA off the resting order's LIVE size — so the matcher
-		//     must NOT pre-decrement here, or that delta comes out 0 and the real trade is lost. The watcher
-		//     reconciles the BOOK to chain state on a reorg (re-open / hold, Principle 1); the append-only
-		//     trades feed itself is not yet retracted on a reorg, so a confirmed-then-reorged fill can leave a
-		//     stale last_price (display-only, strictly better than the old record-at-match — a documented gap).
+		//   - COVENANT resting order: the chain watcher, once the FILL is in a block, records the fill from
+		//     the filling transaction's outputs (RecordCovenantFill, which records its trade with the txid)
+		//     and re-rests or holds the order; it undoes the fill, retracting that trade, if the block leaves
+		//     the chain (Principle 1). So the matcher must NOT pre-decrement or record here.
 		//   - INTERACTIVE resting order: the maker's SettleAck after the lift broadcasts (B-1).
 		// Recording/decrementing at match time was the phantom-trade + double-count source (an auto-cross
 		// mints an unregistered session for interactive, and double-recorded covenants once the watcher
