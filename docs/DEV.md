@@ -281,12 +281,14 @@ A covenant order is funded on-chain, so the maker needs nothing running after
 placement. The end-to-end proofs are the regtest scripts in `test/regtest/`
 (`feature_seqob_covenant_fill.py`, `feature_seqob_joint_covenant.py`,
 `feature_seqob_matcher_covenant.py`, `feature_seqob_watcher.py`,
-`feature_seqob_bridge.py`); they drive the production Go builders through the
-CLIs:
+`feature_seqob_bridge.py`, `feature_seqob_multi_fill.py`); they drive the
+production Go builders through the CLIs:
 
 ```sh
 ./bin/seqob-covenant derive -a <A> -b <B> -num N -den D -minlot M -prog P -expiry E -makerx X
 ./bin/seqob-covenant fill   ...derive flags... -locked L -filled F -k K
+./bin/seqob-covenant filltx < spec.json        # several orders, order k at input k
+./bin/seqob-covenant check  ...derive flags... -tx HEX -k K -locked L
 echo '<cross json>' | ./bin/seqob-settler plan
 ./bin/seqobd -listen :9955 -node-rpc 127.0.0.1:19996 -node-rpc-user <user> -node-rpc-pass <pass>
 #   ^ the relay runs the covenant chain-watcher when given -node-rpc

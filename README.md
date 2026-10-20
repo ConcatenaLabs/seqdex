@@ -145,8 +145,13 @@ the node's tapscript introspection opcodes. The relay only advertises the
 outpoint (`CovenantTerms`); a taker re-derives the output key and verifies it
 against the chain, then spends the UTXO in a fill that pays the maker its pinned
 price. The order *is* the coin, so oversell is impossible and the maker can be
-offline. Two passive orders that cross are settled in one transaction by
-`seqob-settler`, which funds the fee but cannot alter a payout. The design
+offline. The leaf binds the order spent at input `k` to its maker's credit at
+output `2k` and its remainder at `2k+1`, so one transaction can fill several
+orders, at inputs `0..n-1`, with everything else after their `2n` outputs: a
+taker taking several books at once (`seqob-cli covfill` with several offers),
+or an operator's round filling the orders its takers asked for. Two passive
+orders that cross are settled in one transaction by `seqob-settler`, which
+funds the fee but cannot alter a payout. The design
 space is in [docs/simplicity-dex-covenant-offers-design.md](docs/simplicity-dex-covenant-offers-design.md);
 the shipped leaf is tapscript (`daemon/pkg/covenant`).
 

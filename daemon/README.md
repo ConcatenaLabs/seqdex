@@ -185,9 +185,15 @@ risk is its own fronted inventory, bounded by the per-offer 0-conf cap.
 ### `cmd/seqob-covenant`: the covenant builder CLI
 
 `derive` prints a resting order's leaves, merkle data, output key and
-scriptPubKey; `fill` prints the permissionless FILL spend (credit/remainder
-indices, witness, control block). Byte-identical to the Python builder in
-`../test/regtest`, pinned by `pkg/covenant/leaf_test.go`.
+scriptPubKey; `fill` prints the permissionless FILL spend of an order at input
+`k` (credit index `2k`, remainder index `2k+1`, witness, control block);
+`filltx` lays out a transaction filling several orders, order `k` at input
+`k`, from a JSON spec on stdin, and runs every order's leaf over it; `check`
+judges a transaction as an order's FILL leaf at input `k` would. The scripts
+are byte-identical to the Python builder in `../test/regtest`, pinned by
+`pkg/covenant/leaf_test.go`; the multi-order layout is pinned by
+`pkg/covenant/testdata/fill_vectors.json`, which the web wallet's
+`covenant.js` reproduces byte for byte.
 
 ### `cmd/seqob-relaycli`: relay scripting client
 
@@ -259,7 +265,7 @@ internal/seqob/client      taker/maker drivers: same-chain (driver.go),
                            (xdriver_submarine*.go), pure-LN (xdriver_pureln.go),
                            sub-asset (xdriver_subasset*.go), E2E crypter, live
                            wallet backend over Ocean
-internal/seqob/covfill     covenant fill construction for takers
+internal/seqob/covfill     covenant fill construction for takers (one or several orders)
 internal/seqob/settler     joint settlement of two covenant orders
 internal/seqob/watcher     covenant book reconciliation against the chain
 internal/seqob/bridge      cross-rail (covenant vs Lightning) settlement

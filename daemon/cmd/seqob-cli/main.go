@@ -99,8 +99,8 @@ commands:
           -ln-direction -ln-node -ln-cltv      Lightning offer: ln_direction 0-5 (2/3 = pure-LN), maker LN node pubkey)
   book    list a market's order book (flags: -relay -base -quote)
   lift    lift a resting offer       (flags: -relay -base -quote -offer-id -maker-pubkey -amount -priv -fee-asset)
-  covfill fill a resting passive-CLOB COVENANT order: one atomic wallet-funded FILL tx (no maker liveness, no refund state)
-          (flags: -relay -offer-id -maker-pubkey -amount(asset-A atoms, 0=whole) -seq-rpc -seq-wallet [-base -quote -fee-asset -spend-fee])
+  covfill fill resting passive-CLOB COVENANT orders: one atomic wallet-funded FILL tx, order n at input n-1 (no maker liveness, no refund state)
+          (flags: -relay -offer-id -maker-pubkey -amount(asset-A atoms, 0=whole; each a comma list) -seq-rpc -seq-wallet [-base -quote -fee-asset -spend-fee])
   xlift   lift a CROSS-CHAIN offer: buy the asset with real BTC over the HTLC courier
           (flags: -relay -asset -offer-id -maker-pubkey -btc-rpc -btc-wallet -btc-chain -seq-rpc -seq-wallet -state-file)
   xrefund recover the BTC leg of an aborted xlift after T_btc (flags: -state-file -btc-rpc -btc-wallet -btc-chain -wait)
