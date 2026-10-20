@@ -101,6 +101,7 @@ func ReadOutputs(raw []byte) ([]Output, error) {
 			if err := c.skip(32); err != nil {
 				return nil, err
 			}
+			o.HasNonce = true
 		}
 		if err := c.varSlice(&o.Script); err != nil {
 			return nil, err

@@ -163,7 +163,20 @@ or an operator's round filling the orders its takers asked for. Two passive
 orders that cross are settled in one transaction by `seqob-settler`, which
 funds the fee but cannot alter a payout. The design
 space is in [docs/simplicity-dex-covenant-offers-design.md](docs/simplicity-dex-covenant-offers-design.md);
-the shipped leaf is tapscript (`daemon/pkg/covenant`).
+the order book's leaf is tapscript (`daemon/pkg/covenant`).
+
+`daemon/pkg/covenant` also builds the Simplicity order of the template
+`seqdex/order` (sequentia-contracts, `templates/seqdex_order`; the copy in
+`daemon/pkg/covenant/seqdex_order/` is pinned to a commit by its `PIN.json`).
+It is one program for every order, the terms held as data in a leaf beside it,
+so an order's address is the pinned commitment root plus its terms and Go
+derives it with no compiler. Its fill compares the price on 128-bit products,
+so any 64-bit amount and price fills, where the tapscript leaf must keep
+`filled × rate_num` under 2^63. Every spend's pruned program is a constant of
+the template, so Go builds each fill's witness with no compiler too; a refund
+needs the refund key's signature over the transaction's Simplicity
+`sig_all_hash`. A fill in the same layout costs more: 917 vB against 668 vB for
+a partial fill, 811 vB against 590 vB for a whole one.
 
 **Cross-chain (BTC on-chain).** The legs are two HTLCs sharing one SHA256
 hashlock, with asymmetric timelocks (the BTC leg always refunds later than the
@@ -274,9 +287,11 @@ daemon/                The Go daemon module (fork of tdex-daemon).
   cmd/seqob-bridge/    Cross-rail settlement bridge: fills a covenant order
                        against a Lightning order under one preimage. The only
                        seqob component holding its own inventory and LN node.
-  cmd/seqob-covenant/  Covenant builder CLI (derive | fill): scriptPubKey and
-                       FILL witness for a resting order, byte-identical to the
-                       proven Python.
+  cmd/seqob-covenant/  Covenant builder CLI: scriptPubKey and FILL witness
+                       for a tapscript order, byte-identical to the proven
+                       Python (derive | fill | filltx | check); address,
+                       witness and judgement of a Simplicity order (simderive
+                       | simwitness | simcheck).
   cmd/seqob-crosser/   Crossing agent: polls every relay, builds the union
                        book per pair, and when a resting bid crosses a resting
                        ask it takes BOTH sides with its own inventory. One
@@ -290,8 +305,10 @@ daemon/                The Go daemon module (fork of tdex-daemon).
   internal/seqob/      Order book: offer signing, store, validator, matcher,
                        session router, E2E courier client, lift drivers,
                        covenant fill/settler/watcher/bridge cores, reorg.
-  pkg/covenant/        The tapscript covenant leaf builder (golden-vector
-                       pinned against the Python in test/regtest).
+  pkg/covenant/        The covenant leaf builders: the tapscript FILL/REFUND
+                       leaf (golden-vector pinned against the Python in
+                       test/regtest) and the Simplicity order (pinned to the
+                       template's vectors in seqdex_order/).
   pkg/xchain/          Cross-chain HTLC engine + submarine, pure-LN and
                        sub-asset swaps + regtest harness
                        (testdata/start-regtest.sh).

@@ -239,6 +239,17 @@ are byte-identical to the Python builder in `../test/regtest`, pinned by
 `pkg/covenant/testdata/fill_vectors.json`, which the web wallet's
 `covenant.js` reproduces byte for byte.
 
+`simderive`, `simwitness` and `simcheck` do the same for a Simplicity order of
+the template `seqdex/order` (`pkg/covenant` `SimOrder`): its address from the
+terms and the pinned commitment root; the witness stack of a partial fill, a
+whole fill or (given the refund key's signature over the transaction's
+`sig_all_hash`) the refund, from the template's pinned programs; and a
+judgement of a fill at input `k` as the program makes it. `-maker` is the
+maker's whole payout scriptPubKey, which the order commits to by its hash.
+`pkg/covenant/simorder_test.go` checks the address against every vector of the
+template copy in `pkg/covenant/seqdex_order/`, which `PIN.json` ties to a
+commit of sequentia-contracts.
+
 ### `cmd/seqob-relaycli`: relay scripting client
 
 `post` signs an offer and POSTs it (the stateless maker path); `take` signs,
@@ -314,8 +325,10 @@ internal/seqob/settler     joint settlement of two covenant orders
 internal/seqob/watcher     covenant book reconciliation against the chain
 internal/seqob/bridge      cross-rail (covenant vs Lightning) settlement
 internal/seqob/reorg       Bitcoin-anchor reorg detection helpers
-pkg/covenant               the tapscript covenant leaf builder (NUMS key,
-                           FILL/REFUND leaves, output key, fill planning)
+pkg/covenant               the covenant leaf builders: the tapscript FILL/REFUND
+                           leaves (NUMS key, output key, fill planning) and the
+                           Simplicity order (SimOrder: address, witnesses,
+                           fill planning and judgement, no compiler)
 pkg/xchain                 the HTLC engine: legs (elements/bitcoin/lightning),
                            orchestrator, VerifySeqLegSafe anchor gate,
                            submarine, pure-LN and sub-asset swaps, regtest
