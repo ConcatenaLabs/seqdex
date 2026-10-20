@@ -74,6 +74,7 @@ type covInput struct {
 	Internal string `json:"internal"` // optional 32-byte internal key hex; default NUMS
 	Locked   uint64 `json:"locked"`   // atoms of X currently locked in the covenant UTXO
 	Fill     uint64 `json:"fill"`     // atoms of X taken by this cross
+	K        uint32 `json:"k"`        // the covenant's input index in the fill (default 0)
 }
 
 // lnInput is the Lightning counterparty's price + 0-conf cap.
@@ -145,7 +146,7 @@ func main() {
 		if in.Covenant.Internal != "" {
 			order.InternalKey = hx32(in.Covenant.Internal, "internal")
 		}
-		s, err := bridge.Plan(order, in.Covenant.Locked, in.Covenant.Fill,
+		s, err := bridge.Plan(order, in.Covenant.Locked, in.Covenant.Fill, in.Covenant.K,
 			bridge.LNSide{OfferY: in.Lightning.OfferY, WantX: in.Lightning.WantX, Max0Conf: in.Lightning.Max0Conf},
 			in.PolicyFeeSats, in.RateY)
 		if err != nil {
@@ -153,6 +154,7 @@ func main() {
 		}
 		out, err := json.Marshal(map[string]interface{}{
 			// on-chain FILL leg
+			"input_index":     s.Fill.InputIndex,
 			"credit_index":    s.Fill.CreditIndex,
 			"credit_value":    s.PayY,
 			"credit_floor":    s.Fill.RequiredB,

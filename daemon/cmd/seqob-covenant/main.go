@@ -16,8 +16,20 @@
 //	        control_block}
 //
 //	fill    (derive flags) -locked L -filled F -k K
-//	    -> {credit_index, remainder_index, filled, remainder, required_b,
-//	        partial, fill_leaf, control_block, order_spk}
+//	    -> {input_index, credit_index, remainder_index, filled, remainder,
+//	        required_b, partial, fill_leaf, control_block, order_spk}
+//
+//	filltx  < spec.json
+//	    Lays out a transaction filling several orders, order k at input k
+//	    (pkg/covenant BuildFillTx; the spec format is covenant.Spec, as
+//	    pkg/covenant/testdata/fill_vectors.json carries it), runs every order's
+//	    leaf over it, and prints {hex, txid, plans}. The orders' inputs carry
+//	    their FILL witnesses; the other inputs are left unsigned.
+//
+//	check   (derive flags) -tx HEX -k K -locked L
+//	    Judges a transaction as the order's FILL leaf at input k would
+//	    (pkg/covenant CheckFill): {ok, filled, remainder, partial, required,
+//	    credited, credit_index, remainder_index} or {ok:false, error}.
 package main
 
 import (
@@ -25,9 +37,11 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/aejkcs50/seqdex/daemon/pkg/covenant"
+	"github.com/vulpemventures/go-elements/transaction"
 )
 
 func die(format string, a ...interface{}) {
@@ -53,7 +67,7 @@ func orderFlags(fs *flag.FlagSet) func() covenant.Order {
 	minlot := fs.Uint64("minlot", 0, "min_lot (atoms)")
 	prog := fs.String("prog", "", "maker credit witness program (32-byte hex, v1)")
 	makerver := fs.Int("makerver", 1, "maker credit witness version")
-	expiry := fs.Int64("expiry", 0, "REFUND absolute-locktime height")
+	expiry := fs.Int64("expiry", 0, "REFUND absolute locktime: a height below 500000000, a median time (unix seconds) from it")
 	makerx := fs.String("makerx", "", "maker x-only key for REFUND (32-byte hex)")
 	internal := fs.String("internal", "", "taproot internal key (32-byte hex; default NUMS)")
 	return func() covenant.Order {
@@ -90,7 +104,7 @@ func emit(v interface{}) {
 
 func main() {
 	if len(os.Args) < 2 {
-		die("usage: seqob-covenant <derive|fill> [flags]")
+		die("usage: seqob-covenant <derive|fill|filltx|check> [flags]")
 	}
 	switch os.Args[1] {
 	case "derive":
@@ -138,7 +152,55 @@ func main() {
 			"control_block":   hex.EncodeToString(p.ControlBlock),
 			"order_spk":       hex.EncodeToString(p.OrderSPK),
 		})
+	case "filltx":
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			die("read stdin: %v", err)
+		}
+		var spec covenant.Spec
+		if err := json.Unmarshal(raw, &spec); err != nil {
+			die("parse spec: %v", err)
+		}
+		f, err := spec.FillTx()
+		if err != nil {
+			die("spec: %v", err)
+		}
+		tx, plans, err := covenant.BuildFillTx(f)
+		if err != nil {
+			die("filltx: %v", err)
+		}
+		txHex, err := tx.ToHex()
+		if err != nil {
+			die("serialize: %v", err)
+		}
+		var ps []map[string]interface{}
+		for _, p := range plans {
+			ps = append(ps, map[string]interface{}{
+				"input_index": p.InputIndex, "credit_index": p.CreditIndex, "remainder_index": p.RemainderIndex,
+				"filled": p.Filled, "remainder": p.Remainder, "required_b": p.RequiredB, "partial": p.Partial,
+			})
+		}
+		emit(map[string]interface{}{"hex": txHex, "txid": tx.TxHash().String(), "plans": ps})
+	case "check":
+		fs := flag.NewFlagSet("check", flag.ExitOnError)
+		get := orderFlags(fs)
+		txHex := fs.String("tx", "", "the transaction (hex)")
+		locked := fs.Uint64("locked", 0, "atoms of A the order's output holds")
+		k := fs.Uint("k", 0, "the order's input index")
+		fs.Parse(os.Args[2:])
+		o := get()
+		tx, err := transaction.NewTxFromHex(*txHex)
+		if err != nil {
+			die("-tx: %v", err)
+		}
+		c, err := o.CheckFill(covenant.OutputsOf(tx), uint32(*k), *locked)
+		if err != nil {
+			emit(map[string]interface{}{"ok": false, "error": err.Error()})
+			return
+		}
+		emit(map[string]interface{}{"ok": true, "filled": c.Filled, "remainder": c.Remainder, "partial": c.Partial,
+			"required": c.Required, "credited": c.Credited, "credit_index": c.CreditIndex, "remainder_index": c.RemainderIndex})
 	default:
-		die("unknown subcommand %q (want derive|fill)", os.Args[1])
+		die("unknown subcommand %q (want derive|fill|filltx|check)", os.Args[1])
 	}
 }

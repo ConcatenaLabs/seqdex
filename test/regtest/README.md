@@ -12,6 +12,7 @@ bridge. The node is the environment they run in, not the subject.
 | `feature_seqob_matcher_covenant.py` | The relay's matcher crosses a covenant-funded resting order against an incoming one, and it settles with the maker offline. |
 | `feature_seqob_joint_covenant.py` | Two covenant orders, **both** makers offline, settled against each other in one transaction by an untrusted settler that holds no funds. |
 | `feature_seqob_watcher.py` | The chain-watcher reconciles the keyless relay's book to chain state: full fill, partial re-rest, unconfirmed, and the ghost-funding case a Bitcoin-driven reorg creates. |
+| `feature_seqob_multi_fill.py` | Several orders filled in one transaction, order `k` at input `k`, laid out by `pkg/covenant`'s planner; each wrong layout (credits swapped, a credit one atom short, a gap in the sold asset, a rest to another script or below `min_lot`) forced into a block and refused for the script failure `CheckFill` names. |
 | `feature_seqob_bridge.py` | An on-chain covenant order crossed against a Lightning order, settled under one preimage by the bridge. On-chain leg live; LN leg mocked at the orchestrator seam. |
 
 `seqob_covenant.py` is the Python covenant builder the first proof validates, and

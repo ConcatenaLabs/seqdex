@@ -115,22 +115,25 @@ func SizePolicyFee(policyFeeSats, rateY uint64) uint64 {
 }
 
 // Plan builds the bridge settlement for taking `fillX` atoms of asset X from the
-// on-chain covenant `covOrder` (currently holding `locked` atoms) and crossing it
-// against the Lightning order `ln`. policyFeeSats is the network policy fee the
-// bridge wants covered before it fronts; rateY is asset Y's open-fee-market rate.
+// on-chain covenant `covOrder` (currently holding `locked` atoms), spent at input
+// k of the bridge's fill transaction (its credit at output 2k, its remainder or
+// gap at 2k+1; k > 0 when the bridge fills it beside other covenant inputs), and
+// crossing it against the Lightning order `ln`. policyFeeSats is the network
+// policy fee the bridge wants covered before it fronts; rateY is asset Y's
+// open-fee-market rate.
 //
 // Plan fails closed if the cross would underpay the on-chain maker (LN Y received
 // < the covenant's ceil price) — so a bad advisory cross from the matcher can
 // never make the bridge settle at a loss to the maker. It also computes the
 // fronting/no-front decision (0-conf only within the cap AND when the fee covers
 // the reorg exposure) so the caller never fronts more than the fee covers.
-func Plan(covOrder covenant.Order, locked, fillX uint64, ln LNSide, policyFeeSats, rateY uint64) (*Settlement, error) {
+func Plan(covOrder covenant.Order, locked, fillX uint64, k uint32, ln LNSide, policyFeeSats, rateY uint64) (*Settlement, error) {
 	if ln.WantX == 0 {
 		return nil, fmt.Errorf("lightning side has zero want_x")
 	}
-	// On-chain FILL leg at input index 0 (single covenant). This enforces the
-	// covenant's own min_lot floors and the ceil price the maker MUST receive.
-	fp, err := covOrder.PlanFill(locked, fillX, 0)
+	// On-chain FILL leg at input index k. This enforces the covenant's own
+	// min_lot floors and the ceil price the maker MUST receive.
+	fp, err := covOrder.PlanFill(locked, fillX, k)
 	if err != nil {
 		return nil, fmt.Errorf("on-chain FILL leg: %w", err)
 	}
@@ -199,7 +202,9 @@ func PlanFromMatch(m matcher.Match, ln LNSide, policyFeeSats, rateY uint64) (*Se
 		locked = m.FillBase // an incoming covenant fills against a resting LN order
 	}
 	fillX := m.FillBase
-	return Plan(order, locked, fillX, ln, policyFeeSats, rateY)
+	// One covenant crossed against one Lightning order: the bridge's fill spends
+	// it alone, at input 0.
+	return Plan(order, locked, fillX, 0, ln, policyFeeSats, rateY)
 }
 
 // mulDiv computes floor(a * b / c) without overflow for the values in play.

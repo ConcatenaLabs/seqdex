@@ -68,7 +68,8 @@ type utxoRow struct {
 type scriptedNode struct {
 	t *testing.T
 
-	txout   interface{} // gettxout response (nil = spent/absent)
+	txout   interface{}            // gettxout response (nil = spent/absent)
+	txouts  map[string]interface{} // per "txid:vout" gettxout responses, when set
 	unspent []utxoRow
 
 	mempoolAllowed bool
@@ -118,6 +119,9 @@ func (n *scriptedNode) Call(out interface{}, method string, params ...interface{
 	}
 	switch method {
 	case "gettxout":
+		if n.txouts != nil {
+			return respond(n.txouts[fmt.Sprintf("%v:%v", params[0], params[1])])
+		}
 		return respond(n.txout)
 	case "listunspent":
 		return respond(n.unspent)

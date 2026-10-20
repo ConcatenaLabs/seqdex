@@ -25,7 +25,7 @@ func TestBridgePaysMakerCeilPriceAndKeepsFee(t *testing.T) {
 	o := testOrder(t)
 	// Fill 30 X. Covenant ceil price = 30*3 = 90 Y owed to the maker.
 	// LN order offers 100 Y for 30 X (a richer bid) -> bridge collects 100 Y.
-	s, err := Plan(o, 30, 30, LNSide{OfferY: 100, WantX: 30, Max0Conf: 50}, 0, 0)
+	s, err := Plan(o, 30, 30, 0, LNSide{OfferY: 100, WantX: 30, Max0Conf: 50}, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestBridgePaysMakerCeilPriceAndKeepsFee(t *testing.T) {
 func TestBridgeOverCapRequiresConfs(t *testing.T) {
 	o := testOrder(t)
 	// Fill 30 X but the cap is only 20 -> over cap.
-	s, err := Plan(o, 30, 30, LNSide{OfferY: 100, WantX: 30, Max0Conf: 20}, 0, 0)
+	s, err := Plan(o, 30, 30, 0, LNSide{OfferY: 100, WantX: 30, Max0Conf: 20}, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestBridgeOverCapRequiresConfs(t *testing.T) {
 // TestBridgeZeroCapRequiresConfs: an offer with no 0-conf cap never fronts.
 func TestBridgeZeroCapRequiresConfs(t *testing.T) {
 	o := testOrder(t)
-	s, err := Plan(o, 30, 30, LNSide{OfferY: 100, WantX: 30, Max0Conf: 0}, 0, 0)
+	s, err := Plan(o, 30, 30, 0, LNSide{OfferY: 100, WantX: 30, Max0Conf: 0}, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestBridgeFeeMustCoverFronting(t *testing.T) {
 	o := testOrder(t)
 	// Bid exactly the ceil price (90 Y for 30 X): fee = 0, cannot cover any fee.
 	// policyFeeSats=1000, rateY=0 -> minFeeY = 1000 > 0 fee.
-	s, err := Plan(o, 30, 30, LNSide{OfferY: 90, WantX: 30, Max0Conf: 50}, 1000, 0)
+	s, err := Plan(o, 30, 30, 0, LNSide{OfferY: 90, WantX: 30, Max0Conf: 50}, 1000, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestBridgeFeeMustCoverFronting(t *testing.T) {
 func TestBridgeRejectsUnderpayingCross(t *testing.T) {
 	o := testOrder(t)
 	// LN offers only 80 Y for 30 X; ceil price is 90 -> underpays the maker.
-	if _, err := Plan(o, 30, 30, LNSide{OfferY: 80, WantX: 30, Max0Conf: 50}, 0, 0); err == nil {
+	if _, err := Plan(o, 30, 30, 0, LNSide{OfferY: 80, WantX: 30, Max0Conf: 50}, 0, 0); err == nil {
 		t.Fatal("expected Plan to reject an underpaying cross")
 	}
 }
@@ -118,7 +118,7 @@ func TestBridgeRejectsUnderpayingCross(t *testing.T) {
 func TestBridgePartialFillRemainder(t *testing.T) {
 	o := testOrder(t)
 	// Locked 30 X, fill 20 X -> remainder 10 X (>= min_lot 5). Ceil price 60 Y.
-	s, err := Plan(o, 30, 20, LNSide{OfferY: 100, WantX: 20, Max0Conf: 50}, 0, 0)
+	s, err := Plan(o, 30, 20, 0, LNSide{OfferY: 100, WantX: 20, Max0Conf: 50}, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,5 +144,18 @@ func TestSizePolicyFeeNotInverted(t *testing.T) {
 	// rate 0 -> flat sats fallback.
 	if got := SizePolicyFee(500, 0); got != 500 {
 		t.Fatalf("zero-rate fallback = %d, want 500", got)
+	}
+}
+
+// TestBridgePlansAtAnyInput: the bridge's covenant spent beside other covenant
+// inputs, at k = 2, is credited at 4 and rests again (or holds its gap) at 5.
+func TestBridgePlansAtAnyInput(t *testing.T) {
+	o := testOrder(t)
+	s, err := Plan(o, 30, 20, 2, LNSide{OfferY: 100, WantX: 20, Max0Conf: 50}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Fill.InputIndex != 2 || s.Fill.CreditIndex != 4 || s.Fill.RemainderIndex != 5 {
+		t.Fatalf("k=2 index map: input %d credit %d remainder %d", s.Fill.InputIndex, s.Fill.CreditIndex, s.Fill.RemainderIndex)
 	}
 }
