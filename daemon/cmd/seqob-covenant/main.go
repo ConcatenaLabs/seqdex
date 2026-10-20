@@ -30,6 +30,23 @@
 //	    Judges a transaction as the order's FILL leaf at input k would
 //	    (pkg/covenant CheckFill): {ok, filled, remainder, partial, required,
 //	    credited, credit_index, remainder_index} or {ok:false, error}.
+//
+// The Simplicity order (pkg/covenant SimOrder, the template seqdex/order):
+//
+//	simderive  -a A -b B -num N -den D -minlot M -maker SPK -expiry E -refund X
+//	    -> {template_hash, cmr, terms, program_leaf_hash, terms_leaf_hash,
+//	        merkle_root, output_key, parity, scriptpubkey, control_block,
+//	        address: {sequentia-testnet, elementsregtest}}
+//
+//	simwitness (simderive flags) -path fill|whole|refund [-sig HEX]
+//	    The order input's witness stack, [witness, program, cmr, control
+//	    block], from the template's pinned programs: no compiler. A refund
+//	    takes the refund key's signature over the transaction's sig_all_hash.
+//
+//	simcheck   (simderive flags) -tx HEX -k K -locked L -partial
+//	    Judges a transaction as the order's program at input k would, the
+//	    order's coin holding L atoms of A explicitly (pkg/covenant
+//	    SimOrder.CheckFill), in the same reply as check.
 package main
 
 import (
@@ -101,11 +118,120 @@ func emit(v interface{}) {
 	fmt.Println(string(b))
 }
 
+func simFlags(fs *flag.FlagSet) func() covenant.SimOrder {
+	a := fs.String("a", "", "asset A, which the order sells (32-byte internal-order hex)")
+	b := fs.String("b", "", "asset B, which a fill pays in (32-byte internal-order hex)")
+	num := fs.Uint64("num", 0, "rate numerator")
+	den := fs.Uint64("den", 0, "rate denominator")
+	minlot := fs.Uint64("minlot", 0, "min_lot (atoms)")
+	maker := fs.String("maker", "", "the maker's payout scriptPubKey (hex): a plain key's script, never an Arca leaf or board script")
+	expiry := fs.Uint("expiry", 0, "refund lock time: a height below 500000000, a median time (unix seconds) from it")
+	refund := fs.String("refund", "", "the refund key (32-byte x-only hex)")
+	return func() covenant.SimOrder {
+		m, err := hex.DecodeString(*maker)
+		if err != nil || len(m) == 0 {
+			die("-maker must be a scriptPubKey in hex")
+		}
+		if *expiry > 0xffffffff {
+			die("-expiry must fit 32 bits")
+		}
+		o := covenant.SimOrder{
+			AssetA: hex32(*a, "-a"), AssetB: hex32(*b, "-b"), RateNum: *num, RateDen: *den, MinLot: *minlot,
+			MakerScript: m, Expiry: uint32(*expiry), RefundKey: hex32(*refund, "-refund"),
+		}
+		if err := o.Validate(); err != nil {
+			die("terms: %v", err)
+		}
+		return o
+	}
+}
+
+func hexes(stack [][]byte) []string {
+	out := make([]string, len(stack))
+	for i, b := range stack {
+		out[i] = hex.EncodeToString(b)
+	}
+	return out
+}
+
 func main() {
 	if len(os.Args) < 2 {
-		die("usage: seqob-covenant <derive|fill|filltx|check> [flags]")
+		die("usage: seqob-covenant <derive|fill|filltx|check|simderive|simwitness|simcheck> [flags]")
 	}
 	switch os.Args[1] {
+	case "simderive":
+		fs := flag.NewFlagSet("simderive", flag.ExitOnError)
+		get := simFlags(fs)
+		fs.Parse(os.Args[2:])
+		t, err := get().Derive()
+		if err != nil {
+			die("derive: %v", err)
+		}
+		tb, _ := t.Address("tb")
+		ert, _ := t.Address("ert")
+		emit(map[string]interface{}{
+			"template_hash": covenant.SimOrderTemplateHash, "cmr": hex.EncodeToString(covenant.SimOrderCMR[:]),
+			"terms": hex.EncodeToString(t.Terms), "program_leaf_hash": hex.EncodeToString(t.ProgramLeafHash[:]),
+			"terms_leaf_hash": hex.EncodeToString(t.TermsLeafHash[:]), "merkle_root": hex.EncodeToString(t.MerkleRoot[:]),
+			"output_key": hex.EncodeToString(t.OutputKey[:]), "parity": t.Parity,
+			"scriptpubkey": hex.EncodeToString(t.ScriptPubKey), "control_block": hex.EncodeToString(t.ControlBlock),
+			"address": map[string]string{"sequentia-testnet": tb, "elementsregtest": ert},
+		})
+	case "simwitness":
+		fs := flag.NewFlagSet("simwitness", flag.ExitOnError)
+		get := simFlags(fs)
+		path := fs.String("path", "fill", "fill (partial), whole, or refund")
+		sigHex := fs.String("sig", "", "refund: the refund key's BIP340 signature over sig_all_hash (64-byte hex)")
+		fs.Parse(os.Args[2:])
+		o := get()
+		var stack [][]byte
+		var err error
+		switch *path {
+		case "fill", "whole":
+			stack, err = o.FillWitness(*path == "fill")
+		case "refund":
+			sb, e := hex.DecodeString(*sigHex)
+			if e != nil || len(sb) != 64 {
+				die("-sig must be a 64-byte signature in hex")
+			}
+			var sig [64]byte
+			copy(sig[:], sb)
+			stack, err = o.RefundWitness(sig)
+		default:
+			die("-path must be fill, whole or refund")
+		}
+		if err != nil {
+			die("witness: %v", err)
+		}
+		emit(map[string]interface{}{"stack": hexes(stack)})
+	case "simcheck":
+		fs := flag.NewFlagSet("simcheck", flag.ExitOnError)
+		get := simFlags(fs)
+		txHex := fs.String("tx", "", "the transaction (hex)")
+		locked := fs.Uint64("locked", 0, "atoms of A the order's coin holds, explicitly")
+		k := fs.Uint("k", 0, "the order's input index")
+		partial := fs.Bool("partial", false, "the spend's PATH is a partial fill")
+		fs.Parse(os.Args[2:])
+		o := get()
+		raw, err := hex.DecodeString(*txHex)
+		if err != nil {
+			die("-tx: %v", err)
+		}
+		outs, err := covenant.ReadOutputs(raw)
+		if err != nil {
+			die("-tx: %v", err)
+		}
+		t, err := o.Derive()
+		if err != nil {
+			die("derive: %v", err)
+		}
+		c, err := o.CheckFill(covenant.Explicit(o.AssetA, *locked, t.ScriptPubKey), outs, uint32(*k), *partial)
+		if err != nil {
+			emit(map[string]interface{}{"ok": false, "error": err.Error()})
+			return
+		}
+		emit(map[string]interface{}{"ok": true, "filled": c.Filled, "remainder": c.Remainder, "partial": c.Partial,
+			"required": c.Required, "credited": c.Credited, "credit_index": c.CreditIndex, "remainder_index": c.RemainderIndex})
 	case "derive":
 		fs := flag.NewFlagSet("derive", flag.ExitOnError)
 		get := orderFlags(fs)
@@ -206,6 +332,6 @@ func main() {
 		emit(map[string]interface{}{"ok": true, "filled": c.Filled, "remainder": c.Remainder, "partial": c.Partial,
 			"required": c.Required, "credited": c.Credited, "credit_index": c.CreditIndex, "remainder_index": c.RemainderIndex})
 	default:
-		die("unknown subcommand %q (want derive|fill|filltx|check)", os.Args[1])
+		die("unknown subcommand %q (want derive|fill|filltx|check|simderive|simwitness|simcheck)", os.Args[1])
 	}
 }

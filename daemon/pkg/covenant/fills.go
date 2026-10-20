@@ -67,6 +67,10 @@ type Output struct {
 	Value         uint64
 	ValueExplicit bool
 	Script        []byte
+	// HasNonce: the output's nonce field is not null (a blinding key or any
+	// other value). The tapscript FILL leaf does not read it; a SimOrder's
+	// program refuses a credit or a rest that carries one.
+	HasNonce bool
 }
 
 // Explicit is an output with an explicit asset and value.
@@ -89,6 +93,7 @@ func OutputsOf(tx *transaction.Transaction) []Output {
 			out.ValueExplicit = true
 		}
 		out.Script = o.Script
+		out.HasNonce = len(o.Nonce) > 1
 		outs[i] = out
 	}
 	return outs

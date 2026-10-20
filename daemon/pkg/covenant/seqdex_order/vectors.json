@@ -1,0 +1,138 @@
+{
+  "addresses": [
+    {
+      "address": {
+        "elementsregtest": "ert1p80aa827jtm3uterzkfvn9rsgdsjp6g7p5epw3vx8p77j8m70eguqe5uvke",
+        "sequentia-testnet": "tb1p80aa827jtm3uterzkfvn9rsgdsjp6g7p5epw3vx8p77j8m70eguq977528"
+      },
+      "leaves": {
+        "order": {
+          "control_block": "bf50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0c21f4cf4439c944daacb72f5d0a66ab1ddf0e60f8cc79ed7d5176d5d0369ac62",
+          "hash": "a8a7881264c293f1553161f0574b90c65af9285dc65e6c221202611da1a9fe5f"
+        },
+        "terms": {
+          "data": "a905d254817d3a6c74704312d913439bda8fde4b1785c899728810eea15c0f5994127dc47e3f7e2ab96bee868a8113049c2252d7514893bf7dc4b9835ebc14040000000000000003000000000000000200000000000027100728bd310b992f0cf0337ce6b7ff50e5b4b555f732d540639e647c982be5d174000004b0d97d2e94eaa971bd275cb5dedd22bb4151e217e7391b611faa8697fe378db15e",
+          "hash": "c21f4cf4439c944daacb72f5d0a66ab1ddf0e60f8cc79ed7d5176d5d0369ac62"
+        }
+      },
+      "merkle_root": "615d325729ad7c92ada0d59320c3be1a41d76f69d40ec4608241aa52e53c953e",
+      "name": "order 1: 3 B for 2 A, a height expiry; program leaf first, output key parity 1",
+      "output_key": "3bfbd3abd25ee3c5e462b259328e086c241d23c1a642e8b0c70fbd23efcfca38",
+      "output_key_parity": 1,
+      "params": {
+        "ASSET_A": "a905d254817d3a6c74704312d913439bda8fde4b1785c899728810eea15c0f59",
+        "ASSET_B": "94127dc47e3f7e2ab96bee868a8113049c2252d7514893bf7dc4b9835ebc1404",
+        "EXPIRY": "000004b0",
+        "MAKER": "0728bd310b992f0cf0337ce6b7ff50e5b4b555f732d540639e647c982be5d174",
+        "MIN_LOT": "0000000000002710",
+        "RATE_DEN": "0000000000000002",
+        "RATE_NUM": "0000000000000003",
+        "REFUND_KEY": "d97d2e94eaa971bd275cb5dedd22bb4151e217e7391b611faa8697fe378db15e"
+      },
+      "script_pubkey": "51203bfbd3abd25ee3c5e462b259328e086c241d23c1a642e8b0c70fbd23efcfca38",
+      "slots": {},
+      "tweak": "93e913f8e3c456103fac7ed0bcd4c25b910b1cb2fc7aa4f6ff25fc8f1bdb250f"
+    },
+    {
+      "address": {
+        "elementsregtest": "ert1pgydhetvdz75r3j94mqydme7ztfgyhm9wwna5x5emezepkzkgfaqqtpltxl",
+        "sequentia-testnet": "tb1pgydhetvdz75r3j94mqydme7ztfgyhm9wwna5x5emezepkzkgfaqqhtan6p"
+      },
+      "leaves": {
+        "order": {
+          "control_block": "be50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0d79f9e4e82b86b67476defc4bc3d106d729387b6d64285d5bac3e26f9c6f17bf",
+          "hash": "a8a7881264c293f1553161f0574b90c65af9285dc65e6c221202611da1a9fe5f"
+        },
+        "terms": {
+          "data": "405138f5cb18e9906aa901b79629cd6256b8faf6bbe11ecfeb58f9fc8cad9e0d2b0e8594e6d8f6740b223adcde2290b187233927af743b46ca87ad6a26d6a8d6ffffffffffffffff80000000000000050000010000000000989e691c1f58b7f7f1e69eb083ccf015912977226b7522b4f9e54e059ea084ae713fb300228b9c4f59a8aa932b27135083d51aeda9dda5f3a0d1f3aad163d00386119ab4",
+          "hash": "d79f9e4e82b86b67476defc4bc3d106d729387b6d64285d5bac3e26f9c6f17bf"
+        }
+      },
+      "merkle_root": "e1caf6d22740d766adb2dcec5684804b68a451297704d34027d5eb2d7f3d8b99",
+      "name": "order 2: a price beyond 2^63 in both terms, a median-time expiry; program leaf first, output key parity 0",
+      "output_key": "411b7cad8d17a838c8b5d808dde7c25a504becae74fb43533bc8b21b0ac84f40",
+      "output_key_parity": 0,
+      "params": {
+        "ASSET_A": "405138f5cb18e9906aa901b79629cd6256b8faf6bbe11ecfeb58f9fc8cad9e0d",
+        "ASSET_B": "2b0e8594e6d8f6740b223adcde2290b187233927af743b46ca87ad6a26d6a8d6",
+        "EXPIRY": "713fb300",
+        "MAKER": "989e691c1f58b7f7f1e69eb083ccf015912977226b7522b4f9e54e059ea084ae",
+        "MIN_LOT": "0000010000000000",
+        "RATE_DEN": "8000000000000005",
+        "RATE_NUM": "ffffffffffffffff",
+        "REFUND_KEY": "228b9c4f59a8aa932b27135083d51aeda9dda5f3a0d1f3aad163d00386119ab4"
+      },
+      "script_pubkey": "5120411b7cad8d17a838c8b5d808dde7c25a504becae74fb43533bc8b21b0ac84f40",
+      "slots": {},
+      "tweak": "f1075535d1d0b3d620d41b517ae90c2105911921642c356a4d5df81bea7494ac"
+    },
+    {
+      "address": {
+        "elementsregtest": "ert1pzvrjq4msul6p2lxjnk43fep2q0vufqpe70lfll5e4n00thyr7e8q584gdj",
+        "sequentia-testnet": "tb1pzvrjq4msul6p2lxjnk43fep2q0vufqpe70lfll5e4n00thyr7e8qgdhs3v"
+      },
+      "leaves": {
+        "order": {
+          "control_block": "be50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac099e2089265316ed4e236c97c544176f937a0f84f10cadc176283b5e3b3ff7a0f",
+          "hash": "a8a7881264c293f1553161f0574b90c65af9285dc65e6c221202611da1a9fe5f"
+        },
+        "terms": {
+          "data": "7ce356917c6d1352f35316226c6b8504b5d341fbc7b6cf4af4bb19193d60465acf23b220793163d16a19439caf85551d9d003db15fe9b9c011e2bd326db4357600000000000000010000000005f5e1000000000000000001ae152e29a8b433379713fc2e14cc01e8933531e322593b4cd4e2cc0308d9ec641dcd65009eed3eda279ca8f6620ecfeb7259b671d0eb54bc9975b30174c24510029a30d3",
+          "hash": "99e2089265316ed4e236c97c544176f937a0f84f10cadc176283b5e3b3ff7a0f"
+        }
+      },
+      "merkle_root": "2d09cad71c854f3254571861e3eedcd53e294468a6360820b6faf94504f287a3",
+      "name": "order 3: one atom of B per 10^8 of A, the first median-time expiry; data leaf first, output key parity 0",
+      "output_key": "1307205770e7f4157cd29dab14e42a03d9c48039f3fe9ffe99acdef5dc83f64e",
+      "output_key_parity": 0,
+      "params": {
+        "ASSET_A": "7ce356917c6d1352f35316226c6b8504b5d341fbc7b6cf4af4bb19193d60465a",
+        "ASSET_B": "cf23b220793163d16a19439caf85551d9d003db15fe9b9c011e2bd326db43576",
+        "EXPIRY": "1dcd6500",
+        "MAKER": "ae152e29a8b433379713fc2e14cc01e8933531e322593b4cd4e2cc0308d9ec64",
+        "MIN_LOT": "0000000000000001",
+        "RATE_DEN": "0000000005f5e100",
+        "RATE_NUM": "0000000000000001",
+        "REFUND_KEY": "9eed3eda279ca8f6620ecfeb7259b671d0eb54bc9975b30174c24510029a30d3"
+      },
+      "script_pubkey": "51201307205770e7f4157cd29dab14e42a03d9c48039f3fe9ffe99acdef5dc83f64e",
+      "slots": {},
+      "tweak": "70cf1308a3a1641882edeab0847451eee65faaa76a2e44007aca5afdd1922934"
+    },
+    {
+      "address": {
+        "elementsregtest": "ert1pd9kualqjw0hzcqgu5khq474yhte5e33ncg5w5wufx77at08pz7sqx94xgg",
+        "sequentia-testnet": "tb1pd9kualqjw0hzcqgu5khq474yhte5e33ncg5w5wufx77at08pz7sq60h75k"
+      },
+      "leaves": {
+        "order": {
+          "control_block": "bf50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0591435127b3e8be17257ae2df233cfaa9bc66302213890df3a10fb65228695b1",
+          "hash": "a8a7881264c293f1553161f0574b90c65af9285dc65e6c221202611da1a9fe5f"
+        },
+        "terms": {
+          "data": "eceaee6fc6e8d038eafe2d882c4aac1b66aa5c9bbc3cdbc82190365bc5ac0435444275df5e1c570eb1998c00741ce6966362740c05963240241622954eec6548000000e8d4a50fff00000000000000074000000000000000dd4721d40045b97c525f5972fa8a4d76eeadd6cca486b10d9668273cd639d9ef1dcd64ff21a3d5bd2db5eee77123ba6f4a4c2890559e30870ea5b4e6a944ae83b187ad8c",
+          "hash": "591435127b3e8be17257ae2df233cfaa9bc66302213890df3a10fb65228695b1"
+        }
+      },
+      "merkle_root": "32f6a03aeb59151b93085d65f80746c6d8a73b76fbca77d61fee1298c5e2c1f6",
+      "name": "order 4: a large prime-ish ratio, the last height expiry; data leaf first, output key parity 1",
+      "output_key": "696dcefc1273ee2c011ca5ae0afaa4baf34cc633c228ea3b8937bdd5bce117a0",
+      "output_key_parity": 1,
+      "params": {
+        "ASSET_A": "eceaee6fc6e8d038eafe2d882c4aac1b66aa5c9bbc3cdbc82190365bc5ac0435",
+        "ASSET_B": "444275df5e1c570eb1998c00741ce6966362740c05963240241622954eec6548",
+        "EXPIRY": "1dcd64ff",
+        "MAKER": "dd4721d40045b97c525f5972fa8a4d76eeadd6cca486b10d9668273cd639d9ef",
+        "MIN_LOT": "4000000000000000",
+        "RATE_DEN": "0000000000000007",
+        "RATE_NUM": "000000e8d4a50fff",
+        "REFUND_KEY": "21a3d5bd2db5eee77123ba6f4a4c2890559e30870ea5b4e6a944ae83b187ad8c"
+      },
+      "script_pubkey": "5120696dcefc1273ee2c011ca5ae0afaa4baf34cc633c228ea3b8937bdd5bce117a0",
+      "slots": {},
+      "tweak": "3f66a860ccc57eef595a2ce9bb0d10e7a68ba249faa7eb6089623796b31d4043"
+    }
+  ],
+  "template_hash": "322c0e596e9552a4c20f6a7f9ed518013a50076ec8b2b9005fd032077ebcd157",
+  "vectors": 2
+}

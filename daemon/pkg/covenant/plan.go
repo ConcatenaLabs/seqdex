@@ -20,10 +20,20 @@ type FillPlan struct {
 	ControlBlock   []byte // covenant input witness item 1
 	OrderSPK       []byte // the covenant scriptPubKey (== remainder output spk on a partial)
 	Taptree        *Taptree
+	// Stack, when set, is the whole witness stack of an order whose leaf is
+	// not the tapscript FILL leaf: a SimOrder's [witness, program, cmr,
+	// control block]. FillLeaf and Taptree are then empty.
+	Stack [][]byte
 }
 
-// Witness returns the covenant input's witness stack, [leaf, control_block].
-func (p *FillPlan) Witness() [][]byte { return [][]byte{p.FillLeaf, p.ControlBlock} }
+// Witness returns the covenant input's witness stack: [leaf, control_block]
+// for the tapscript FILL leaf, Stack for a SimOrder.
+func (p *FillPlan) Witness() [][]byte {
+	if p.Stack != nil {
+		return p.Stack
+	}
+	return [][]byte{p.FillLeaf, p.ControlBlock}
+}
 
 // PlanFill computes the FILL recipe for taking `filled` atoms of asset A from a
 // covenant UTXO currently holding `locked` atoms, spent at consensus input
