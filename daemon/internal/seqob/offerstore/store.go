@@ -356,7 +356,7 @@ func (s *Store) CommittedInteractiveCapital(makerPubkey, offerAsset string) uint
 func (s *Store) committedInteractiveLocked(makerPubkey, offerAsset string) uint64 {
 	var total uint64
 	for k, e := range s.entries {
-		if k.MakerPubkey != makerPubkey || e.Offer.GetCovenant() != nil {
+		if k.MakerPubkey != makerPubkey || offer.IsCovenant(e.Offer) {
 			continue
 		}
 		if e.Offer.GetOfferAsset() != offerAsset {
@@ -419,7 +419,7 @@ func (s *Store) Submit(o *seqobv1.Offer) (Key, error) {
 	// committed capital in this offer_asset (now including this offer) exceeds the soft
 	// cap, flag this marginal offer as demoted (likely phantom depth). Computed after
 	// put() so committedInteractiveLocked includes this offer. Covenant offers exempt.
-	if s.interactiveCap > 0 && o.GetCovenant() == nil {
+	if s.interactiveCap > 0 && !offer.IsCovenant(o) {
 		if s.committedInteractiveLocked(k.MakerPubkey, o.GetOfferAsset()) > s.interactiveCap {
 			e.demoted = true
 		}
@@ -977,7 +977,7 @@ func (s *Store) RemoveInteractiveByMaker(makerPubkey string) int {
 	s.mu.Lock()
 	victims := make([]Key, 0)
 	for k, e := range s.entries {
-		if k.MakerPubkey == makerPubkey && e.Offer.GetCovenant() == nil {
+		if k.MakerPubkey == makerPubkey && !offer.IsCovenant(e.Offer) {
 			victims = append(victims, k)
 		}
 	}
@@ -1015,7 +1015,7 @@ func (s *Store) RemoveInteractiveByKeys(keys []Key) int {
 	evs := make([]ev, 0, len(keys))
 	for _, k := range keys {
 		e, ok := s.entries[k]
-		if !ok || e.Offer.GetCovenant() != nil {
+		if !ok || offer.IsCovenant(e.Offer) {
 			continue
 		}
 		evs = append(evs, ev{pair: e.Offer.GetPair(), conf: e.Offer.GetConfidential(), ref: &seqobv1.OfferRef{OfferId: k.OfferID, MakerPubkey: k.MakerPubkey}})
@@ -1034,7 +1034,7 @@ func (s *Store) RemoveByMaker(makerPubkey string) int {
 	for k, e := range s.entries {
 		// Evict ONLY interactive same-chain co-sign offers (they need the maker online now). A same-chain
 		// COVENANT offer carries a covenant and is permissionless, so it is spared alongside cross/lightning.
-		if k.MakerPubkey == makerPubkey && e.Offer.GetSameChain() != nil && e.Offer.GetCovenant() == nil {
+		if k.MakerPubkey == makerPubkey && e.Offer.GetSameChain() != nil && !offer.IsCovenant(e.Offer) {
 			victims = append(victims, k)
 		}
 	}
@@ -1071,7 +1071,8 @@ func (s *Store) RemoveByMaker(makerPubkey string) int {
 type CovenantEntry struct {
 	Key      Key
 	Offer    *seqobv1.Offer
-	Terms    *seqobv1.CovenantTerms
+	Terms    *seqobv1.CovenantTerms           // the tapscript order's terms, or nil
+	Sim      *seqobv1.SimplicityCovenantTerms // the Simplicity order's terms, or nil
 	Active   uint64
 	ReRested bool // F3: the current outpoint is a remainder from a prior partial fill, not the original funding
 }
@@ -1082,8 +1083,9 @@ func (s *Store) SnapshotCovenants() []CovenantEntry {
 	defer s.mu.RUnlock()
 	out := make([]CovenantEntry, 0)
 	for k, e := range s.entries {
-		if cov := e.Offer.GetCovenant(); cov != nil {
-			out = append(out, CovenantEntry{Key: k, Offer: e.Offer, Terms: cov, Active: e.ActiveAmount, ReRested: e.reRested})
+		if offer.IsCovenant(e.Offer) {
+			out = append(out, CovenantEntry{Key: k, Offer: e.Offer, Terms: e.Offer.GetCovenant(),
+				Sim: e.Offer.GetSimplicityCovenant(), Active: e.ActiveAmount, ReRested: e.reRested})
 		}
 	}
 	return out
@@ -1098,7 +1100,7 @@ func (s *Store) SnapshotCovenants() []CovenantEntry {
 func (s *Store) HoldCovenantGhost(k Key, reason string) error {
 	s.mu.Lock()
 	e, ok := s.entries[k]
-	if !ok || e.Offer.GetCovenant() == nil {
+	if !ok || !offer.IsCovenant(e.Offer) {
 		s.mu.Unlock()
 		return nil
 	}
@@ -1128,7 +1130,7 @@ func (s *Store) HoldCovenantGhost(k Key, reason string) error {
 func (s *Store) ReconcileCovenantActive(k Key, active uint64) error {
 	s.mu.Lock()
 	e, ok := s.entries[k]
-	if !ok || e.Offer.GetCovenant() == nil {
+	if !ok || !offer.IsCovenant(e.Offer) {
 		s.mu.Unlock()
 		return nil
 	}
@@ -1173,7 +1175,7 @@ func (s *Store) RerestCovenantRemainder(k Key, txid string, vout uint32, size ui
 func (s *Store) HoldCovenantForSpend(k Key, spenderTxid string) error {
 	s.mu.Lock()
 	e, ok := s.entries[k]
-	if !ok || e.Offer.GetCovenant() == nil {
+	if !ok || !offer.IsCovenant(e.Offer) {
 		s.mu.Unlock()
 		return nil
 	}
@@ -1201,7 +1203,7 @@ func (s *Store) HoldCovenantForSpend(k Key, spenderTxid string) error {
 func (s *Store) RemoveCovenantFilled(k Key, settleTxid string) error {
 	s.mu.Lock()
 	e, ok := s.entries[k]
-	if !ok || e.Offer.GetCovenant() == nil {
+	if !ok || !offer.IsCovenant(e.Offer) {
 		s.mu.Unlock()
 		return nil
 	}

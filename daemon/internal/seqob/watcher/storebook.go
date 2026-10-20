@@ -18,7 +18,7 @@ func (b *storeBook) SnapshotCovenants() []CovEntry {
 	src := b.s.SnapshotCovenants()
 	out := make([]CovEntry, 0, len(src))
 	for _, c := range src {
-		out = append(out, CovEntry{Key: c.Key, Offer: c.Offer, Terms: c.Terms, Active: c.Active, ReRested: c.ReRested})
+		out = append(out, CovEntry{Key: c.Key, Offer: c.Offer, Terms: c.Terms, Sim: c.Sim, Active: c.Active, ReRested: c.ReRested})
 	}
 	return out
 }

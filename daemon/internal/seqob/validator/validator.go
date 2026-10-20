@@ -258,6 +258,47 @@ func (v *Validator) checkTerms(o *seqobv1.Offer) error {
 	if o.GetCovenant() != nil {
 		return checkCovenant(o)
 	}
+	if o.GetSimplicityCovenant() != nil {
+		return checkSimplicityCovenant(o)
+	}
+	return nil
+}
+
+// checkSimplicityCovenant is checkCovenant for an order under the Simplicity
+// template seqdex/order: the terms well formed and of the template this relay
+// pins (offer.SimOrderOf), tied to the price and the assets the offer
+// advertises, and an expiry set. Its fill compares the price on 128-bit
+// products, so no arithmetic bound applies; the chain probe then checks the
+// outpoint pays the program the terms make and holds exactly offer_amount.
+func checkSimplicityCovenant(o *seqobv1.Offer) error {
+	st := o.GetSimplicityCovenant()
+	if b, err := hex.DecodeString(st.GetCovenantTxid()); err != nil || len(b) != 32 {
+		return fmt.Errorf("covenant_txid must be 32-byte hex")
+	}
+	so, err := offer.SimOrderOf(st)
+	if err != nil {
+		return fmt.Errorf("simplicity covenant: %w", err)
+	}
+	if st.GetExpiryLocktime() == 0 {
+		return fmt.Errorf("simplicity covenant expiry_locktime must be set: an order its refund key can take back at any time is not a resting order")
+	}
+	if o.GetTradeDir() != seqobv1.TradeDir_TRADE_DIR_SELL {
+		return fmt.Errorf("covenant offers must be TRADE_DIR_SELL (asset A is the offered base)")
+	}
+	if so.MinLot > o.GetOfferAmount() {
+		return fmt.Errorf("covenant min_lot %d exceeds the locked amount %d", so.MinLot, o.GetOfferAmount())
+	}
+	lhs := new(big.Int).Mul(new(big.Int).SetUint64(so.RateNum), new(big.Int).SetUint64(o.GetOfferAmount()))
+	rhs := new(big.Int).Mul(new(big.Int).SetUint64(so.RateDen), new(big.Int).SetUint64(o.GetWantAmount()))
+	if lhs.Cmp(rhs) != 0 {
+		return fmt.Errorf("covenant rate %d/%d does not equal the offer's want/offer %d/%d", so.RateNum, so.RateDen, o.GetWantAmount(), o.GetOfferAmount())
+	}
+	if a, _ := internalToDisplay(st.GetAssetA()); a != strings.ToLower(o.GetOfferAsset()) {
+		return fmt.Errorf("covenant asset_a %s is not the offer_asset %s", a, o.GetOfferAsset())
+	}
+	if b, _ := internalToDisplay(st.GetAssetB()); b != strings.ToLower(o.GetWantAsset()) {
+		return fmt.Errorf("covenant asset_b %s is not the want_asset %s", b, o.GetWantAsset())
+	}
 	return nil
 }
 
@@ -374,7 +415,7 @@ func internalToDisplay(s string) (string, bool) {
 // blinded maker output there is no second blinded leg, and the public swap ratio
 // would leak the amount.
 func (v *Validator) checkConfidential(o *seqobv1.Offer) error {
-	if o.GetCrossChain() != nil || o.GetLightning() != nil || o.GetCovenant() != nil {
+	if o.GetCrossChain() != nil || o.GetLightning() != nil || offer.IsCovenant(o) {
 		return fmt.Errorf("confidential offer must use the same-chain co-sign rail (no covenant/cross-chain/lightning)")
 	}
 	sc := o.GetSameChain()

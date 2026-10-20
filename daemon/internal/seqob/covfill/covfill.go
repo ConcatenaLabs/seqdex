@@ -36,6 +36,13 @@
 //
 // For one order that is [credit, remainder or gap, receipt, changes, fee].
 //
+// A take may be a Simplicity order (Take.Sim, the template seqdex/order)
+// instead: its input carries [witness, program, cmr, control block], built
+// from the template's pinned programs, and a whole fill's 2k+1 may hold
+// anything, the taker's own receipt of asset A included, since that program
+// does not read it. Every rule above runs through covenant.Leaf, so the two
+// kinds of order fill side by side in one transaction.
+//
 // Trust model: identical to the settler's. Every maker-facing output is fixed by
 // the maker's own FILL leaf and re-checked by the script interpreter, so a wrong
 // assembly can only produce a tx the chain REJECTS — never a theft. The driver
@@ -79,6 +86,9 @@ type Take struct {
 	// Order is the covenant's terms (from the relay's CovenantTerms via
 	// bridge.OrderFromTerms). Asset ids/keys are INTERNAL byte order.
 	Order covenant.Order
+	// Sim, when set, is a Simplicity order (from the relay's
+	// SimplicityCovenantTerms via offer.SimOrderOf) and Order is ignored.
+	Sim *covenant.SimOrder
 	// Txid/Vout locate the funded covenant UTXO being filled.
 	Txid string
 	Vout uint32
@@ -106,6 +116,7 @@ type Params struct {
 	// Order, Txid, Vout, TakeAtoms and MaxPayB describe a single order, as one
 	// Take, when Takes is empty.
 	Order     covenant.Order
+	Sim       *covenant.SimOrder
 	Txid      string
 	Vout      uint32
 	TakeAtoms uint64
@@ -133,7 +144,15 @@ func (p Params) takes() []Take {
 	if len(p.Takes) > 0 {
 		return p.Takes
 	}
-	return []Take{{Order: p.Order, Txid: p.Txid, Vout: p.Vout, TakeAtoms: p.TakeAtoms, MaxPayB: p.MaxPayB}}
+	return []Take{{Order: p.Order, Sim: p.Sim, Txid: p.Txid, Vout: p.Vout, TakeAtoms: p.TakeAtoms, MaxPayB: p.MaxPayB}}
+}
+
+// leaf is the take's order, whichever covenant it rests under.
+func (t Take) leaf() covenant.Leaf {
+	if t.Sim != nil {
+		return *t.Sim
+	}
+	return t.Order
 }
 
 // Filled is what one take did.
@@ -212,16 +231,16 @@ func FillCovenant(p Params) (*Result, error) {
 	}
 	sold := map[string]bool{}
 	for _, t := range takes {
-		if t.Order.AssetA == t.Order.AssetB {
+		if t.leaf().Sells() == t.leaf().PaysIn() {
 			return nil, fmt.Errorf("degenerate covenant: sold asset A equals payment asset B")
 		}
-		sold[displayHex(t.Order.AssetA)] = true
+		sold[displayHex(t.leaf().Sells())] = true
 	}
 	if sold[feeDisplay] {
 		return nil, fmt.Errorf("fee asset must not be the sold asset A of a covenant taken (%s)", feeDisplay)
 	}
 	for _, t := range takes {
-		if b := displayHex(t.Order.AssetB); sold[b] {
+		if b := displayHex(t.leaf().PaysIn()); sold[b] {
 			return nil, fmt.Errorf("a take pays in %s, which another covenant taken here sells: the taker never funds a sold asset", b)
 		}
 	}
@@ -230,25 +249,27 @@ func FillCovenant(p Params) (*Result, error) {
 	var ps []planned
 	covs := map[string]bool{}
 	for k, t := range takes {
-		a := displayHex(t.Order.AssetA)
+		leaf := t.leaf()
+		a := displayHex(leaf.Sells())
 		locked, onchainSPK, err := verifyCovenantUTXO(p.Node, t.Txid, t.Vout, a)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := t.Order.VerifyAgainstSPK(onchainSPK, p.AllowMakerCancellable); err != nil {
+		if err := leaf.VerifyScript(onchainSPK, p.AllowMakerCancellable); err != nil {
 			return nil, fmt.Errorf("covenant %s:%d fails trustless verify: %w", t.Txid, t.Vout, err)
 		}
 		// --- size the fill (dust-shrink, then the covenant's own floors) --------
-		take := ShrinkTake(locked, t.TakeAtoms, t.Order.MinLot)
-		plan, err := t.Order.PlanFill(locked, take, uint32(k))
+		take := ShrinkTake(locked, t.TakeAtoms, leaf.Lot())
+		plan, err := leaf.PlanFill(locked, take, uint32(k))
 		if err != nil {
 			return nil, fmt.Errorf("fill plan of %s:%d: %w", t.Txid, t.Vout, err)
 		}
 		if t.MaxPayB > 0 && plan.RequiredB > t.MaxPayB {
-			return nil, fmt.Errorf("covenant rate %d/%d demands %d asset-B atoms for %d asset-A atoms, above the %d ceiling the taker priced from the offer", t.Order.RateNum, t.Order.RateDen, plan.RequiredB, plan.Filled, t.MaxPayB)
+			num, den := leaf.Rate()
+			return nil, fmt.Errorf("covenant rate %d/%d demands %d asset-B atoms for %d asset-A atoms, above the %d ceiling the taker priced from the offer", num, den, plan.RequiredB, plan.Filled, t.MaxPayB)
 		}
 		covs[fmt.Sprintf("%s:%d", t.Txid, t.Vout)] = true
-		ps = append(ps, planned{take: t, locked: locked, plan: plan, a: a, b: displayHex(t.Order.AssetB), credit: plan.RequiredB})
+		ps = append(ps, planned{take: t, locked: locked, plan: plan, a: a, b: displayHex(leaf.PaysIn()), credit: plan.RequiredB})
 	}
 
 	// --- select the taker's funding (credit assets + the fee asset) ----------
@@ -425,9 +446,10 @@ func fillWith(p Params, ps []planned, sel *funding, gapCoins []bool, dust uint64
 			continue
 		}
 		pick := -1
+		readsRest := q.take.leaf().WholeFillReadsRest()
 		rank := func(c cand) int {
 			switch {
-			case c.asset == q.a:
+			case c.asset == q.a && readsRest:
 				return -1
 			case c.kind == 1 && c.asset == q.b:
 				return 0
@@ -458,7 +480,7 @@ func fillWith(p Params, ps []planned, sel *funding, gapCoins []bool, dust uint64
 	// --- assemble, judge every order's leaf over it, sign, inject ------------
 	spec := covenant.FillTx{Gaps: gaps}
 	for _, q := range ps {
-		spec.Takes = append(spec.Takes, covenant.Take{Order: q.take.Order, Txid: q.take.Txid, Vout: q.take.Vout, Locked: q.locked, Filled: q.plan.Filled})
+		spec.Takes = append(spec.Takes, covenant.Take{Order: q.take.Order, Sim: q.take.Sim, Txid: q.take.Txid, Vout: q.take.Vout, Locked: q.locked, Filled: q.plan.Filled})
 		spec.Credits = append(spec.Credits, q.credit)
 	}
 	for _, u := range sel.inputs {
@@ -502,7 +524,7 @@ func fillWith(p Params, ps []planned, sel *funding, gapCoins []bool, dust uint64
 		ftx.Inputs[k].Witness = plans[k].Witness()
 	}
 	for k, q := range ps {
-		if _, err := q.take.Order.CheckFill(covenant.OutputsOf(ftx), uint32(k), q.locked); err != nil {
+		if _, err := q.take.leaf().Judge(covenant.OutputsOf(ftx), uint32(k), q.locked, plans[k].Partial); err != nil {
 			return nil, -1, fmt.Errorf("the signed transaction no longer satisfies covenant %d: %w", k, err)
 		}
 	}

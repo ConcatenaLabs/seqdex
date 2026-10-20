@@ -25,13 +25,23 @@ import (
 
 // Take is one covenant order taken in a transaction that may take others. Txid
 // (display hex) and Vout locate the order's output; Locked is what it holds of
-// asset A and Filled what this fill takes of it.
+// asset A and Filled what this fill takes of it. The order is Sim when set (a
+// Simplicity order), else Order (the tapscript one).
 type Take struct {
 	Order  Order
+	Sim    *SimOrder
 	Txid   string
 	Vout   uint32
 	Locked uint64
 	Filled uint64
+}
+
+// Leaf is the take's order, whichever covenant it rests under.
+func (t Take) Leaf() Leaf {
+	if t.Sim != nil {
+		return *t.Sim
+	}
+	return t.Order
 }
 
 // PlanFills plans takes spent together, take k at input k: its credit at
@@ -49,7 +59,7 @@ func PlanFills(takes []Take) ([]*FillPlan, error) {
 			return nil, fmt.Errorf("take %d: order %s is taken twice", k, op)
 		}
 		seen[op] = true
-		p, err := t.Order.PlanFill(t.Locked, t.Filled, uint32(k))
+		p, err := t.Leaf().PlanFill(t.Locked, t.Filled, uint32(k))
 		if err != nil {
 			return nil, fmt.Errorf("take %d: %w", k, err)
 		}
@@ -246,13 +256,14 @@ func BuildFillTx(f FillTx) (*transaction.Transaction, []*FillPlan, error) {
 		if credit < p.RequiredB {
 			return nil, nil, fmt.Errorf("take %d: credit %d below the ceiling price %d", k, credit, p.RequiredB)
 		}
-		makerSPK, err := makerCreditSPK(t.Order)
+		leaf := t.Leaf()
+		makerSPK, err := leaf.CreditScript()
 		if err != nil {
 			return nil, nil, fmt.Errorf("take %d: %w", k, err)
 		}
-		outs = append(outs, Explicit(t.Order.AssetB, credit, makerSPK))
+		outs = append(outs, Explicit(leaf.PaysIn(), credit, makerSPK))
 		if p.Partial {
-			outs = append(outs, Explicit(t.Order.AssetA, p.Remainder, p.OrderSPK))
+			outs = append(outs, Explicit(leaf.Sells(), p.Remainder, p.OrderSPK))
 			continue
 		}
 		var gap *Output
@@ -265,7 +276,7 @@ func BuildFillTx(f FillTx) (*transaction.Transaction, []*FillPlan, error) {
 		if !gap.AssetExplicit || !gap.ValueExplicit {
 			return nil, nil, fmt.Errorf("take %d: the gap at %d must be explicit", k, p.RemainderIndex)
 		}
-		if gap.Asset == t.Order.AssetA {
+		if leaf.WholeFillReadsRest() && gap.Asset == leaf.Sells() {
 			return nil, nil, fmt.Errorf("take %d: the gap at %d holds the asset the order sells, which the leaf reads as a remainder", k, p.RemainderIndex)
 		}
 		outs = append(outs, *gap)
@@ -292,8 +303,8 @@ func BuildFillTx(f FillTx) (*transaction.Transaction, []*FillPlan, error) {
 		tx.AddOutput(transaction.NewTxOutput(asset, v, o.Script))
 	}
 	for k, t := range f.Takes {
-		if _, err := t.Order.CheckFill(outs, uint32(k), t.Locked); err != nil {
-			return nil, nil, fmt.Errorf("take %d: the order's FILL leaf would refuse this transaction: %w", k, err)
+		if _, err := t.Leaf().Judge(outs, uint32(k), t.Locked, plans[k].Partial); err != nil {
+			return nil, nil, fmt.Errorf("take %d: the order's leaf would refuse this transaction: %w", k, err)
 		}
 	}
 	return tx, plans, nil

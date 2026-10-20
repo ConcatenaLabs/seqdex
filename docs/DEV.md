@@ -282,7 +282,7 @@ placement. The end-to-end proofs are the regtest scripts in `test/regtest/`
 (`feature_seqob_covenant_fill.py`, `feature_seqob_joint_covenant.py`,
 `feature_seqob_matcher_covenant.py`, `feature_seqob_watcher.py`,
 `feature_seqob_bridge.py`, `feature_seqob_multi_fill.py`,
-`feature_seqob_simplicity_order.py`); they drive the
+`feature_seqob_simplicity_order.py`, `feature_seqob_simplicity_book.py`); they drive the
 production Go builders through the CLIs:
 
 `-expiry` is the order's REFUND lock, `expiry_locktime`: a block height below
@@ -300,7 +300,9 @@ equal credits paid to it at once.
 ./bin/seqob-covenant fill   ...derive flags... -locked L -filled F -k K
 ./bin/seqob-covenant filltx < spec.json        # several orders, order k at input k
 ./bin/seqob-covenant check  ...derive flags... -tx HEX -k K -locked L
-# a Simplicity order (template seqdex/order): -maker is the payout scriptPubKey
+# a Simplicity order (template seqdex/order): -maker is the payout scriptPubKey.
+# Post it as an offer whose settlement is simplicity_covenant (offer.proto), with
+# template_hash from simderive; seqob-cli covfill fills it like any covenant offer.
 ./bin/seqob-covenant simderive  -a <A> -b <B> -num N -den D -minlot M -maker SPK -expiry E -refund X
 ./bin/seqob-covenant simwitness ...simderive flags... -path fill|whole|refund [-sig SIG]
 ./bin/seqob-covenant simcheck   ...simderive flags... -tx HEX -k K -locked L [-partial]

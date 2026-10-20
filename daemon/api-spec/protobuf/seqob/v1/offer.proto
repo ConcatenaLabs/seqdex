@@ -114,6 +114,7 @@ message Offer {
     CrossChainTerms cross_chain = 21;
     LightningTerms  lightning   = 22; // submarine, pure-LN and sub-asset rails (ln_direction)
     CovenantTerms   covenant    = 23; // funded, self-enforcing resting order (passive CLOB)
+    SimplicityCovenantTerms simplicity_covenant = 25; // the same, under the Simplicity template seqdex/order
   }
 
   // secp256k1 signature by maker_pubkey over the canonical serialization of all
@@ -186,6 +187,34 @@ message CovenantTerms {
   // merkle branch (sibling hashes) proving the FILL leaf under the output key.
   bytes  internal_key        = 12; // 32-byte x-only internal key (NUMS default)
   repeated bytes merkle_path = 13; // taproot merkle branch (32-byte sibling hashes)
+}
+
+// SimplicityCovenantTerms is a FUNDED, self-enforcing resting order under the
+// Simplicity template seqdex/order (sequentia-contracts, templates/seqdex_order):
+// one program for every order, these terms held as data in a leaf beside it,
+//
+//   P2TR(NUMS, TapBranch(TapLeaf_0xbe(program), H_TapData(terms)))
+//
+// A taker re-derives the output from the terms and its own pinned commitment
+// root (pkg/covenant SimOrder), with no compiler, and fills it alone: the
+// maker is paid at output 2k at least ceil(filled * rate_num / rate_den) of
+// asset_b, compared on 128-bit products, so any 64-bit amount and price fills;
+// a partial fill rests again at 2k+1 under the same script. The refund key
+// takes the coin back once the lock time reaches expiry_locktime. As for
+// CovenantTerms, the outpoint is chain state the relay's watcher re-points
+// after a partial fill, outside the signed bytes.
+message SimplicityCovenantTerms {
+  string covenant_txid   = 1;  // the funded output (display txid hex)
+  uint32 covenant_vout   = 2;
+  string asset_a         = 3;  // 32-byte internal-order asset id hex: the asset the order sells
+  string asset_b         = 4;  // 32-byte internal-order asset id hex: the asset a fill pays in
+  uint64 rate_num        = 5;  // required = ceil(filled * rate_num / rate_den), any 64-bit values
+  uint64 rate_den        = 6;
+  uint64 min_lot         = 7;  // floors every fill and every remainder
+  bytes  maker_script    = 8;  // the scriptPubKey every fill pays (the order commits its SHA256): a plain key's script, never an Arca leaf or board script
+  uint32 expiry_locktime = 9;  // refund lock: a height below 500,000,000, a median time past (unix seconds) from it
+  bytes  refund_key      = 10; // 32-byte x-only key that takes the coin back after expiry_locktime
+  string template_hash   = 11; // the template the terms are for (hex); a taker fills only a template it pins
 }
 
 // A signed cancel. nonce defeats replay against a re-posted same offer_id.

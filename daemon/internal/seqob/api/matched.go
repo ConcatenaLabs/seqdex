@@ -6,6 +6,7 @@ import (
 
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/matcher"
+	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offer"
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offerstore"
 )
 
@@ -73,7 +74,7 @@ func (s *Server) applyDisposition(o *seqobv1.Offer, res matcher.CrossResult) boo
 		_ = s.store.RetireIncoming(k, seqobv1.OfferStatus_OFFER_STATUS_CANCELLED)
 		return true
 	case matcher.DispCancelRemainder:
-		if res.Remainder > 0 && (o.GetCovenant() == nil || res.Filled == 0) {
+		if res.Remainder > 0 && (!offer.IsCovenant(o) || res.Filled == 0) {
 			_ = s.store.RetireIncoming(k, seqobv1.OfferStatus_OFFER_STATUS_CANCELLED)
 			return true
 		}

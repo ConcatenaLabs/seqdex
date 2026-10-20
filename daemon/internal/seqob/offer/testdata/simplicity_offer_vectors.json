@@ -1,0 +1,105 @@
+{
+  "about": "A Simplicity covenant offer (SimplicityCovenantTerms, the template seqdex/order) signed at its funding outpoint (funded), served by the relay after a partial fill rested it again at (fill txid, 3) (moved), and with a signed term changed (tampered). The outpoint is outside the signed bytes: funded and moved verify, in Go (seqdex internal/seqob/offer) and in the web wallet's seqob.js, with the same canonical bytes and the same RFC 6979 signature by maker_priv, a test key; tampered verifies in neither.",
+  "maker_priv": "0000000000000000000000000000000000000000000000000000000000000001",
+  "funded": {
+    "offer_id": "simplicity-order-vector-1",
+    "schema_version": 1,
+    "pair": {
+      "base_asset": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+      "quote_asset": "2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e"
+    },
+    "trade_dir": "TRADE_DIR_SELL",
+    "base_amount": "20000000000000",
+    "offer_amount": "20000000000000",
+    "offer_asset": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+    "want_amount": "18000000000014",
+    "want_asset": "2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e",
+    "allow_partial": true,
+    "min_fill": "1000000",
+    "created_at_unix": "1792000000",
+    "expires_at_unix": "1792600000",
+    "maker_pubkey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+    "min_anchor_depth": 2,
+    "simplicity_covenant": {
+      "covenant_txid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "asset_a": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+      "asset_b": "2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e",
+      "rate_num": "9000000000007",
+      "rate_den": "10000000000000",
+      "min_lot": "1000000",
+      "maker_script": "ABQxMTExMTExMTExMTExMTExMTExMQ==",
+      "expiry_locktime": 1792611631,
+      "refund_key": "mKEzWHu354ztt93P8L6M5koFKXcFqJIJiDGkBw+d0co=",
+      "template_hash": "322c0e596e9552a4c20f6a7f9ed518013a50076ec8b2b9005fd032077ebcd157"
+    },
+    "maker_sig": "MEUCIQDB/jbfLrwYyFzy4aFFOYYGCQ/q4KENzBLj5fqAUZHUzwIgdiKJz/VHl+eshgYPMpjhhvZzSwm3aJw0BIGIbM6Qvvk="
+  },
+  "moved": {
+    "offer_id": "simplicity-order-vector-1",
+    "schema_version": 1,
+    "pair": {
+      "base_asset": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+      "quote_asset": "2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e"
+    },
+    "trade_dir": "TRADE_DIR_SELL",
+    "base_amount": "20000000000000",
+    "offer_amount": "20000000000000",
+    "offer_asset": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+    "want_amount": "18000000000014",
+    "want_asset": "2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e",
+    "allow_partial": true,
+    "min_fill": "1000000",
+    "created_at_unix": "1792000000",
+    "expires_at_unix": "1792600000",
+    "maker_pubkey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+    "min_anchor_depth": 2,
+    "simplicity_covenant": {
+      "covenant_txid": "c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7",
+      "covenant_vout": 3,
+      "asset_a": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+      "asset_b": "2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e",
+      "rate_num": "9000000000007",
+      "rate_den": "10000000000000",
+      "min_lot": "1000000",
+      "maker_script": "ABQxMTExMTExMTExMTExMTExMTExMQ==",
+      "expiry_locktime": 1792611631,
+      "refund_key": "mKEzWHu354ztt93P8L6M5koFKXcFqJIJiDGkBw+d0co=",
+      "template_hash": "322c0e596e9552a4c20f6a7f9ed518013a50076ec8b2b9005fd032077ebcd157"
+    },
+    "maker_sig": "MEUCIQDB/jbfLrwYyFzy4aFFOYYGCQ/q4KENzBLj5fqAUZHUzwIgdiKJz/VHl+eshgYPMpjhhvZzSwm3aJw0BIGIbM6Qvvk="
+  },
+  "tampered": {
+    "offer_id": "simplicity-order-vector-1",
+    "schema_version": 1,
+    "pair": {
+      "base_asset": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+      "quote_asset": "2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e"
+    },
+    "trade_dir": "TRADE_DIR_SELL",
+    "base_amount": "20000000000000",
+    "offer_amount": "20000000000000",
+    "offer_asset": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+    "want_amount": "18000000000014",
+    "want_asset": "2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e",
+    "allow_partial": true,
+    "min_fill": "1000000",
+    "created_at_unix": "1792000000",
+    "expires_at_unix": "1792600000",
+    "maker_pubkey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+    "min_anchor_depth": 2,
+    "simplicity_covenant": {
+      "covenant_txid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "asset_a": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+      "asset_b": "2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e",
+      "rate_num": "9000000000006",
+      "rate_den": "10000000000000",
+      "min_lot": "1000000",
+      "maker_script": "ABQxMTExMTExMTExMTExMTExMTExMQ==",
+      "expiry_locktime": 1792611631,
+      "refund_key": "mKEzWHu354ztt93P8L6M5koFKXcFqJIJiDGkBw+d0co=",
+      "template_hash": "322c0e596e9552a4c20f6a7f9ed518013a50076ec8b2b9005fd032077ebcd157"
+    },
+    "maker_sig": "MEUCIQDB/jbfLrwYyFzy4aFFOYYGCQ/q4KENzBLj5fqAUZHUzwIgdiKJz/VHl+eshgYPMpjhhvZzSwm3aJw0BIGIbM6Qvvk="
+  },
+  "canonical_hex": "0a1973696d706c69636974792d6f726465722d766563746f722d3110011a84010a4031663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166124032653265326532653265326532653265326532653265326532653265326532653265326532653265326532653265326532653265326532653265326532653265200128808095e789c60430808095e789c6043a4031663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166408ec0ec9cef8b044a4032653265326532653265326532653265326532653265326532653265326532653265326532653265326532653265326532653265326532653265326532653265500158c0843d608080bfd60668c0cfe3d6067242303237396265363637656639646362626163353561303632393563653837306230373032396266636462326463653238643935396632383135623136663831373938800102ca019a021a40316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631662240326532653265326532653265326532653265326532653265326532653265326532653265326532653265326532653265326532653265326532653265326532652887a0b6cef785023080c0caf384a30238c0843d42160014313131313131313131313131313131313131313148afaae4d606522098a133587bb7e78cedb7ddcff0be8ce64a05297705a892098831a4070f9dd1ca5a4033323263306535393665393535326134633230663661376639656435313830313361353030373665633862326239303035666430333230373765626364313537"
+}

@@ -13,14 +13,17 @@
 >   `seqob-relaycli`.
 > - Section 3: there is no `seqdex/v1/xchain.proto`.
 > - Section 4.1: the `settlement` oneof has a fourth variant, `CovenantTerms
->   = 23` (a funded, self-enforcing resting order), and `LightningTerms` now
->   covers submarine, pure-LN and sub-asset directions.
+>   = 23` (a funded, self-enforcing resting order), and a fifth,
+>   `SimplicityCovenantTerms = 25` (the same under the Simplicity template
+>   seqdex/order), and `LightningTerms` now covers submarine, pure-LN and
+>   sub-asset directions.
 > - Section 7: tdexd serves same-chain trades only; the `XchainService`
 >   bullet describes deleted code.
 > - Section 9: pure-Lightning swaps, the continuous matcher and the covenant
->   builder are on `main`. The shipped covenant is a tapscript introspection
->   leaf (`daemon/pkg/covenant`), not Simplicity; the Simplicity design doc
->   describes the design space.
+>   builder are on `main`. The book's covenant is a tapscript introspection
+>   leaf (`daemon/pkg/covenant`); a Simplicity order (`SimOrder`) rests
+>   beside it under its own member, as the README says; the Simplicity design
+>   doc describes the design space.
 >
 > The SeqOB protocol (sections 4.2 to 4.6), the cross-chain safety model
 > (5), the anchor-depth dial (6) and the fee model (8) are still as built.
