@@ -415,3 +415,19 @@ func GenesisHash(v ChainView) (string, error) {
 	}
 	return h, nil
 }
+
+// TipMedianTime is the tip's median time past (unix seconds), what a
+// median-time REFUND lock is judged by.
+func (c *rpcChain) TipMedianTime() (int64, error) {
+	var hash string
+	if err := c.call(&hash, "getbestblockhash"); err != nil {
+		return 0, err
+	}
+	var hdr struct {
+		MedianTime int64 `json:"mediantime"`
+	}
+	if err := c.call(&hdr, "getblockheader", hash, true); err != nil {
+		return 0, err
+	}
+	return hdr.MedianTime, nil
+}

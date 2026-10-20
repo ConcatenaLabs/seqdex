@@ -65,3 +65,27 @@ func TestCovenantTermsMustMatchOffer(t *testing.T) {
 		ct.AssetA, ct.AssetB = bInternal, aInternal
 	}, "is not the offer_asset")
 }
+
+// An order's REFUND lock may be a block height or a median time (from
+// 500,000,000): the same leaf takes both, and so does the relay.
+func TestCovenantRefundLockIsAHeightOrAMedianTime(t *testing.T) {
+	v := New(cfg(), nil)
+	for _, lock := range []uint32{400, 499_999_999, 500_000_000, 1_792_611_631} {
+		o := signed(t, key(t), func(o *seqobv1.Offer) {
+			ct := covTerms(45, 100, 1)
+			ct.Covenant.ExpiryLocktime = lock
+			o.Settlement = ct
+		})
+		if err := v.ValidateOffer(context.Background(), o, ""); err != nil {
+			t.Fatalf("expiry_locktime %d refused: %v", lock, err)
+		}
+	}
+	o := signed(t, key(t), func(o *seqobv1.Offer) {
+		ct := covTerms(45, 100, 1)
+		ct.Covenant.ExpiryLocktime = 0
+		o.Settlement = ct
+	})
+	if err := v.ValidateOffer(context.Background(), o, ""); err == nil || !strings.Contains(err.Error(), "expiry_locktime must be set") {
+		t.Fatalf("an order with no refund lock: %v", err)
+	}
+}

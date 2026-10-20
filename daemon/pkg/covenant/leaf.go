@@ -13,7 +13,8 @@
 //     ceil(filled*num/den)) and, for a partial fill, re-pays the remainder of
 //     asset A to the SAME covenant scriptPubKey at output 2k+1 (>= min_lot).
 //   - REFUND is <expiry> CLTV DROP <P_maker> CHECKSIG: the maker reclaims after
-//     the absolute-locktime expiry.
+//     the absolute-locktime expiry, a block height or (from 500,000,000) a
+//     median time past.
 //
 // Every order parameter (asset ids, rate, maker payout program, min_lot) is a
 // compile-time constant baked into the FILL leaf, so it is committed inside the
@@ -113,7 +114,7 @@ func (s *scriptBuilder) push(d []byte) {
 
 // pushNum pushes a signed integer as CScript does: OP_0/OP_1..OP_16 for small
 // values, else a minimally-encoded (little-endian, sign-in-top-bit) push. Used
-// for the REFUND leaf's absolute expiry height.
+// for the REFUND leaf's absolute expiry (a height, or a median time).
 func (s *scriptBuilder) pushNum(n int64) {
 	if n == 0 {
 		s.op(op0)
@@ -252,7 +253,10 @@ func BuildFillLeaf(assetA, assetB [32]byte, rateNum, rateDen, minLot uint64, mak
 }
 
 // BuildRefundLeaf returns the REFUND tapscript: absolute-CLTV reclaim by the
-// maker after expiry. makerX is the maker's 32-byte x-only pubkey.
+// maker after expiry, a block height below LocktimeThreshold or a median time
+// past from it (CLTV compares the spend's nLockTime, which the maker sets to
+// expiryLocktime, against the same kind). makerX is the maker's 32-byte x-only
+// pubkey.
 func BuildRefundLeaf(expiryLocktime int64, makerX [32]byte) ([]byte, error) {
 	if expiryLocktime < 0 {
 		return nil, fmt.Errorf("expiryLocktime must be >= 0")

@@ -284,6 +284,16 @@ placement. The end-to-end proofs are the regtest scripts in `test/regtest/`
 `feature_seqob_bridge.py`, `feature_seqob_multi_fill.py`); they drive the
 production Go builders through the CLIs:
 
+`-expiry` is the order's REFUND lock, `expiry_locktime`: a block height below
+500,000,000, or a median time past (unix seconds) from it, which the same leaf
+takes unchanged; the relay, the settler and the web wallet read both. Prefer a
+median time: a height lock opens later than planned when an anchor rollback
+disconnects blocks, and an Arca operator refuses orders whose refund opens
+within six hours, counting a height at 60 seconds a block. `-prog` is the
+maker's credit program and must be a plain key, never an Arca leaf or board
+script: one maker-and-operator signature pair over such a script spends two
+equal credits paid to it at once.
+
 ```sh
 ./bin/seqob-covenant derive -a <A> -b <B> -num N -den D -minlot M -prog P -expiry E -makerx X
 ./bin/seqob-covenant fill   ...derive flags... -locked L -filled F -k K

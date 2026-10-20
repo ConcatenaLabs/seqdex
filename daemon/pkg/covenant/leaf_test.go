@@ -2,6 +2,7 @@ package covenant
 
 import (
 	"encoding/hex"
+	"strings"
 	"testing"
 )
 
@@ -119,5 +120,47 @@ func TestCeilPrice(t *testing.T) {
 	}
 	if CeilPrice(10, 1, 3) != 4 {
 		t.Fatal("ceil price round-up wrong")
+	}
+}
+
+// A median-time REFUND lock is pushed as CLTV's number, as a height is: 1792611631
+// (0x6ad9152f) is the 4-byte little-endian push 2f15d96a.
+func TestRefundLeafTakesAMedianTime(t *testing.T) {
+	var mx [32]byte
+	for i := range mx {
+		mx[i] = 0x22
+	}
+	leaf, err := BuildRefundLeaf(1792611631, mx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "042f15d96ab17520" + strings.Repeat("22", 32) + "ac"
+	if got := hex.EncodeToString(leaf); got != want {
+		t.Fatalf("refund leaf\n got %s\nwant %s", got, want)
+	}
+}
+
+func TestRefundOpen(t *testing.T) {
+	h := Order{ExpiryLocktime: 400}
+	for _, c := range []struct {
+		tip        int64
+		open, know bool
+	}{{399, false, true}, {400, true, true}} {
+		if open, known := h.RefundOpen(c.tip, 0); open != c.open || known != c.know {
+			t.Fatalf("height lock at tip %d: open %v known %v", c.tip, open, known)
+		}
+	}
+	tl := Order{ExpiryLocktime: 1792611631}
+	if !tl.RefundIsTime() || h.RefundIsTime() {
+		t.Fatal("lock kinds")
+	}
+	if open, known := tl.RefundOpen(9_000_000, 0); open || known {
+		t.Fatal("a median-time lock judged without a median time")
+	}
+	if open, _ := tl.RefundOpen(1, 1792611631); open {
+		t.Fatal("a median time equal to the lock has not passed it (BIP 113)")
+	}
+	if open, _ := tl.RefundOpen(1, 1792611632); !open {
+		t.Fatal("a median time past the lock opens it")
 	}
 }

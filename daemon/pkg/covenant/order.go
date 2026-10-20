@@ -15,13 +15,36 @@ type Order struct {
 	AssetB    [32]byte
 	RateNum   uint64
 	RateDen   uint64
-	MakerProg []byte // 32-byte v1 witness program credited on a fill
+	MakerProg []byte // 32-byte v1 witness program credited on a fill: a plain key, never an Arca leaf or board script
 	MakerVer  int
 	MinLot    uint64
 
-	ExpiryLocktime int64
+	ExpiryLocktime int64    // REFUND lock: a height below LocktimeThreshold, a median time from it
 	MakerX         [32]byte // maker x-only key authorizing the REFUND leaf
 	InternalKey    [32]byte // taproot internal key (NUMS default => no key-path spend)
+}
+
+// LocktimeThreshold splits an absolute lock as CLTV reads it: below it a block
+// height, from it a median time past in unix seconds. An order's
+// ExpiryLocktime may be either; the same REFUND leaf takes both.
+const LocktimeThreshold = 500_000_000
+
+// RefundIsTime reports whether the order's REFUND lock is a median time.
+func (o Order) RefundIsTime() bool { return o.ExpiryLocktime >= LocktimeThreshold }
+
+// RefundOpen reports whether the order's maker can refund it now, at a tip of
+// height tipHeight whose median time past is tipMTP: a height lock once the tip
+// has reached it (the refund goes in a later block), a median-time lock once
+// the tip's median time has passed it (BIP 113). known is false for a
+// median-time lock when tipMTP is 0 (not read).
+func (o Order) RefundOpen(tipHeight, tipMTP int64) (open, known bool) {
+	if o.RefundIsTime() {
+		if tipMTP <= 0 {
+			return false, false
+		}
+		return tipMTP > o.ExpiryLocktime, true
+	}
+	return tipHeight >= o.ExpiryLocktime, true
 }
 
 // Taptree is the derived taproot commitment for an Order.
