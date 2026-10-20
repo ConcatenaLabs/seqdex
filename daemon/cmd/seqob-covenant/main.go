@@ -41,7 +41,6 @@ import (
 	"os"
 
 	"github.com/aejkcs50/seqdex/daemon/pkg/covenant"
-	"github.com/vulpemventures/go-elements/transaction"
 )
 
 func die(format string, a ...interface{}) {
@@ -189,11 +188,17 @@ func main() {
 		k := fs.Uint("k", 0, "the order's input index")
 		fs.Parse(os.Args[2:])
 		o := get()
-		tx, err := transaction.NewTxFromHex(*txHex)
+		raw, err := hex.DecodeString(*txHex)
 		if err != nil {
 			die("-tx: %v", err)
 		}
-		c, err := o.CheckFill(covenant.OutputsOf(tx), uint32(*k), *locked)
+		// Read with covenant.ReadOutputs, not go-elements, which cannot read a
+		// Sequentia issuance (an Arca round issues its batch token).
+		outs, err := covenant.ReadOutputs(raw)
+		if err != nil {
+			die("-tx: %v", err)
+		}
+		c, err := o.CheckFill(outs, uint32(*k), *locked)
 		if err != nil {
 			emit(map[string]interface{}{"ok": false, "error": err.Error()})
 			return
