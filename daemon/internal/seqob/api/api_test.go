@@ -2,9 +2,10 @@ package api
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -858,5 +859,45 @@ func TestRESTOrderOptionsDisposition(t *testing.T) {
 	}
 	if _, ok := store.Get(offerstore.Key{MakerPubkey: st3.GetMakerPubkey(), OfferID: "po"}); !ok {
 		t.Fatal("POST_ONLY order that did not take must rest in the book")
+	}
+}
+
+// The covenant fill records are served per pair, as the watcher left them:
+// the taker of an Arca round named as the operator's round, no taker output.
+func TestFillsServesTheCovenantFillRecords(t *testing.T) {
+	ts, store := newServer(t)
+	defer ts.Close()
+	pair := &seqobv1.AssetPair{BaseAsset: "aa", QuoteAsset: "bb"}
+	store.RecordCovenantFill(offerstore.CovenantFill{
+		Order: offerstore.Key{MakerPubkey: "mk", OfferID: "o1"}, Pair: pair, Txid: "round1", Input: 1, Spent: "f:0",
+		Locked: 100, Filled: 40, Remainder: 60,
+		Credit: offerstore.FillOutput{Vout: 2, Asset: "bb", Value: 80, Script: "5120"},
+		Rest:   &offerstore.FillOutput{Vout: 3, Asset: "aa", Value: 60, Script: "5120"},
+		Taker:  offerstore.FillTaker{Via: offerstore.TakerArcaRound, Operator: "0p", RoundTxid: "round1", BatchVouts: []uint32{4}},
+		State:  offerstore.FillConfirmed, AnchorDepth: 1, RequiredDepth: 2,
+	}, nil)
+	resp, err := http.Get(ts.URL + "/v1/market/aa/bb/fills")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got struct {
+		Fills []map[string]interface{} `json:"fills"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Fills) != 1 {
+		t.Fatalf("fills: %+v", got)
+	}
+	f := got.Fills[0]
+	if f["offer_id"] != "o1" || f["txid"] != "round1" || f["input"].(float64) != 1 || f["state"] != "confirmed" {
+		t.Fatalf("record: %+v", f)
+	}
+	if c := f["credit"].(map[string]interface{}); c["vout"].(float64) != 2 {
+		t.Fatalf("credit: %+v", c)
+	}
+	if tk := f["taker"].(map[string]interface{}); tk["via"] != "arca_round" || tk["operator"] != "0p" {
+		t.Fatalf("taker: %+v", tk)
 	}
 }

@@ -47,8 +47,9 @@ type Entry struct {
 }
 
 // Trade is one recorded cross, captured at on-chain SETTLEMENT: the chain watcher records a
-// covenant fill on confirmation, and the interactive-lift SettleAck records its fill. (The matcher
-// no longer records at match.) Feeds last_price, the trades feed, and candles. Price is
+// covenant fill with its fill record (RecordCovenantFill) once it is in a block, and retracts it
+// when the fill is undone; the interactive-lift SettleAck records its fill. (The matcher no longer
+// records at match.) Feeds last_price, the trades feed, and candles. Price is
 // quote-per-base, the same convention as displayPrice / best_bid|ask.
 type Trade struct {
 	TS    time.Time
@@ -129,9 +130,10 @@ type Store struct {
 	settledNonce   map[Key]uint64 // highest settled-trade nonce seen per key (replay defense; offer_id is reused across -requote)
 	subBuf         int
 	now            func() time.Time
-	trades         map[string][]Trade // pairKey -> recent trades ring (newest last), lazy
-	tradeLog       *os.File           // B1: append-only JSONL sink so trade history survives a relay restart (nil = disabled)
-	interactiveCap uint64             // P3.10: per-maker soft cap on committed capital per offer_asset (0 = disabled). An interactive offer that pushes the maker's cumulative offer_amount in an asset past this is demoted.
+	trades         map[string][]Trade         // pairKey -> recent trades ring (newest last), lazy
+	fills          map[string][]*CovenantFill // pairKey -> recent covenant fill records (newest last), lazy
+	tradeLog       *os.File                   // B1: append-only JSONL sink so trade history survives a relay restart (nil = disabled)
+	interactiveCap uint64                     // P3.10: per-maker soft cap on committed capital per offer_asset (0 = disabled). An interactive offer that pushes the maker's cumulative offer_amount in an asset past this is demoted.
 }
 
 // RecordTrade appends one executed cross for the resting offer's pair at its execution
@@ -1068,6 +1070,7 @@ func (s *Store) RemoveByMaker(makerPubkey string) int {
 // watcher only reads it.
 type CovenantEntry struct {
 	Key      Key
+	Offer    *seqobv1.Offer
 	Terms    *seqobv1.CovenantTerms
 	Active   uint64
 	ReRested bool // F3: the current outpoint is a remainder from a prior partial fill, not the original funding
@@ -1080,7 +1083,7 @@ func (s *Store) SnapshotCovenants() []CovenantEntry {
 	out := make([]CovenantEntry, 0)
 	for k, e := range s.entries {
 		if cov := e.Offer.GetCovenant(); cov != nil {
-			out = append(out, CovenantEntry{Key: k, Terms: cov, Active: e.ActiveAmount, ReRested: e.reRested})
+			out = append(out, CovenantEntry{Key: k, Offer: e.Offer, Terms: cov, Active: e.ActiveAmount, ReRested: e.reRested})
 		}
 	}
 	return out
@@ -1156,52 +1159,10 @@ func (s *Store) ReconcileCovenantActive(k Key, active uint64) error {
 // the rest of the order stays fillable. The covenant PROGRAM is unchanged (same
 // scriptPubKey), so the maker's signed terms still describe it; only the
 // chain-observable outpoint moves. The stored Offer is cloned before mutation so
-// concurrent matcher reads of the old pointer stay consistent.
+// concurrent matcher reads of the old pointer stay consistent. The trade the
+// fill made is recorded with its fill record (RecordCovenantFill), not here.
 func (s *Store) RerestCovenantRemainder(k Key, txid string, vout uint32, size uint64) error {
-	s.mu.Lock()
-	e, ok := s.entries[k]
-	if !ok || e.Offer.GetCovenant() == nil {
-		s.mu.Unlock()
-		return nil
-	}
-	// Clone + swap so the previously-shared *Offer pointer is never mutated.
-	no := proto.Clone(e.Offer).(*seqobv1.Offer)
-	no.GetCovenant().CovenantTxid = txid
-	no.GetCovenant().CovenantVout = vout
-	e.Offer = no
-	e.reRested = true // F3: mark that this order's funding is now a remainder, not its original outpoint
-	if size > no.GetBaseAmount() {
-		size = no.GetBaseAmount()
-	}
-	// B1: consumed portion = size before this re-rest (active now, or the size held aside when a mempool
-	// spend zeroed active) minus the re-rested remainder. That portion is a trade.
-	prevActive := e.ActiveAmount
-	if prevActive == 0 {
-		prevActive = e.heldFill
-	}
-	var filled uint64
-	if prevActive > size {
-		filled = prevActive - size
-	}
-	e.heldFill = 0
-	e.ActiveAmount = size
-	e.SettleTxid = ""
-	if size >= no.GetBaseAmount() {
-		e.Status = seqobv1.OfferStatus_OFFER_STATUS_OPEN
-	} else {
-		e.Status = seqobv1.OfferStatus_OFFER_STATUS_PARTIAL
-	}
-	pair := no.GetPair()
-	conf := no.GetConfidential()
-	st := e.orderStatus(k)
-	s.mu.Unlock()
-	if filled > 0 {
-		s.RecordTrade(no, filled) // re-locks internally; safe after Unlock
-	}
-	// Emit created (subscribers re-learn the new outpoint) then status.
-	s.broadcast(Event{Type: EventCreated, Pair: pair, Confidential: conf, Offer: no})
-	s.broadcast(Event{Type: EventStatus, Pair: pair, Confidential: conf, Status: st})
-	return nil
+	return s.RepointCovenant(k, txid, vout, size, true)
 }
 
 // HoldCovenantForSpend hides a covenant order from matching while its spend is
@@ -1234,7 +1195,9 @@ func (s *Store) HoldCovenantForSpend(k Key, spenderTxid string) error {
 }
 
 // RemoveCovenantFilled removes a fully-filled covenant order, recording the
-// settling txid and emitting FILLED. No-op for a non-covenant or missing entry.
+// settling txid and emitting FILLED. The watcher calls it once the fill is
+// final; the trade the fill made is recorded with its fill record
+// (RecordCovenantFill). No-op for a non-covenant or missing entry.
 func (s *Store) RemoveCovenantFilled(k Key, settleTxid string) error {
 	s.mu.Lock()
 	e, ok := s.entries[k]
@@ -1244,20 +1207,12 @@ func (s *Store) RemoveCovenantFilled(k Key, settleTxid string) error {
 	}
 	e.Status = seqobv1.OfferStatus_OFFER_STATUS_FILLED
 	e.SettleTxid = settleTxid
-	// B1: how much this settlement filled — active now, or the size held aside when a mempool spend
-	// zeroed active earlier (HoldCovenantForSpend). A covenant lift IS a trade; record it below.
-	filled := e.ActiveAmount
-	if filled == 0 {
-		filled = e.heldFill
-	}
-	filledOffer := e.Offer
 	e.ActiveAmount = 0
 	pair := e.Offer.GetPair()
 	conf := e.Offer.GetConfidential()
 	st := e.orderStatus(k)
 	s.remove(k)
 	s.mu.Unlock()
-	s.RecordTrade(filledOffer, filled) // re-locks internally; safe after Unlock
 	s.broadcast(Event{Type: EventStatus, Pair: pair, Confidential: conf, Status: st})
 	s.broadcast(Event{Type: EventRemoved, Pair: pair, Confidential: conf, Ref: &seqobv1.OfferRef{OfferId: k.OfferID, MakerPubkey: k.MakerPubkey}})
 	return nil

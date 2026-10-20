@@ -630,11 +630,11 @@ func TestCovenantReconcile(t *testing.T) {
 	}
 }
 
-// The watcher's covenant record path records a DELTA off the order's LIVE size on each confirmed fill,
-// so the recorded trades sum to the base amount with the correct per-fill sizes — the heart of the
-// on-confirm redesign (matcher no longer records at match). Drives mempool-hold -> partial re-rest
-// (records the consumed 30) -> mempool-hold -> full fill (records the remaining 60).
-func TestCovenantReconcileRecordsDeltaTrades(t *testing.T) {
+// A covenant fill's trade is recorded with its fill record, at the size the chain shows (locked less
+// the rest), with the fill's txid; re-pointing or removing the order records none; undoing the fill
+// retracts its trade, so the feed and the candles follow the chain. Drives: a partial fill of 30
+// (rests again with 60), a full fill of the 60, then the full fill undone.
+func TestCovenantFillRecordsCarryTheTrades(t *testing.T) {
 	s := New(nil)
 	k := key(t)
 	o := mkCovOffer(t, k, "cov1", "aabb", 0, 90)
@@ -644,37 +644,80 @@ func TestCovenantReconcileRecordsDeltaTrades(t *testing.T) {
 	kk := Key{MakerPubkey: o.GetMakerPubkey(), OfferID: "cov1"}
 	pair := o.GetPair()
 
-	// Partial fill of 30: the mempool hold captures the live size (90), then the confirmed re-rest to a
-	// 60 remainder records exactly the consumed 30 (90 - 60), NOT 0 and NOT the full 90.
-	if err := s.HoldCovenantForSpend(kk, "spend1"); err != nil {
+	f1 := CovenantFill{Order: kk, Pair: pair, Txid: "fill1", Input: 1, Spent: "aabb:0", Locked: 90, Filled: 30, Remainder: 60,
+		Credit: FillOutput{Vout: 2, Value: 10}, Rest: &FillOutput{Vout: 3, Value: 60}, State: FillConfirmed}
+	s.RecordCovenantFill(f1, o)
+	if err := s.RerestCovenantRemainder(kk, "fill1", 3, 60); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RerestCovenantRemainder(kk, "rem1", 1, 60); err != nil {
-		t.Fatal(err)
+	if trades := s.TradesFor(pair, 0); len(trades) != 1 || trades[0].Size != 30 || trades[0].Txid != "fill1" {
+		t.Fatalf("after partial: want exactly 1 trade of 30 by fill1, got %+v", trades)
 	}
-	if trades := s.TradesFor(pair, 0); len(trades) != 1 || trades[0].Size != 30 {
-		t.Fatalf("after partial: want exactly 1 trade of 30, got %+v", trades)
+	// The same record again (a later pass) is an update, not a second trade.
+	f1.State = FillFinal
+	s.RecordCovenantFill(f1, o)
+	if trades := s.TradesFor(pair, 0); len(trades) != 1 {
+		t.Fatalf("a repeated record made another trade: %+v", trades)
 	}
 
-	// Full fill of the 60 remainder records exactly 60. Total recorded == base (90), no loss, no double.
-	if err := s.HoldCovenantForSpend(kk, "spend2"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.RemoveCovenantFilled(kk, "fill2"); err != nil {
+	f2 := CovenantFill{Order: kk, Pair: pair, Txid: "fill2", Input: 0, Spent: "fill1:3", Locked: 60, Filled: 60,
+		Credit: FillOutput{Vout: 0, Value: 20}, State: FillConfirmed}
+	s.RecordCovenantFill(f2, o)
+	if err := s.HoldCovenantForSpend(kk, "fill2"); err != nil {
 		t.Fatal(err)
 	}
 	trades := s.TradesFor(pair, 0)
-	if len(trades) != 2 {
-		t.Fatalf("after full fill: want 2 recorded trades, got %d", len(trades))
-	}
-	var sum uint64
-	sizes := map[uint64]bool{}
-	for _, tr := range trades {
-		sum += tr.Size
-		sizes[tr.Size] = true
-	}
-	if sum != 90 || !sizes[30] || !sizes[60] {
+	if len(trades) != 2 || trades[0].Size+trades[1].Size != 90 {
 		t.Fatalf("recorded trades must be {30, 60} summing to base 90, got %+v", trades)
+	}
+	// The full fill is undone: its trade is retracted, the partial fill's stays.
+	f2.State, f2.Reason = FillUndone, "its block left the active chain"
+	if !s.UpdateCovenantFill(f2) {
+		t.Fatal("no live record to undo")
+	}
+	if trades := s.TradesFor(pair, 0); len(trades) != 1 || trades[0].Txid != "fill1" {
+		t.Fatalf("after the undo: %+v", trades)
+	}
+	recs := s.CovenantFills(pair, 0)
+	if len(recs) != 2 || recs[0].State != FillFinal || recs[1].State != FillUndone || recs[1].Reason == "" || recs[0].OfferID != "cov1" {
+		t.Fatalf("records: %+v", recs)
+	}
+	// An undone record is history: moving it on again finds nothing.
+	if s.UpdateCovenantFill(f2) {
+		t.Fatal("an undone record was moved on again")
+	}
+	// The order rests back where it was, its terms (and signature) untouched.
+	if err := s.RepointCovenant(kk, "aabb", 0, 90, false); err != nil {
+		t.Fatal(err)
+	}
+	e, _ := s.Get(kk)
+	if e.ActiveAmount != 90 || e.Status != seqobv1.OfferStatus_OFFER_STATUS_OPEN || e.Offer.GetCovenant().GetCovenantTxid() != "aabb" {
+		t.Fatalf("repointed: %+v", e)
+	}
+	if err := offer.VerifyOffer(e.Offer); err != nil {
+		t.Fatalf("the repointed offer no longer verifies: %v", err)
+	}
+	if len(s.TradesFor(pair, 0)) != 1 {
+		t.Fatal("repointing recorded a trade")
+	}
+}
+
+func TestCovenantRefundIsExpiredAndNoTrade(t *testing.T) {
+	s := New(nil)
+	k := key(t)
+	o := mkCovOffer(t, k, "cov1", "aabb", 0, 90)
+	if _, err := s.Submit(o); err != nil {
+		t.Fatal(err)
+	}
+	kk := Key{MakerPubkey: o.GetMakerPubkey(), OfferID: "cov1"}
+	if err := s.RemoveCovenantRefunded(kk, "refund1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Get(kk); ok {
+		t.Fatal("refunded order still rests")
+	}
+	if len(s.TradesFor(o.GetPair(), 0)) != 0 {
+		t.Fatal("a refund made a trade")
 	}
 }
 

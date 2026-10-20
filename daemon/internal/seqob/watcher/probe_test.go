@@ -29,7 +29,8 @@ func TestSubmitProbeChecksTheOutpoint(t *testing.T) {
 		{"over-advertised", CovState{Unspent: true, Value: 89_000_000, AssetDisplay: exp.AssetADisplay, SPKHex: exp.OrderSPKHex}, "offer advertises"},
 	}
 	for _, c := range cases {
-		chain := &fakeChain{states: map[string]CovState{"aa:0": c.st}}
+		chain := newFakeChain()
+		chain.states["aa:0"] = c.st
 		err := SubmitProbe{Chain: chain}.CheckOffer(context.Background(), offer)
 		if c.want == "" && err != nil {
 			t.Fatalf("%s: unexpected %v", c.name, err)

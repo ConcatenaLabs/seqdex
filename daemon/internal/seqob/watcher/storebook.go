@@ -1,6 +1,7 @@
 package watcher
 
 import (
+	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offerstore"
 )
 
@@ -17,7 +18,7 @@ func (b *storeBook) SnapshotCovenants() []CovEntry {
 	src := b.s.SnapshotCovenants()
 	out := make([]CovEntry, 0, len(src))
 	for _, c := range src {
-		out = append(out, CovEntry{Key: c.Key, Terms: c.Terms, Active: c.Active, ReRested: c.ReRested})
+		out = append(out, CovEntry{Key: c.Key, Offer: c.Offer, Terms: c.Terms, Active: c.Active, ReRested: c.ReRested})
 	}
 	return out
 }
@@ -26,8 +27,24 @@ func (b *storeBook) ReconcileLive(k offerstore.Key, active uint64) error {
 	return b.s.ReconcileCovenantActive(k, active)
 }
 
-func (b *storeBook) RerestRemainder(k offerstore.Key, txid string, vout uint32, size uint64) error {
-	return b.s.RerestCovenantRemainder(k, txid, vout, size)
+func (b *storeBook) Repoint(k offerstore.Key, txid string, vout uint32, size uint64, reRested bool) error {
+	return b.s.RepointCovenant(k, txid, vout, size, reRested)
+}
+
+func (b *storeBook) RemoveRefunded(k offerstore.Key, spenderTxid string) error {
+	return b.s.RemoveCovenantRefunded(k, spenderTxid)
+}
+
+func (b *storeBook) Reopen(o *seqobv1.Offer, active uint64) error { return b.s.Reopen(o, active) }
+
+func (b *storeBook) RecordFill(f offerstore.CovenantFill, resting *seqobv1.Offer) {
+	b.s.RecordCovenantFill(f, resting)
+}
+
+func (b *storeBook) UpdateFill(f offerstore.CovenantFill) { b.s.UpdateCovenantFill(f) }
+
+func (b *storeBook) SetAnchorConfs(k offerstore.Key, depth uint32) {
+	b.s.SetCovenantAnchorConfs(k, depth)
 }
 
 func (b *storeBook) RemoveFilled(k offerstore.Key, spenderTxid string) error {

@@ -10,11 +10,13 @@
 // outpoint, a fill is broadcast then dropped/RBF'd, or — because every Sequentia
 // block references a Bitcoin header (Bitcoin anchoring is SUPREME consensus law)
 // — a Bitcoin reorg makes the funding UTXO VANISH in real time. The watcher
-// reconciles the book to the node's CURRENT tip: it removes orders whose funding
-// is gone (ghosts), re-rests partial-fill remainders at their new outpoint and
-// reduced size, holds unconfirmed spends pending, and re-opens fills that never
-// confirmed. Its only powers over the book are the covenant-aware reconcile
-// operations; it holds no keys and no funds.
+// reconciles the book to the node's CURRENT tip: it records each fill from the
+// filling transaction's outputs (one per covenant input, k its index), re-rests
+// partial-fill remainders at (txid, 2k+1), removes a filled order once its fill
+// is final (certified, anchor buried), undoes a fill whose block leaves the
+// chain, removes orders whose funding is gone (ghosts), holds unconfirmed spends
+// pending, and re-opens fills that never confirmed. Its only powers over the
+// book are the covenant-aware reconcile operations; it holds no keys and no funds.
 //
 // The reconciliation core (internal/seqob/watcher) is agnostic to how it reaches
 // the node and the book. In production the watcher runs as a goroutine inside

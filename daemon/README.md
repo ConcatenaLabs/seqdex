@@ -43,6 +43,12 @@ seqobd [flags]
   -interactive-cap   soft per-maker committed-capital cap per offered asset
                      (atoms) for interactive offers; past it an offer is
                      flagged demoted (phantom depth); 0 disables
+  -fill-anchor-depth Bitcoin blocks that must bury a covenant fill's anchor,
+                     its block certified, before the relay records the fill
+                     final (default 2; an offer's min_anchor_depth raises it)
+  -arca-operator     comma-separated base URLs of Arca operators; a covenant
+                     fill made by one of their rounds is recorded as that
+                     round's (env SEQOB_ARCA_OPERATORS)
 ```
 
 HTTP surface (bodies are protojson of `api-spec/protobuf/seqob/v1`):
@@ -53,6 +59,9 @@ POST /v1/offers/cancel                      submit a signed OfferCancel
 GET  /v1/offers?maker_pubkey=<hex>          a maker's own orders
 GET  /v1/markets                            market summaries
 GET  /v1/market/{base}/{quote}/orderbook    per-pair snapshot
+GET  /v1/market/{base}/{quote}/trades       recent trades
+GET  /v1/market/{base}/{quote}/candles      OHLCV from the trades
+GET  /v1/market/{base}/{quote}/fills        covenant fill records (JSON)
 POST /v1/lift                               open a lift session
 GET  /v1/ws                                 WebSocket (To/From envelope): book
                                             subscriptions, offer submission,
@@ -166,12 +175,45 @@ enforced recipe; `run` is the loop against a relay and a node.
 
 ### `cmd/seqob-watcher`: the covenant chain-watcher
 
-Reconciles the relay's covenant book to the node's current tip: removes
-orders whose funding UTXO is gone (including after a Bitcoin-driven reorg),
-re-rests partial-fill remainders at their new outpoint, holds unconfirmed
-spends pending, re-opens fills that never confirmed. In production the same
-core runs inside `seqobd` (`-node-rpc`); this binary exposes it standalone:
+Reconciles the relay's covenant book to the node's current tip and keeps the
+record of every covenant fill. In production the same core runs inside
+`seqobd` (`-node-rpc`); this binary exposes its classifier standalone:
 `classify` (JSON state on stdin) and `run`.
+
+- A transaction that spends several covenant orders is several fills, one per
+  order, `k` its input index. Each is recorded from the transaction's outputs
+  as the order's FILL leaf reads them: the maker's credit at `2k`, and at
+  `2k+1` the order resting again (a partial fill) or the gap that stands there
+  (a full fill). The fill's trade is recorded with it, txid attached.
+- The taker is whoever the filling transaction's other outputs pay, which the
+  record does not attribute, unless the transaction is a round of an Arca
+  operator the relay follows (`-arca-operator`): the operator lists it among
+  its rounds, runs on the relay's chain, and each batch output it names pays
+  the root of the tree it publishes. The taker's side of such a fill is a leaf
+  in the round's batch, so no output of the round pays the taker, and the
+  record names the operator's key, the round and its batch outputs instead.
+- After a partial fill the order rests again at `(txid, 2k+1)` with its terms,
+  and so its signature, unchanged: the covenant outpoint is outside the
+  signed bytes. After a full fill the order is held, hidden from matching,
+  and leaves the book (FILLED) once the fill is final.
+- A fill is final once its block is quorum-certified (it, or a block above
+  it) and its Bitcoin anchor is buried `-fill-anchor-depth` blocks (the
+  offer's `min_anchor_depth` when that is more), with the node reporting its
+  tip's anchor checked (`getanchorstatus` "ok"). A chain without Bitcoin
+  anchors, such as a test chain, counts its own blocks above the fill. The
+  relay's node needs `-txindex`, and `-validateanchor` on an anchored chain.
+- A fill whose block leaves the active chain, final or not (an anchor reorg,
+  a round replaced by another), is undone: its record says so and why, its
+  trade is retracted, and the order rests again where it rested before it,
+  with every later fill of its rest undone too. Whatever then spends that
+  outpoint (the same transaction mined again, or a replacement round filling
+  a subset of the orders at other `k`) is recorded as a new fill.
+- A spend through the REFUND leaf (or any path but FILL) is the maker taking
+  the order back: no fill and no trade; the order leaves the book (EXPIRED)
+  once that spend is final.
+- Orders whose funding UTXO is gone at the tip with no spender are removed
+  (ghosts), unconfirmed spends are held pending, and fills that never
+  confirmed are re-opened.
 
 ### `cmd/seqob-bridge`: the cross-rail bridge
 

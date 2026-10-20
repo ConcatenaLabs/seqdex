@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -75,6 +76,8 @@ func main() {
 		offersPerMin   = flag.Int("offers-per-min", 60, "max offers/min per maker_pubkey")
 		offersPerMinI  = flag.Int("offers-per-min-ip", 120, "max offers/min per IP")
 		tradeLog       = flag.String("trade-log", env("SEQOB_TRADE_LOG", ""), "path to an append-only JSONL trade log so last_price/trades/candles survive a relay restart (env SEQOB_TRADE_LOG; empty = in-memory only)")
+		finalDepth     = flag.Int64("fill-anchor-depth", watcher.DefaultFinalAnchorDepth, "Bitcoin blocks that must bury a covenant fill's anchor, its block certified, before the relay records it final (an offer's min_anchor_depth raises it)")
+		arcaOperators  = flag.String("arca-operator", env("SEQOB_ARCA_OPERATORS", ""), "comma-separated base URLs of Arca operators whose rounds fill covenant orders; the relay records such a fill's taker as the operator's round (env SEQOB_ARCA_OPERATORS)")
 		interactiveCap = flag.Uint64("interactive-cap", 0, "P3.10 soft per-maker committed-capital cap per offer_asset (atoms): an interactive offer that pushes a maker's cumulative committed capital past this is flagged 'demoted' (phantom depth); 0 disables")
 	)
 	flag.Parse()
@@ -177,8 +180,17 @@ func main() {
 	if *nodeRPC != "" {
 		chain := watcher.NewRPCChain(nodeHost, nodePort, *nodeUser, *nodePass)
 		w := watcher.New(chain, watcher.NewStoreBook(store), logger)
+		w.SetFinalAnchorDepth(*finalDepth)
+		if ops := strings.TrimSpace(*arcaOperators); ops != "" {
+			genesis, err := watcher.GenesisHash(chain)
+			if err != nil {
+				logger.Fatalf("-arca-operator needs the node's genesis block: %v", err)
+			}
+			w.SetRounds(watcher.NewArcaRounds(strings.Split(ops, ","), genesis))
+			logger.Printf("covenant fills by the rounds of the Arca operators %s are recorded as theirs", ops)
+		}
 		go w.Run(*watchInterval, stop)
-		logger.Printf("covenant chain-watcher enabled (node %s, every %s)", *nodeRPC, *watchInterval)
+		logger.Printf("covenant chain-watcher enabled (node %s, every %s; a fill is final once its block is certified and its anchor buried %d)", *nodeRPC, *watchInterval, *finalDepth)
 		if reorgRun != nil {
 			go reorgRun.Run(*watchInterval, stop)
 			logger.Printf("interactive-fill reorg watcher enabled (node %s, every %s)", *nodeRPC, *watchInterval)
