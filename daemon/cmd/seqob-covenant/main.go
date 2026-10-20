@@ -78,9 +78,9 @@ func hex32(s, name string) [32]byte {
 func orderFlags(fs *flag.FlagSet) func() covenant.Order {
 	a := fs.String("a", "", "asset A (32-byte internal-order hex)")
 	b := fs.String("b", "", "asset B (32-byte internal-order hex)")
-	num := fs.Uint64("num", 0, "rate numerator")
-	den := fs.Uint64("den", 0, "rate denominator")
-	minlot := fs.Uint64("minlot", 0, "min_lot (atoms)")
+	num := fs.Uint64("num", 0, "rate numerator, below 2^63")
+	den := fs.Uint64("den", 0, "rate denominator, below 2^63")
+	minlot := fs.Uint64("minlot", 0, "min_lot (atoms), below 2^63")
 	prog := fs.String("prog", "", "maker credit witness program (32-byte hex, v1): a plain key, never an Arca leaf or board script")
 	makerver := fs.Int("makerver", 1, "maker credit witness version")
 	expiry := fs.Int64("expiry", 0, "REFUND absolute locktime: a height below 500000000, a median time (unix seconds) from it")

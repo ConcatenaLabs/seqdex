@@ -176,6 +176,9 @@ func BuildFillLeaf(assetA, assetB [32]byte, rateNum, rateDen, minLot uint64, mak
 	if rateNum < 1 || rateDen < 1 || minLot < 1 {
 		return nil, fmt.Errorf("rateNum, rateDen, minLot must be >= 1")
 	}
+	if err := (Order{RateNum: rateNum, RateDen: rateDen, MinLot: minLot}).CheckTerms(); err != nil {
+		return nil, err
+	}
 	if makerVer != 1 {
 		return nil, fmt.Errorf("this builder pins a v1 taproot maker payout (got version %d)", makerVer)
 	}

@@ -342,6 +342,9 @@ func checkCovenant(o *seqobv1.Offer) error {
 	if ct.GetRateNum() < 1 || ct.GetRateDen() < 1 {
 		return fmt.Errorf("covenant rate %d/%d: numerator and denominator must be >= 1", ct.GetRateNum(), ct.GetRateDen())
 	}
+	if err := (covenant.Order{RateNum: ct.GetRateNum(), RateDen: ct.GetRateDen(), MinLot: ct.GetMinLot()}).CheckTerms(); err != nil {
+		return fmt.Errorf("covenant: %w", err)
+	}
 	if ct.GetMinLot() < 1 {
 		return fmt.Errorf("covenant min_lot must be >= 1")
 	}

@@ -171,8 +171,8 @@ message CovenantTerms {
   // introspection returns them). asset_a rests; asset_b pays for it.
   string asset_a             = 3;  // 32-byte internal-order asset id hex
   string asset_b             = 4;  // 32-byte internal-order asset id hex
-  uint64 rate_num            = 5;  // required_B = ceil(filled * rate_num / rate_den)
-  uint64 rate_den            = 6;
+  uint64 rate_num            = 5;  // required_B = ceil(filled * rate_num / rate_den); below 2^63, as rate_den and min_lot
+  uint64 rate_den            = 6;  // (the leaf's signed opcodes read a larger term as negative)
   bytes  maker_prog          = 7;  // maker credit witness program (32 bytes for v1): a plain key, never an Arca leaf or board script
   uint32 maker_prog_ver      = 8;  // witness version of the maker credit output (1)
   uint64 min_lot             = 9;  // dust-griefing floor on filled and on any remainder

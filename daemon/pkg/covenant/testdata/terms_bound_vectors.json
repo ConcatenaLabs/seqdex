@@ -1,0 +1,64 @@
+{
+  "about": "Tapscript FILL leaf terms at the 2^63 edge. rate_num, rate_den and min_lot below 2^63 build the leaf (fill_leaf, by seqdex pkg/covenant BuildFillLeaf over asset_a, asset_b, maker_prog); a term at 2^63 or more is refused (refused names it): OP_MUL64, OP_DIV64 and OP_GREATERTHANOREQUAL64 read it as negative, and the order would fill for any credit. Go (BuildFillLeaf, CheckTerms) and the web wallet's covenant.js agree on every case.",
+  "asset_a": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "asset_b": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+  "maker_prog": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+  "cases": [
+    {
+      "name": "every term at 2^63-1",
+      "rate_num": "9223372036854775807",
+      "rate_den": "9223372036854775807",
+      "min_lot": "9223372036854775807",
+      "fill_leaf": "cdc95188cd76938bd59f63cd76938bce518820a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a18763cd76938bd1cdca7b8888cd76938bcf51887608ffffffffffffff7fdf6967080000000000000000686708000000000000000068d8697608ffffffffffffff7fdf6908ffffffffffffff7fd96908feffffffffffff7fd76908ffffffffffffff7fda6977cd7693ce518820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b288cd7693d1518820c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c388cd7693cf51887cdf"
+    },
+    {
+      "name": "small terms",
+      "rate_num": "3",
+      "rate_den": "2",
+      "min_lot": "10000",
+      "fill_leaf": "cdc95188cd76938bd59f63cd76938bce518820a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a18763cd76938bd1cdca7b8888cd76938bcf518876081027000000000000df6967080000000000000000686708000000000000000068d86976081027000000000000df69080300000000000000d969080100000000000000d769080200000000000000da6977cd7693ce518820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b288cd7693d1518820c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c388cd7693cf51887cdf"
+    },
+    {
+      "name": "rate_num at 2^63",
+      "rate_num": "9223372036854775808",
+      "rate_den": "1",
+      "min_lot": "1",
+      "refused": "rate_num"
+    },
+    {
+      "name": "rate_num at 2^64-1",
+      "rate_num": "18446744073709551615",
+      "rate_den": "1",
+      "min_lot": "1",
+      "refused": "rate_num"
+    },
+    {
+      "name": "rate_den at 2^63+5",
+      "rate_num": "1",
+      "rate_den": "9223372036854775813",
+      "min_lot": "1",
+      "refused": "rate_den"
+    },
+    {
+      "name": "rate_den at 2^64-1",
+      "rate_num": "6",
+      "rate_den": "18446744073709551615",
+      "min_lot": "1",
+      "refused": "rate_den"
+    },
+    {
+      "name": "min_lot at 2^63",
+      "rate_num": "3",
+      "rate_den": "2",
+      "min_lot": "9223372036854775808",
+      "refused": "min_lot"
+    },
+    {
+      "name": "min_lot at 2^63+5",
+      "rate_num": "6",
+      "rate_den": "16",
+      "min_lot": "9223372036854775813",
+      "refused": "min_lot"
+    }
+  ]
+}
