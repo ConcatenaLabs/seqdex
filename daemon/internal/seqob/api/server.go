@@ -34,6 +34,7 @@ import (
 
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/matcher"
+	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offer"
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offerstore"
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/session"
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/validator"
@@ -410,7 +411,7 @@ var restLiftAttachGrace = newDurationVar(30 * time.Second)
 // expireUnattachedLift aborts a REST-opened lift on a non-covenant offer if no taker
 // has attached to the session by the grace deadline. Covenant lifts hold no slot.
 func (s *Server) expireUnattachedLift(sid string, k offerstore.Key) {
-	if e, ok := s.store.Get(k); !ok || e.Offer.GetCovenant() != nil {
+	if e, ok := s.store.Get(k); !ok || offer.IsCovenant(e.Offer) {
 		return
 	}
 	time.AfterFunc(restLiftAttachGrace.Get(), func() {
@@ -463,7 +464,7 @@ func (s *Server) openLift(sl *seqobv1.StartLift) (*session.Session, error) {
 	// re-attaches to the live session instead (P3.8). Covenant offers are EXEMPT: they
 	// are funded on-chain and first-spend-wins enforces a single fill, so concurrent
 	// permissionless takers are safe.
-	isCovenant := e.Offer.GetCovenant() != nil
+	isCovenant := offer.IsCovenant(e.Offer)
 	if !isCovenant {
 		s.pruneDeadLifts()
 		// Atomically RESERVE the offer's single lift slot with an in-progress sentinel,
@@ -644,5 +645,5 @@ const ghostGraceSecs = 90
 // Only a plain interactive same-chain offer does: everything else either settles without the maker
 // (covenant) or is served by an agent that reconnects (cross-chain, Lightning/sub-asset).
 func needsLiveMaker(o *seqobv1.Offer) bool {
-	return o.GetCovenant() == nil && o.GetLightning() == nil && o.GetCrossChain() == nil
+	return !offer.IsCovenant(o) && o.GetLightning() == nil && o.GetCrossChain() == nil
 }

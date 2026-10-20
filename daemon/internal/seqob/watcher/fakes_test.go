@@ -7,6 +7,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
+	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offer"
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offerstore"
 	"github.com/aejkcs50/seqdex/daemon/pkg/covenant"
 )
@@ -50,12 +51,10 @@ func (b *fakeBook) ReconcileLive(k offerstore.Key, active uint64) error {
 func (b *fakeBook) Repoint(k offerstore.Key, txid string, vout uint32, size uint64, reRested bool) error {
 	b.calls = append(b.calls, call{op: "repoint", key: k, txid: txid, vout: vout, size: size, re: reRested})
 	if i := b.find(k); i >= 0 {
-		t := proto.Clone(b.covs[i].Terms).(*seqobv1.CovenantTerms)
-		t.CovenantTxid, t.CovenantVout = txid, vout
-		b.covs[i].Terms, b.covs[i].Active, b.covs[i].ReRested = t, size, reRested
 		o := proto.Clone(b.covs[i].Offer).(*seqobv1.Offer)
-		o.Settlement = &seqobv1.Offer_Covenant{Covenant: t}
-		b.covs[i].Offer = o
+		offer.SetCovenantOutpoint(o, txid, vout)
+		b.covs[i].Offer, b.covs[i].Terms, b.covs[i].Sim = o, o.GetCovenant(), o.GetSimplicityCovenant()
+		b.covs[i].Active, b.covs[i].ReRested = size, reRested
 	}
 	return nil
 }

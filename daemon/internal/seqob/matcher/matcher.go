@@ -74,6 +74,12 @@ func isSubAssetOffer(o *seqobv1.Offer) bool {
 //
 // This extends the sub-asset never-auto-cross guard to every ownerless
 // combination, so no advisory match ever ships.
+//
+// A Simplicity covenant order (SimplicityCovenantTerms) on EITHER side has no
+// auto-cross owner: the settler pairs two tapscript covenants, the bridge
+// fills a tapscript one, and Matched carries tapscript terms. It is filled by
+// a taker who reads it from the book (seqob-cli covfill) or by an operator's
+// round, so it never auto-crosses; it rests, and the watcher records its fills.
 func hasSettlementOwner(incoming, resting *seqobv1.Offer) bool {
 	// The owner must key on the RESTING side being a covenant, because that is the
 	// only covenant the Match delivers: matchedProto carries RestingCovenant, so an
@@ -84,7 +90,9 @@ func hasSettlementOwner(incoming, resting *seqobv1.Offer) bool {
 	// order has NO owner as wired (its terms reach no one) — guard it off rather than
 	// ship a phantom From.matched to the resting maker. (Both-covenant is covered here
 	// too, since the resting side is a covenant; the settler polls both regardless.)
-	_ = incoming
+	if incoming.GetSimplicityCovenant() != nil || resting.GetSimplicityCovenant() != nil {
+		return false
+	}
 	return resting.GetCovenant() != nil
 }
 

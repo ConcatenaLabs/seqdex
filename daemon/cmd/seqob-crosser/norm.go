@@ -178,6 +178,8 @@ func classifyFamily(o *seqobv1.Offer) Family {
 			return FamSubmarine
 		}
 	default:
+		// A Simplicity covenant order (SimplicityCovenantTerms) lands here: the
+		// crosser's executor fills tapscript covenants only, so it skips one.
 		return FamUnknown
 	}
 }

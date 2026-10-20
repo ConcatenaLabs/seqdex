@@ -33,10 +33,19 @@ type ChainView interface {
 // CovEntry is one resting covenant offer the watcher must reconcile.
 type CovEntry struct {
 	Key      offerstore.Key
-	Offer    *seqobv1.Offer // the signed offer as it rests (its outpoint is outside the signed bytes)
-	Terms    *seqobv1.CovenantTerms
-	Active   uint64 // book's current active size (advisory; reconciled to chain)
-	ReRested bool   // F3: current outpoint is a remainder from a prior partial fill, not the original funding
+	Offer    *seqobv1.Offer                   // the signed offer as it rests (its outpoint is outside the signed bytes)
+	Terms    *seqobv1.CovenantTerms           // a tapscript order's terms, or nil
+	Sim      *seqobv1.SimplicityCovenantTerms // a Simplicity order's terms, or nil
+	Active   uint64                           // book's current active size (advisory; reconciled to chain)
+	ReRested bool                             // F3: current outpoint is a remainder from a prior partial fill, not the original funding
+}
+
+// outpoint is where the order rests.
+func (c CovEntry) outpoint() (string, uint32) {
+	if c.Sim != nil {
+		return c.Sim.GetCovenantTxid(), c.Sim.GetCovenantVout()
+	}
+	return c.Terms.GetCovenantTxid(), c.Terms.GetCovenantVout()
 }
 
 // BookController is the covenant-aware subset of the relay's book the watcher
@@ -217,17 +226,17 @@ func (w *Watcher) ReconcileOnce() (Stats, error) {
 		if tr := w.tracks[c.Key]; tr != nil && len(tr.steps) > 0 && !tr.steps[len(tr.steps)-1].partial {
 			continue // spent whole; held until that spend is final, and watched in step 1
 		}
-		exp, err := expectFromTerms(c.Terms)
+		exp, err := c.expect()
 		if err != nil {
 			st.Errors++
 			w.log.Printf("watcher: %s/%s: derive expected program: %v", c.Key.MakerPubkey, c.Key.OfferID, err)
 			continue
 		}
-		state, err := w.chain.Inspect(c.Terms.GetCovenantTxid(), c.Terms.GetCovenantVout(), exp.OrderSPKHex, exp.AssetADisplay)
+		txid, vout := c.outpoint()
+		state, err := w.chain.Inspect(txid, vout, exp.OrderSPKHex, exp.AssetADisplay)
 		if err != nil {
 			st.Errors++
-			w.log.Printf("watcher: %s/%s: inspect %s:%d: %v", c.Key.MakerPubkey, c.Key.OfferID,
-				c.Terms.GetCovenantTxid(), c.Terms.GetCovenantVout(), err)
+			w.log.Printf("watcher: %s/%s: inspect %s:%d: %v", c.Key.MakerPubkey, c.Key.OfferID, txid, vout, err)
 			continue
 		}
 		v := Classify(state, exp)
@@ -424,16 +433,13 @@ func (w *Watcher) apply(c CovEntry, v Verdict, state CovState, a AnchorTip, anch
 // removed, with no trade).
 func (w *Watcher) recordSpend(c CovEntry, state CovState, a AnchorTip, anchorKnown bool) error {
 	k := c.Key
+	prevTxid, prevVout := c.outpoint()
 	sp := state.Spender
 	if sp == nil {
-		return fmt.Errorf("spender %s of %s:%d not decoded", short(state.SpenderTxid), c.Terms.GetCovenantTxid(), c.Terms.GetCovenantVout())
-	}
-	order, err := orderFromTerms(c.Terms)
-	if err != nil {
-		return err
+		return fmt.Errorf("spender %s of %s:%d not decoded", short(state.SpenderTxid), prevTxid, prevVout)
 	}
 	locked := sp.PrevValue
-	r, err := ReadFill(order, sp, locked)
+	r, err := c.readFill(sp, locked)
 	if err != nil {
 		return err
 	}
@@ -445,7 +451,7 @@ func (w *Watcher) recordSpend(c CovEntry, state CovState, a AnchorTip, anchorKno
 		return w.book.HoldForSpend(k, sp.Txid) // it left the block between two calls; next pass sees it
 	}
 	s := &step{
-		prevTxid: c.Terms.GetCovenantTxid(), prevVout: c.Terms.GetCovenantVout(), prevSize: locked,
+		prevTxid: prevTxid, prevVout: prevVout, prevSize: locked,
 		prevReRested: c.ReRested, prevOffer: c.Offer,
 		spender: sp.Txid, k: sp.Input, refund: r.Refund, partial: r.Partial, required: w.required(c.Offer),
 	}
@@ -467,7 +473,7 @@ func (w *Watcher) recordSpend(c CovEntry, state CovState, a AnchorTip, anchorKno
 		}
 		rec := offerstore.CovenantFill{
 			Order: k, Pair: c.Offer.GetPair(), Txid: sp.Txid, Input: sp.Input,
-			Spent:  fmt.Sprintf("%s:%d", c.Terms.GetCovenantTxid(), c.Terms.GetCovenantVout()),
+			Spent:  fmt.Sprintf("%s:%d", prevTxid, prevVout),
 			Locked: locked, Filled: r.Filled, Remainder: r.Remainder,
 			Credit: r.Credit, Rest: r.Rest, Gap: r.Gap,
 			Taker: offerstore.FillTaker{Via: offerstore.TakerChain},

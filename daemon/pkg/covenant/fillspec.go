@@ -31,13 +31,48 @@ type SpecTerms struct {
 	InternalKey    string `json:"internal_key,omitempty"`
 }
 
-// SpecTake is one order taken.
+// SpecTake is one order taken: a tapscript order (terms) or, when simplicity is
+// present, a Simplicity order.
 type SpecTake struct {
-	Terms  SpecTerms `json:"terms"`
-	Txid   string    `json:"txid"`
-	Vout   uint32    `json:"vout"`
-	Locked uint64    `json:"locked"`
-	Filled uint64    `json:"filled"`
+	Terms      SpecTerms     `json:"terms"`
+	Simplicity *SpecSimTerms `json:"simplicity,omitempty"`
+	Txid       string        `json:"txid"`
+	Vout       uint32        `json:"vout"`
+	Locked     uint64        `json:"locked"`
+	Filled     uint64        `json:"filled"`
+}
+
+// SpecSimTerms is a Simplicity order's terms, in the relay's
+// SimplicityCovenantTerms field names (bytes as hex).
+type SpecSimTerms struct {
+	AssetA         string `json:"asset_a"`
+	AssetB         string `json:"asset_b"`
+	RateNum        uint64 `json:"rate_num"`
+	RateDen        uint64 `json:"rate_den"`
+	MinLot         uint64 `json:"min_lot"`
+	MakerScript    string `json:"maker_script"`
+	ExpiryLocktime uint32 `json:"expiry_locktime"`
+	RefundKey      string `json:"refund_key"`
+}
+
+// SimOrder is the order the terms describe.
+func (t SpecSimTerms) SimOrder() (SimOrder, error) {
+	var o SimOrder
+	var err error
+	if o.AssetA, err = hex32(t.AssetA, "asset_a"); err != nil {
+		return o, err
+	}
+	if o.AssetB, err = hex32(t.AssetB, "asset_b"); err != nil {
+		return o, err
+	}
+	if o.MakerScript, err = hex.DecodeString(t.MakerScript); err != nil || len(o.MakerScript) == 0 {
+		return o, fmt.Errorf("maker_script must be a scriptPubKey in hex")
+	}
+	if o.RefundKey, err = hex32(t.RefundKey, "refund_key"); err != nil {
+		return o, err
+	}
+	o.RateNum, o.RateDen, o.MinLot, o.Expiry = t.RateNum, t.RateDen, t.MinLot, t.ExpiryLocktime
+	return o, o.Validate()
 }
 
 // SpecOutput is an explicit output.
@@ -106,6 +141,14 @@ func (s SpecOutput) Output() (Output, error) {
 func (s Spec) FillTx() (FillTx, error) {
 	f := FillTx{Credits: s.Credits, Inputs: s.Inputs}
 	for k, t := range s.Takes {
+		if t.Simplicity != nil {
+			o, err := t.Simplicity.SimOrder()
+			if err != nil {
+				return f, fmt.Errorf("take %d: %w", k, err)
+			}
+			f.Takes = append(f.Takes, Take{Sim: &o, Txid: t.Txid, Vout: t.Vout, Locked: t.Locked, Filled: t.Filled})
+			continue
+		}
 		o, err := t.Terms.Order()
 		if err != nil {
 			return f, fmt.Errorf("take %d: %w", k, err)

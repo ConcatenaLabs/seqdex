@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
+	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offer"
 )
 
 // SubmitProbe is the relay validator's liveness probe backed by the chain view:
@@ -34,20 +35,21 @@ func (p SubmitProbe) CheckOffer(_ context.Context, o *seqobv1.Offer) error {
 // or when the chain could not be asked; an error when the chain contradicts the
 // offer.
 func ProbeCovenant(chain ChainView, o *seqobv1.Offer) error {
-	t := o.GetCovenant()
-	if t == nil || chain == nil {
+	if !offer.IsCovenant(o) || chain == nil {
 		return nil
 	}
-	exp, err := expectFromTerms(t)
+	c := CovEntry{Offer: o, Terms: o.GetCovenant(), Sim: o.GetSimplicityCovenant()}
+	exp, err := c.expect()
 	if err != nil {
 		return fmt.Errorf("covenant terms: %w", err)
 	}
-	st, err := chain.Inspect(t.GetCovenantTxid(), t.GetCovenantVout(), exp.OrderSPKHex, exp.AssetADisplay)
+	txid, vout := c.outpoint()
+	st, err := chain.Inspect(txid, vout, exp.OrderSPKHex, exp.AssetADisplay)
 	if err != nil {
 		return nil // node unavailable: not evidence; the watcher reconciles
 	}
 	if !st.Unspent {
-		return fmt.Errorf("covenant outpoint %s:%d is not an unspent output at the tip", t.GetCovenantTxid(), t.GetCovenantVout())
+		return fmt.Errorf("covenant outpoint %s:%d is not an unspent output at the tip", txid, vout)
 	}
 	if !strings.EqualFold(st.SPKHex, exp.OrderSPKHex) {
 		return fmt.Errorf("covenant outpoint does not pay the program derived from its terms")

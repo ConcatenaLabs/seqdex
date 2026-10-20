@@ -5,6 +5,7 @@ import (
 	"time"
 
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
+	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offer"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -201,13 +202,12 @@ func (s *Store) CovenantFills(pair *seqobv1.AssetPair, limit int) []CovenantFill
 func (s *Store) RepointCovenant(k Key, txid string, vout uint32, size uint64, reRested bool) error {
 	s.mu.Lock()
 	e, ok := s.entries[k]
-	if !ok || e.Offer.GetCovenant() == nil {
+	if !ok || !offer.IsCovenant(e.Offer) {
 		s.mu.Unlock()
 		return nil
 	}
 	no := proto.Clone(e.Offer).(*seqobv1.Offer)
-	no.GetCovenant().CovenantTxid = txid
-	no.GetCovenant().CovenantVout = vout
+	offer.SetCovenantOutpoint(no, txid, vout)
 	e.Offer = no
 	e.reRested = reRested
 	if size > no.GetBaseAmount() {
@@ -237,7 +237,7 @@ func (s *Store) RepointCovenant(k Key, txid string, vout uint32, size uint64, re
 func (s *Store) SetCovenantAnchorConfs(k Key, depth uint32) {
 	s.mu.Lock()
 	e, ok := s.entries[k]
-	if !ok || e.Offer.GetCovenant() == nil || e.AnchorConfs == depth {
+	if !ok || !offer.IsCovenant(e.Offer) || e.AnchorConfs == depth {
 		s.mu.Unlock()
 		return
 	}
@@ -252,7 +252,7 @@ func (s *Store) SetCovenantAnchorConfs(k Key, depth uint32) {
 func (s *Store) RemoveCovenantRefunded(k Key, txid string) error {
 	s.mu.Lock()
 	e, ok := s.entries[k]
-	if !ok || e.Offer.GetCovenant() == nil {
+	if !ok || !offer.IsCovenant(e.Offer) {
 		s.mu.Unlock()
 		return nil
 	}

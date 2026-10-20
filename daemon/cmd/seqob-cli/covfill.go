@@ -2,7 +2,8 @@ package main
 
 // covfill: the taker for resting passive-CLOB covenant orders.
 //
-// A covenant offer is a tapscript-locked on-chain UTXO ANYONE can fill by
+// A covenant offer is an on-chain UTXO, under the tapscript FILL leaf or the
+// Simplicity order of the template seqdex/order, that ANYONE can fill by
 // assembling the fill spend that pays the maker its want (asset B, at the
 // covenant's own ceil price) and takes the offered asset A — no maker liveness,
 // no courier session, no signature from anyone but the taker's own wallet. This
@@ -81,6 +82,22 @@ func cmdCovFill(args []string) {
 		if err := offer.VerifyOffer(target); err != nil {
 			fatal("offer %s failed maker signature verification (refusing to fill): %v", id, err)
 		}
+		ceiling := *maxPay
+		if st := target.GetSimplicityCovenant(); st != nil {
+			// A Simplicity order: its terms checked and its template the one this
+			// build pins; FillCovenant re-derives its script and checks the chain.
+			so, err := offer.SimOrderOf(st)
+			if err != nil {
+				fatal("simplicity covenant terms: %v", err)
+			}
+			fmt.Printf("simplicity covenant offer %s: fills at rate %d/%d (min_lot %d), resting at %s:%d, taken at input %d\n",
+				id, so.RateNum, so.RateDen, so.MinLot, st.GetCovenantTxid(), st.GetCovenantVout(), i)
+			if ceiling == 0 {
+				ceiling = offerCeiling(target, amount)
+			}
+			takes = append(takes, covfill.Take{Sim: &so, Txid: st.GetCovenantTxid(), Vout: st.GetCovenantVout(), TakeAtoms: amount, MaxPayB: ceiling})
+			continue
+		}
 		ct := target.GetCovenant()
 		if ct == nil {
 			fatal("offer %s is not a covenant offer (settlement family %T)", id, target.GetSettlement())
@@ -92,7 +109,6 @@ func cmdCovFill(args []string) {
 		op := bridge.OutpointFromTerms(ct)
 		fmt.Printf("covenant offer %s: fills at rate %d/%d (min_lot %d), resting at %s:%d, taken at input %d\n",
 			id, ct.GetRateNum(), ct.GetRateDen(), ct.GetMinLot(), op.Txid, op.Vout, i)
-		ceiling := *maxPay
 		if ceiling == 0 {
 			// The offer's own terms are the price the taker agreed to: a full fill of
 			// offer_amount of asset A is worth want_amount of asset B, pro rata for a

@@ -192,6 +192,10 @@ record of every covenant fill. In production the same core runs inside
   the root of the tree it publishes. The taker's side of such a fill is a leaf
   in the round's batch, so no output of the round pays the taker, and the
   record names the operator's key, the round and its batch outputs instead.
+- A Simplicity order (`SimplicityCovenantTerms`) is reconciled the same way:
+  its outpoint must pay the script its terms derive, and a spend's witness
+  says whether it was a partial fill, a whole fill or the refund key's spend
+  (no fill, no trade). A whole fill's `2k+1` is whatever the taker put there.
 - After a partial fill the order rests again at `(txid, 2k+1)` with its terms,
   and so its signature, unchanged: the covenant outpoint is outside the
   signed bytes. After a full fill the order is held, hidden from matching,
@@ -320,7 +324,8 @@ internal/seqob/client      taker/maker drivers: same-chain (driver.go),
                            (xdriver_submarine*.go), pure-LN (xdriver_pureln.go),
                            sub-asset (xdriver_subasset*.go), E2E crypter, live
                            wallet backend over Ocean
-internal/seqob/covfill     covenant fill construction for takers (one or several orders)
+internal/seqob/covfill     covenant fill construction for takers (one or several orders,
+                           tapscript or Simplicity)
 internal/seqob/settler     joint settlement of two covenant orders
 internal/seqob/watcher     covenant book reconciliation against the chain
 internal/seqob/bridge      cross-rail (covenant vs Lightning) settlement

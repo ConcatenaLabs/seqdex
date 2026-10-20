@@ -178,6 +178,18 @@ needs the refund key's signature over the transaction's Simplicity
 `sig_all_hash`. A fill in the same layout costs more: 917 vB against 668 vB for
 a partial fill, 811 vB against 590 vB for a whole one.
 
+Such an order rests in the book under its own settlement member,
+`SimplicityCovenantTerms` (`offer.proto`), its outpoint outside the signed
+bytes as for `CovenantTerms`. The relay validates it (the template this build
+pins, the price and assets the offer advertises, an expiry), probes its
+outpoint on the chain, and its watcher records its fills and re-points it at
+`(txid, 2k+1)` after a partial one. `seqob-cli covfill` takes it, alone or
+beside tapscript orders in one transaction, and so can an operator's round.
+The matcher does not auto-cross it, because the owners it hands a match to
+(the settler, the bridge, the `Matched` message) carry tapscript terms only,
+and the crosser skips it for the same reason: it is filled by a taker who
+reads it from the book.
+
 **Cross-chain (BTC on-chain).** The legs are two HTLCs sharing one SHA256
 hashlock, with asymmetric timelocks (the BTC leg always refunds later than the
 Sequentia leg). Forward direction: the taker locks BTC first, the maker locks
