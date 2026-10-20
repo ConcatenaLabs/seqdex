@@ -148,8 +148,12 @@ and `sequentia-cli`; `pkg/xchain/testdata/start-regtest.sh` falls back to the le
 - **The native asset is not 1:1 for fees.** Sizing a fee as though it were under-pays. Fees are
   sized from the published rate, for every asset including the native one.
 - **Offer canonical bytes are a cross-language contract.** The signed canonical form excludes the
-  covenant outpoint. The JavaScript side in `sequentia-web-wallet` re-implements this and the
+  covenant outpoint, so the relay can re-point a resting order at `(txid, 2k+1)` after a fill with
+  its maker offline. The JavaScript side in `sequentia-web-wallet` re-implements this and the
   covenant byte order; a change on either side must land on both.
+  `daemon/internal/seqob/offer/testdata/covenant_offer_vectors.json` (an offer signed at its funding
+  outpoint and served again after a move) and `daemon/pkg/covenant/testdata/fill_vectors.json` (the
+  multi-order fill layout) are copied into the web wallet, whose tests hold its code to them.
 - Byte order at the covenant boundary is display-vs-internal, and the wallet mirrors this repo's
   `reverseHex`/`displayHex` conventions. Golden vectors pin the two implementations together.
 
