@@ -172,12 +172,12 @@ message CovenantTerms {
   string asset_b             = 4;  // 32-byte internal-order asset id hex
   uint64 rate_num            = 5;  // required_B = ceil(filled * rate_num / rate_den)
   uint64 rate_den            = 6;
-  bytes  maker_prog          = 7;  // maker credit witness program (32 bytes for v1)
+  bytes  maker_prog          = 7;  // maker credit witness program (32 bytes for v1): a plain key, never an Arca leaf or board script
   uint32 maker_prog_ver      = 8;  // witness version of the maker credit output (1)
   uint64 min_lot             = 9;  // dust-griefing floor on filled and on any remainder
 
   // REFUND leaf: <expiry_locktime> CLTV DROP <maker_x> CHECKSIG.
-  uint32 expiry_locktime     = 10; // absolute-height CLTV the maker reclaims after
+  uint32 expiry_locktime     = 10; // absolute CLTV the maker reclaims after: a height below 500,000,000, a median time past (unix seconds) from it
   bytes  maker_x             = 11; // maker x-only key (32 bytes) authorizing REFUND
 
   // Taproot reconstruction inputs. internal_key is the 32-byte x-only internal

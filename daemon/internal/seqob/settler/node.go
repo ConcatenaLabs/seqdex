@@ -10,6 +10,7 @@ import (
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/matcher"
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/watcher"
+	"github.com/aejkcs50/seqdex/daemon/pkg/covenant"
 	"github.com/aejkcs50/seqdex/daemon/pkg/xchain"
 	"github.com/vulpemventures/go-elements/elementsutil"
 	"github.com/vulpemventures/go-elements/transaction"
@@ -257,13 +258,22 @@ func Resolve(m matcher.Match, view Inspector) (lockedA, lockedB uint64, err erro
 	}
 	// Past a covenant's REFUND expiry its maker can reclaim at any time and race
 	// the joint fill; nothing is lost (first spend wins) but the attempt is wasted.
+	// The lock is a height, or a median time judged by the tip's median time.
 	if tv, ok := view.(interface {
 		Tip() (string, int64, error)
 	}); ok {
 		if _, tip, terr := tv.Tip(); terr == nil {
+			var mtp int64
+			if mv, ok := view.(interface{ TipMedianTime() (int64, error) }); ok {
+				mtp, _ = mv.TipMedianTime()
+			}
 			for _, ct := range []*seqobv1.CovenantTerms{m.RestingCovenant, m.IncomingCovenant} {
-				if exp := int64(ct.GetExpiryLocktime()); exp != 0 && tip >= exp {
-					return 0, 0, fmt.Errorf("covenant %s:%d is past its refund expiry %d (tip %d)", ct.GetCovenantTxid(), ct.GetCovenantVout(), exp, tip)
+				exp := int64(ct.GetExpiryLocktime())
+				if exp == 0 {
+					continue
+				}
+				if open, _ := (covenant.Order{ExpiryLocktime: exp}).RefundOpen(tip, mtp); open {
+					return 0, 0, fmt.Errorf("covenant %s:%d is past its refund expiry %d (tip %d, median time %d)", ct.GetCovenantTxid(), ct.GetCovenantVout(), exp, tip, mtp)
 				}
 			}
 		}

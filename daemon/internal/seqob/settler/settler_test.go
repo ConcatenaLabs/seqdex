@@ -3,10 +3,13 @@ package settler
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
+	"strings"
 	"testing"
 
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/matcher"
+	"github.com/aejkcs50/seqdex/daemon/internal/seqob/watcher"
 	"github.com/aejkcs50/seqdex/daemon/pkg/covenant"
 )
 
@@ -69,4 +72,50 @@ func repeat(h string, n int) string {
 		out += h
 	}
 	return out
+}
+
+// expiryView answers Tip and TipMedianTime; Inspect is never reached when a
+// covenant is past its refund lock.
+type expiryView struct{ height, mtp int64 }
+
+func (v expiryView) Tip() (string, int64, error)   { return "tip", v.height, nil }
+func (v expiryView) TipMedianTime() (int64, error) { return v.mtp, nil }
+func (v expiryView) Inspect(string, uint32, string, string) (watcher.CovState, error) {
+	return watcher.CovState{}, errInspected
+}
+
+var errInspected = errors.New("inspected")
+
+// A covenant past its REFUND lock is not settled, whether the lock is a height
+// or a median time (judged by the tip's median time).
+func TestResolveSkipsACovenantPastItsRefundLock(t *testing.T) {
+	var x, y [32]byte
+	y[0] = 1
+	mk := func(expiry uint32) matcher.Match {
+		a := terms(x, y, 1, 1, 1, bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32), repeat("aa", 32), 0)
+		b := terms(y, x, 1, 1, 1, bytes.Repeat([]byte{3}, 32), bytes.Repeat([]byte{4}, 32), repeat("bb", 32), 0)
+		a.ExpiryLocktime = expiry
+		b.ExpiryLocktime = 499_999_999 // a height far ahead: only a's lock decides
+		return matcher.Match{RestingCovenant: a, IncomingCovenant: b}
+	}
+	const T = 1792611631
+	for _, c := range []struct {
+		name   string
+		expiry uint32
+		view   expiryView
+		past   bool
+	}{
+		{"height lock reached", 400, expiryView{height: 400}, true},
+		{"height lock ahead", 400, expiryView{height: 399}, false},
+		{"time lock, median time equal", T, expiryView{height: 9_000_000, mtp: T}, false},
+		{"time lock, median time past", T, expiryView{height: 1, mtp: T + 1}, true},
+	} {
+		_, _, err := Resolve(mk(c.expiry), c.view)
+		if c.past != (err != nil && strings.Contains(err.Error(), "past its refund expiry")) {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if !c.past && !errors.Is(err, errInspected) {
+			t.Fatalf("%s: went no further than the lock: %v", c.name, err)
+		}
+	}
 }

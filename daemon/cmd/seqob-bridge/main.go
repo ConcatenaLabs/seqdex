@@ -70,7 +70,7 @@ type covInput struct {
 	MinLot   uint64 `json:"minlot"`
 	Prog     string `json:"prog"`     // 32-byte maker payout program hex
 	MakerX   string `json:"makerx"`   // 32-byte hex
-	Expiry   int64  `json:"expiry"`   // REFUND absolute-locktime height
+	Expiry   int64  `json:"expiry"`   // REFUND absolute lock: a height, or a median time from 500000000
 	Internal string `json:"internal"` // optional 32-byte internal key hex; default NUMS
 	Locked   uint64 `json:"locked"`   // atoms of X currently locked in the covenant UTXO
 	Fill     uint64 `json:"fill"`     // atoms of X taken by this cross

@@ -784,11 +784,11 @@ type CovenantTerms struct {
 	AssetB       string `protobuf:"bytes,4,opt,name=asset_b,json=assetB,proto3" json:"asset_b,omitempty"`     // 32-byte internal-order asset id hex
 	RateNum      uint64 `protobuf:"varint,5,opt,name=rate_num,json=rateNum,proto3" json:"rate_num,omitempty"` // required_B = ceil(filled * rate_num / rate_den)
 	RateDen      uint64 `protobuf:"varint,6,opt,name=rate_den,json=rateDen,proto3" json:"rate_den,omitempty"`
-	MakerProg    []byte `protobuf:"bytes,7,opt,name=maker_prog,json=makerProg,proto3" json:"maker_prog,omitempty"`             // maker credit witness program (32 bytes for v1)
+	MakerProg    []byte `protobuf:"bytes,7,opt,name=maker_prog,json=makerProg,proto3" json:"maker_prog,omitempty"`             // maker credit witness program (32 bytes for v1): a plain key, never an Arca leaf or board script
 	MakerProgVer uint32 `protobuf:"varint,8,opt,name=maker_prog_ver,json=makerProgVer,proto3" json:"maker_prog_ver,omitempty"` // witness version of the maker credit output (1)
 	MinLot       uint64 `protobuf:"varint,9,opt,name=min_lot,json=minLot,proto3" json:"min_lot,omitempty"`                     // dust-griefing floor on filled and on any remainder
 	// REFUND leaf: <expiry_locktime> CLTV DROP <maker_x> CHECKSIG.
-	ExpiryLocktime uint32 `protobuf:"varint,10,opt,name=expiry_locktime,json=expiryLocktime,proto3" json:"expiry_locktime,omitempty"` // absolute-height CLTV the maker reclaims after
+	ExpiryLocktime uint32 `protobuf:"varint,10,opt,name=expiry_locktime,json=expiryLocktime,proto3" json:"expiry_locktime,omitempty"` // absolute CLTV the maker reclaims after: a height below 500,000,000, a median time past (unix seconds) from it
 	MakerX         []byte `protobuf:"bytes,11,opt,name=maker_x,json=makerX,proto3" json:"maker_x,omitempty"`                          // maker x-only key (32 bytes) authorizing REFUND
 	// Taproot reconstruction inputs. internal_key is the 32-byte x-only internal
 	// key (NUMS by default; a NON-NUMS key is a maker-cancellable/key-path-rug

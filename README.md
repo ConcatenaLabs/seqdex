@@ -147,7 +147,15 @@ the node's tapscript introspection opcodes. The relay only advertises the
 outpoint (`CovenantTerms`); a taker re-derives the output key and verifies it
 against the chain, then spends the UTXO in a fill that pays the maker its pinned
 price. The order *is* the coin, so oversell is impossible and the maker can be
-offline. The leaf binds the order spent at input `k` to its maker's credit at
+offline. The REFUND leaf returns the coin to its maker once the order's
+`expiry_locktime` has passed: a block height below 500,000,000, a median time
+past (unix seconds) from it. New orders from the web wallet take a median time
+a day ahead, since a height lock opens later than planned after an anchor
+rollback disconnects blocks, and an operator that fills only orders whose
+refund is hours away would have to turn heights into hours at an assumed block
+rate. The maker's credit program (`maker_prog`) must be a plain key, never an
+Arca leaf or board script: one maker-and-operator signature pair over such a
+script spends two equal credits paid to it at once. The leaf binds the order spent at input `k` to its maker's credit at
 output `2k` and its remainder at `2k+1`, so one transaction can fill several
 orders, at inputs `0..n-1`, with everything else after their `2n` outputs: a
 taker taking several books at once (`seqob-cli covfill` with several offers),
