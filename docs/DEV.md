@@ -296,6 +296,7 @@ script: one maker-and-operator signature pair over such a script spends two
 equal credits paid to it at once.
 
 ```sh
+# -num, -den and -minlot below 2^63 (the FILL leaf reads a larger term as negative)
 ./bin/seqob-covenant derive -a <A> -b <B> -num N -den D -minlot M -prog P -expiry E -makerx X
 ./bin/seqob-covenant fill   ...derive flags... -locked L -filled F -k K
 ./bin/seqob-covenant filltx < spec.json        # several orders, order k at input k

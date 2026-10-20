@@ -172,7 +172,8 @@ It is one program for every order, the terms held as data in a leaf beside it,
 so an order's address is the pinned commitment root plus its terms and Go
 derives it with no compiler. Its fill compares the price on 128-bit products,
 so any 64-bit amount and price fills, where the tapscript leaf must keep
-`filled × rate_num` under 2^63. Every spend's pruned program is a constant of
+`filled × rate_num` under 2^63 and reads any term of 2^63 or more as negative
+(the Go builder, the validator and the web wallet refuse such terms). Every spend's pruned program is a constant of
 the template, so Go builds each fill's witness with no compiler too; a refund
 needs the refund key's signature over the transaction's Simplicity
 `sig_all_hash`. A fill in the same layout costs more: 917 vB against 668 vB for

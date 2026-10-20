@@ -231,7 +231,10 @@ risk is its own fronted inventory, bounded by the per-offer 0-conf cap.
 ### `cmd/seqob-covenant`: the covenant builder CLI
 
 `derive` prints a resting order's leaves, merkle data, output key and
-scriptPubKey; `fill` prints the permissionless FILL spend of an order at input
+scriptPubKey, and refuses a `rate_num`, `rate_den` or `min_lot` of 2^63 or
+more: the FILL leaf's signed 64-bit opcodes would read it as negative and fill
+the order for any credit (the relay's validator refuses it too, and an order
+that needs such a term is a Simplicity order, `simderive`); `fill` prints the permissionless FILL spend of an order at input
 `k` (credit index `2k`, remainder index `2k+1`, witness, control block);
 `filltx` lays out a transaction filling several orders, order `k` at input
 `k`, from a JSON spec on stdin, and runs every order's leaf over it; `check`

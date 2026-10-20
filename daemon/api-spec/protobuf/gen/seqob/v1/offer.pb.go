@@ -794,10 +794,10 @@ type CovenantTerms struct {
 	CovenantVout uint32 `protobuf:"varint,2,opt,name=covenant_vout,json=covenantVout,proto3" json:"covenant_vout,omitempty"`
 	// Order constants baked into the FILL leaf (INTERNAL byte order, as on-chain
 	// introspection returns them). asset_a rests; asset_b pays for it.
-	AssetA       string `protobuf:"bytes,3,opt,name=asset_a,json=assetA,proto3" json:"asset_a,omitempty"`     // 32-byte internal-order asset id hex
-	AssetB       string `protobuf:"bytes,4,opt,name=asset_b,json=assetB,proto3" json:"asset_b,omitempty"`     // 32-byte internal-order asset id hex
-	RateNum      uint64 `protobuf:"varint,5,opt,name=rate_num,json=rateNum,proto3" json:"rate_num,omitempty"` // required_B = ceil(filled * rate_num / rate_den)
-	RateDen      uint64 `protobuf:"varint,6,opt,name=rate_den,json=rateDen,proto3" json:"rate_den,omitempty"`
+	AssetA       string `protobuf:"bytes,3,opt,name=asset_a,json=assetA,proto3" json:"asset_a,omitempty"`                      // 32-byte internal-order asset id hex
+	AssetB       string `protobuf:"bytes,4,opt,name=asset_b,json=assetB,proto3" json:"asset_b,omitempty"`                      // 32-byte internal-order asset id hex
+	RateNum      uint64 `protobuf:"varint,5,opt,name=rate_num,json=rateNum,proto3" json:"rate_num,omitempty"`                  // required_B = ceil(filled * rate_num / rate_den); below 2^63, as rate_den and min_lot
+	RateDen      uint64 `protobuf:"varint,6,opt,name=rate_den,json=rateDen,proto3" json:"rate_den,omitempty"`                  // (the leaf's signed opcodes read a larger term as negative)
 	MakerProg    []byte `protobuf:"bytes,7,opt,name=maker_prog,json=makerProg,proto3" json:"maker_prog,omitempty"`             // maker credit witness program (32 bytes for v1): a plain key, never an Arca leaf or board script
 	MakerProgVer uint32 `protobuf:"varint,8,opt,name=maker_prog_ver,json=makerProgVer,proto3" json:"maker_prog_ver,omitempty"` // witness version of the maker credit output (1)
 	MinLot       uint64 `protobuf:"varint,9,opt,name=min_lot,json=minLot,proto3" json:"min_lot,omitempty"`                     // dust-griefing floor on filled and on any remainder

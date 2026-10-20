@@ -169,6 +169,29 @@ func CeilPrice(filled, rateNum, rateDen uint64) uint64 {
 	return q
 }
 
+// MaxLeafTerm is the largest rate_num, rate_den or min_lot the FILL leaf reads
+// as the number it is. OP_MUL64, OP_ADD64, OP_DIV64 and OP_GREATERTHANOREQUAL64
+// take their 8-byte operands as SIGNED: a term of 2^63 or more is negative
+// there, the price the leaf computes is negative or the floors pass, and anyone
+// fills the order for any credit (rate_num 2^64-1 reads as -1). CheckTerms
+// refuses such terms; BuildFillLeaf never builds them.
+const MaxLeafTerm = math.MaxInt64
+
+// CheckTerms refuses a term the FILL leaf would read as negative.
+func (o Order) CheckTerms() error {
+	for _, t := range []struct {
+		name string
+		v    uint64
+	}{{"rate_num", o.RateNum}, {"rate_den", o.RateDen}, {"min_lot", o.MinLot}} {
+		if t.v > MaxLeafTerm {
+			return fmt.Errorf("%s %d is 2^63 or more: the tapscript FILL leaf's signed 64-bit arithmetic reads it as negative, "+
+				"so anyone could fill the order for any credit; an order whose price or size needs 64 bits is a Simplicity "+
+				"order (seqdex/order, seqob-covenant simderive), whose fill compares the price on 128-bit products", t.name, t.v)
+		}
+	}
+	return nil
+}
+
 // MaxLeafProduct is the largest filled*rateNum + rateDen - 1 the FILL leaf can
 // evaluate: OP_MUL64/OP_ADD64 are signed 64-bit and push false on overflow, after
 // which the leaf's OP_VERIFY fails for every fill, full or partial, and the locked
