@@ -231,7 +231,9 @@ scriptPubKey; `fill` prints the permissionless FILL spend of an order at input
 `k` (credit index `2k`, remainder index `2k+1`, witness, control block);
 `filltx` lays out a transaction filling several orders, order `k` at input
 `k`, from a JSON spec on stdin, and runs every order's leaf over it; `check`
-judges a transaction as an order's FILL leaf at input `k` would. The scripts
+judges a transaction as an order's FILL leaf at input `k` would, reading the
+raw transaction with `covenant.ReadOutputs` rather than go-elements, which
+cannot read a Sequentia asset issuance (an Arca round issues its batch token). The scripts
 are byte-identical to the Python builder in `../test/regtest`, pinned by
 `pkg/covenant/leaf_test.go`; the multi-order layout is pinned by
 `pkg/covenant/testdata/fill_vectors.json`, which the web wallet's
