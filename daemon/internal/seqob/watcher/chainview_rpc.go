@@ -97,10 +97,12 @@ func (c *rpcChain) Tip() (string, int64, error) {
 }
 
 type txout struct {
-	Confirmations int         `json:"confirmations"`
-	Value         json.Number `json:"value"`
-	Asset         string      `json:"asset"`
-	ScriptPubKey  struct {
+	Confirmations   int         `json:"confirmations"`
+	Value           json.Number `json:"value"`
+	Asset           string      `json:"asset"`
+	ValueCommitment string      `json:"valuecommitment"`
+	AssetCommitment string      `json:"assetcommitment"`
+	ScriptPubKey    struct {
 		Hex string `json:"hex"`
 	} `json:"scriptPubKey"`
 }
@@ -139,6 +141,8 @@ func (c *rpcChain) Inspect(txid string, vout uint32, orderSPKHex, assetADisplay 
 		st.AssetDisplay = utxo.Asset
 		st.SPKHex = utxo.ScriptPubKey.Hex
 		st.ConfirmedUTXO = utxo.Confirmations >= 1
+		st.Confidential = utxo.Value.String() == "" || utxo.Asset == "" ||
+			utxo.ValueCommitment != "" || utxo.AssetCommitment != ""
 		return st, nil
 	}
 

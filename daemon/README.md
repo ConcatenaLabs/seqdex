@@ -69,6 +69,15 @@ GET  /v1/ws                                 WebSocket (To/From envelope): book
                                             opaque SwapMsg courier
 ```
 
+With `-node-rpc`, a covenant offer is admitted only when its outpoint is
+unspent, pays the program its signed terms derive, holds asset A explicitly,
+and holds at least `min_lot` and at most `offer_amount`; the relay lists the
+order at what the outpoint holds. The outpoint is outside the maker's
+signature, so after a part fill (the order rests again at the fill's output
+2k+1) the same signed offer can be posted again naming the remainder, by its
+maker or anyone holding it, and is listed at the remainder's size. That is how
+a covenant order returns to the book after a relay restart.
+
 Live instances: `https://sequentiatestnet.com/seqob/v1/...` (on-chain rails),
 `/seqob-pln/v1/...` (Lightning rails), `/seqob-conf/v1/...` (confidential
 markets); one `seqobd` process per mount.
@@ -316,7 +325,10 @@ internal/seqob/offer       offer/cancel canonical bytes, signing, verification,
 internal/seqob/offerstore  the book: keys, statuses, partial fills, anchor-aware
                            FILLED, reopen hook, expiry sweeper, trade log
 internal/seqob/validator   admission: signature/schema/amounts/expiry checks,
-                           rate limits, replay gate (liveness probe = stub)
+                           rate limits, replay gate, the liveness probe
+                           (covenant orders, with -node-rpc: watcher's chain
+                           probe, which also gives the size an order is
+                           listed at)
 internal/seqob/matcher     continuous matching of crossing orders, including
                            covenant-vs-covenant and cross-rail matches
 internal/seqob/session     lift-session router: peer binding, opaque courier,

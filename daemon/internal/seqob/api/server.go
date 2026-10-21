@@ -151,7 +151,8 @@ func (s *Server) handleOfferSubmit(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusBadRequest, "decode offer: "+err.Error())
 		return
 	}
-	if err := s.validator.ValidateOffer(r.Context(), &o, clientIP(r)); err != nil {
+	listed, err := s.validator.Admit(r.Context(), &o, clientIP(r))
+	if err != nil {
 		if errors.Is(err, validator.ErrReplay) {
 			// ITEM A: byte-identical replay of an already-resting offer; a no-op that
 			// consumed no rate budget. Echo the live status rather than re-submitting
@@ -166,7 +167,7 @@ func (s *Server) handleOfferSubmit(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusBadRequest, "invalid offer: "+err.Error())
 		return
 	}
-	k, err := s.store.Submit(&o)
+	k, err := s.store.SubmitAt(&o, listed)
 	if err != nil {
 		httpErr(w, http.StatusConflict, "submit: "+err.Error())
 		return

@@ -59,7 +59,7 @@ message Offer {
   TradeDir trade_dir     = 4;
 
   uint64 base_amount     = 5;  // total size in base atoms
-  uint64 offer_amount    = 6;  // exact atoms the maker gives
+  uint64 offer_amount    = 6;  // exact atoms the maker gives (a covenant order: the most it sells; the relay lists it at what its outpoint holds)
   string offer_asset     = 7;  // hex (= base or quote per trade_dir)
   uint64 want_amount     = 8;  // exact atoms the maker wants in return
   string want_asset      = 9;  // hex
@@ -163,6 +163,14 @@ message LightningTerms {
 // cancel, but is not load-bearing for settlement correctness (the chain is
 // authoritative). Design: docs/simplicity-dex-covenant-offers-design.md
 // section 4 (the design space; the shipped leaf is tapscript, pkg/covenant).
+//
+// The outpoint is outside the signed bytes. A part fill re-creates the order
+// under the same program at the fill's output 2k+1, holding less than
+// offer_amount; the relay's watcher re-points the offer there, and the same
+// signed offer may be posted again naming that remainder (after a relay
+// restart, by anyone holding it). The relay lists a covenant order at what its
+// outpoint holds, and admits it only when the outpoint pays the program its
+// terms derive, explicitly, holding at least min_lot and at most offer_amount.
 message CovenantTerms {
   string covenant_txid       = 1;  // the funded taproot UTXO (display txid hex)
   uint32 covenant_vout       = 2;
@@ -203,7 +211,8 @@ message CovenantTerms {
 // a partial fill rests again at 2k+1 under the same script. The refund key
 // takes the coin back once the lock time reaches expiry_locktime. As for
 // CovenantTerms, the outpoint is chain state the relay's watcher re-points
-// after a partial fill, outside the signed bytes.
+// after a partial fill, outside the signed bytes, and the relay lists the
+// order at what its outpoint holds.
 message SimplicityCovenantTerms {
   string covenant_txid   = 1;  // the funded output (display txid hex)
   uint32 covenant_vout   = 2;

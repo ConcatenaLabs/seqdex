@@ -6,9 +6,11 @@
 //
 // It does NOT enforce a min_anchor_depth floor: per the project policy override
 // the DEX is 0-conf tolerant and min_anchor_depth is a maker-only dial that
-// defaults to 0. The liveness probe is an interface with a no-op default and is
-// explicitly a Phase-1 stub (confidential balances make a precise probe
-// impossible; atomic co-signing is the real safety net).
+// defaults to 0. The liveness probe is an interface with a no-op default; a
+// relay with a node reads the chain for covenant orders (watcher.SubmitProbe),
+// which also sets the size a covenant order resting at its remainder is listed
+// at. Interactive offers are not probed (confidential balances make a precise
+// probe impossible; atomic co-signing is the real safety net).
 package validator
 
 import (
@@ -53,18 +55,26 @@ type RestingOffers interface {
 	RestingMakerSig(makerPubkey, offerID string) (sig []byte, ok bool)
 }
 
-// LivenessProbe checks (best-effort, read-only) that a maker plausibly holds the
-// asset it is offering. PHASE-1 STUB: the default NoopLivenessProbe always
-// passes. A later implementation would query a read-only Sequentia node RPC.
+// LivenessProbe checks (best-effort, read-only) that an offer is backed as it
+// claims. The relay's covenant probe (watcher.SubmitProbe) reads the chain: a
+// covenant order is admitted only if its outpoint is unspent under the order's
+// own program and holds between the order's min_lot and its signed
+// offer_amount.
+//
+// listed is the base atoms the order is listed at: 0 means its signed size (an
+// offer that is not a covenant, or no chain evidence either way); a covenant
+// order whose outpoint holds less than offer_amount (its remainder after a part
+// fill) is listed at what the outpoint holds, never more than the maker signed.
 type LivenessProbe interface {
-	CheckOffer(ctx context.Context, o *seqobv1.Offer) error
+	CheckOffer(ctx context.Context, o *seqobv1.Offer) (listed uint64, err error)
 }
 
-// NoopLivenessProbe is the Phase-1 default: it accepts every offer.
+// NoopLivenessProbe is the probe of a relay without a node: it accepts every
+// offer at its signed size.
 type NoopLivenessProbe struct{}
 
-// CheckOffer always returns nil (Phase-1 stub).
-func (NoopLivenessProbe) CheckOffer(context.Context, *seqobv1.Offer) error { return nil }
+// CheckOffer always admits the offer at its signed size.
+func (NoopLivenessProbe) CheckOffer(context.Context, *seqobv1.Offer) (uint64, error) { return 0, nil }
 
 // Config tunes validation.
 type Config struct {
@@ -146,29 +156,37 @@ func New(cfg Config, probe LivenessProbe) *Validator {
 // genuine maker (the only party able to produce a valid maker_sig) is therefore
 // the only one who spends its own per-pubkey budget.
 func (v *Validator) ValidateOffer(ctx context.Context, o *seqobv1.Offer, ip string) error {
+	_, err := v.Admit(ctx, o, ip)
+	return err
+}
+
+// Admit is ValidateOffer that also returns the base atoms the offer is listed
+// at (see LivenessProbe): 0 for its signed size, less for a covenant order
+// resting at its remainder. The relay stores the offer at that size.
+func (v *Validator) Admit(ctx context.Context, o *seqobv1.Offer, ip string) (listed uint64, err error) {
 	if err := v.checkIPRate(ip); err != nil {
-		return err
+		return 0, err
 	}
 	if n := proto.Size(o); n > MaxOfferBytes {
-		return fmt.Errorf("offer too large (%d bytes, max %d)", n, MaxOfferBytes)
+		return 0, fmt.Errorf("offer too large (%d bytes, max %d)", n, MaxOfferBytes)
 	}
 	// The pubkey is part of the signed bytes and is the book's key string, so it
 	// cannot be normalised here; both signers emit lowercase, and a mixed-case twin
 	// would be a second book entry for the same key.
 	if pk := o.GetMakerPubkey(); pk != strings.ToLower(pk) {
-		return fmt.Errorf("maker_pubkey must be lowercase hex")
+		return 0, fmt.Errorf("maker_pubkey must be lowercase hex")
 	}
 	if err := offer.VerifyOffer(o); err != nil {
-		return fmt.Errorf("signature: %w", err)
+		return 0, fmt.Errorf("signature: %w", err)
 	}
 	if o.GetSchemaVersion() != v.cfg.SchemaVersion {
-		return fmt.Errorf("unsupported schema_version %d (want %d)", o.GetSchemaVersion(), v.cfg.SchemaVersion)
+		return 0, fmt.Errorf("unsupported schema_version %d (want %d)", o.GetSchemaVersion(), v.cfg.SchemaVersion)
 	}
 	if err := v.checkTerms(o); err != nil {
-		return err
+		return 0, err
 	}
 	if err := v.checkExpiry(o); err != nil {
-		return err
+		return 0, err
 	}
 	// Replay-griefing defense: an attacker can harvest a victim maker's GENUINE
 	// signed offer from the public book and replay it here. It passes VerifyOffer
@@ -182,18 +200,19 @@ func (v *Validator) ValidateOffer(ctx context.Context, o *seqobv1.Offer, ip stri
 	// maker_sig and falls through to consume budget and be stored.
 	if v.book != nil {
 		if sig, ok := v.book.RestingMakerSig(o.GetMakerPubkey(), o.GetOfferId()); ok && bytes.Equal(sig, o.GetMakerSig()) {
-			return ErrReplay
+			return 0, ErrReplay
 		}
 	}
 	// Charge the per-maker_pubkey budget only now that maker_sig is verified and the
 	// offer is a genuinely new or changed resting offer (not a no-op replay).
 	if err := v.checkPubkeyRate(o.GetMakerPubkey()); err != nil {
-		return err
+		return 0, err
 	}
-	if err := v.probe.CheckOffer(ctx, o); err != nil {
-		return fmt.Errorf("liveness: %w", err)
+	listed, err = v.probe.CheckOffer(ctx, o)
+	if err != nil {
+		return 0, fmt.Errorf("liveness: %w", err)
 	}
-	return nil
+	return listed, nil
 }
 
 func (v *Validator) checkTerms(o *seqobv1.Offer) error {
@@ -269,7 +288,8 @@ func (v *Validator) checkTerms(o *seqobv1.Offer) error {
 // pins (offer.SimOrderOf), tied to the price and the assets the offer
 // advertises, and an expiry set. Its fill compares the price on 128-bit
 // products, so no arithmetic bound applies; the chain probe then checks the
-// outpoint pays the program the terms make and holds exactly offer_amount.
+// outpoint pays the program the terms make and holds between min_lot and
+// offer_amount.
 func checkSimplicityCovenant(o *seqobv1.Offer) error {
 	st := o.GetSimplicityCovenant()
 	if b, err := hex.DecodeString(st.GetCovenantTxid()); err != nil || len(b) != 32 {

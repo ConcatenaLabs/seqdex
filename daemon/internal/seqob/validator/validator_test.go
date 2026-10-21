@@ -282,8 +282,8 @@ func TestMinAnchorDepthNotFloored(t *testing.T) {
 
 type failProbe struct{}
 
-func (failProbe) CheckOffer(context.Context, *seqobv1.Offer) error {
-	return errors.New("no funds")
+func (failProbe) CheckOffer(context.Context, *seqobv1.Offer) (uint64, error) {
+	return 0, errors.New("no funds")
 }
 
 func TestLivenessProbeWired(t *testing.T) {

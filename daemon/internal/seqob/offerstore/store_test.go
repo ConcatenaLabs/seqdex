@@ -800,3 +800,63 @@ func TestSubmitDuplicateReturnsErrExists(t *testing.T) {
 		t.Fatalf("duplicate Submit err = %v; want ErrExists", err)
 	}
 }
+
+// A covenant order is listed at the size its outpoint holds when that is less
+// than it was signed for (its remainder), marked re-rested so a reorg that takes
+// the outpoint away holds it; never above its signed size; and an interactive
+// offer is always listed at its signed size.
+func TestSubmitAtListsACovenantRemainder(t *testing.T) {
+	s := New(nil)
+	k := key(t)
+	rem := mkCovOffer(t, k, "rem", "aabb", 1, 90)
+	kr, err := s.SubmitAt(rem, 37)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, _ := s.Get(kr)
+	if e.ActiveAmount != 37 || e.Status != seqobv1.OfferStatus_OFFER_STATUS_PARTIAL || !e.reRested {
+		t.Fatalf("remainder listed %+v", e)
+	}
+	if st, _ := s.OrderStatusOf(kr); st.GetActiveAmount() != 37 {
+		t.Fatalf("status %v", st)
+	}
+	// A ghost of the remainder outpoint is held (active 0), not dropped.
+	if err := s.HoldCovenantGhost(kr, "reorg"); err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := s.Get(kr); !ok || e.ActiveAmount != 0 {
+		t.Fatalf("held: %+v %v", e, ok)
+	}
+	// Re-signed while it rests at its remainder: the listed size, not the signed one.
+	re := mkCovOffer(t, k, "rem", "aabb", 1, 90)
+	re.CreatedAtUnix++
+	re.MakerSig = nil
+	if err := offer.SignOffer(re, k); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EditAt(re, 37); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := s.Get(kr); e.ActiveAmount != 37 {
+		t.Fatalf("edit listed %d", e.ActiveAmount)
+	}
+	for _, c := range []struct {
+		id     string
+		listed uint64
+	}{{"none", 0}, {"over", 200}, {"exact", 90}} {
+		kc, err := s.SubmitAt(mkCovOffer(t, k, c.id, "ccdd", 0, 90), c.listed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e, _ := s.Get(kc); e.ActiveAmount != 90 || e.Status != seqobv1.OfferStatus_OFFER_STATUS_OPEN || e.reRested {
+			t.Fatalf("%s: %+v", c.id, e)
+		}
+	}
+	ki, err := s.SubmitAt(mkOffer(t, k, "plain", uint64(time.Now().Add(time.Hour).Unix())), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := s.Get(ki); e.ActiveAmount != e.Offer.GetBaseAmount() {
+		t.Fatalf("interactive listed %d", e.ActiveAmount)
+	}
+}
