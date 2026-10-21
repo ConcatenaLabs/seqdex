@@ -115,6 +115,7 @@ message Offer {
     LightningTerms  lightning   = 22; // submarine, pure-LN and sub-asset rails (ln_direction)
     CovenantTerms   covenant    = 23; // funded, self-enforcing resting order (passive CLOB)
     SimplicityCovenantTerms simplicity_covenant = 25; // the same, under the Simplicity template seqdex/order
+    ArcaRestingTerms arca_resting = 26; // an order resting as a leaf in an operator's tree, filled there with its maker away
   }
 
   // secp256k1 signature by maker_pubkey over the canonical serialization of all
@@ -227,6 +228,47 @@ message SimplicityCovenantTerms {
   uint32 expiry_locktime = 9;  // refund lock: a height below 500,000,000, a median time past (unix seconds) from it
   bytes  refund_key      = 10; // 32-byte x-only key that takes the coin back after expiry_locktime
   string template_hash   = 11; // the template the terms are for (hex); a taker fills only a template it pins
+}
+
+// ArcaRestingTerms is an order resting in an operator's tree as an order-2
+// leaf: a coin of asset_a that takers fill out of round, with its maker
+// offline, each fill co-signed by the operator and held to these terms by the
+// leaf's own program (at least ceil(filled * rate_num / rate_den) of asset_b
+// to the maker, a part fill resting again under a new salt). The maker
+// cancels it with the operator; after an unroll and the exit delay anyone
+// lands it whole as the on-chain order seqdex/order for the same terms (the
+// landed_* fields), which leaves the relay's book.
+//
+// A taker fills it through the operator (POST {operator_url}/v1/order_fill,
+// naming order_id and the coin it rests at), never through the relay. The
+// relay lists it only for an operator it follows (seqobd -arca-operator), only
+// while the operator's state view (POST /v1/order_state) reports it resting at
+// the locator with exactly that value, these terms and this operator key, and
+// only before its delist time: the earlier of landed_expiry less six hours
+// (the operator co-signs no fill within that margin) and the exit deadline of
+// the batches it rests on (three days before their first expiry). The relay
+// follows each fill to the coin the remainder rests at, records the fill by
+// the operator's transfer id, and delists the order when it is filled,
+// cancelled, landed or near its delist time.
+//
+// The locator (coin, value) is outside the signed bytes: every fill moves the
+// order to a new coin, and the maker is away and cannot re-sign. order_id, the
+// leaf id of the order's first coin, is signed: it never moves.
+message ArcaRestingTerms {
+  string operator_url  = 1;  // the operator's base URL, as the relay's -arca-operator names it
+  string operator_key  = 2;  // the operator's key S, x-only hex (its /v1/info "operator")
+  string order_id      = 3;  // the leaf id of the order's first coin (hex), constant across fills
+  string asset_a       = 4;  // display hex: the asset the order sells (= offer_asset)
+  string asset_b       = 5;  // display hex: the asset a fill pays in (= want_asset)
+  uint64 rate_num      = 6;  // a fill of f atoms pays at least ceil(f * rate_num / rate_den) of asset_b
+  uint64 rate_den      = 7;
+  uint64 min_lot       = 8;  // floors every fill and every remainder
+  bytes  landed_maker  = 9;  // 32 bytes: SHA256 of the scriptPubKey the landed seqdex/order pays
+  uint32 landed_expiry = 10; // the landed order's REFUND time, a median time past (unix seconds)
+  bytes  refund_key    = 11; // 32-byte x-only key of the landed order's REFUND
+  // The locator, outside the signed bytes:
+  string coin          = 12; // the leaf id of the coin the order rests at now
+  uint64 value         = 13; // the atoms of asset_a that coin holds
 }
 
 // A signed cancel. nonce defeats replay against a re-posted same offer_id.

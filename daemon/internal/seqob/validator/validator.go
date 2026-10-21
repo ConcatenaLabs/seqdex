@@ -92,6 +92,11 @@ type Config struct {
 	MaxOffersPerMinPerIP     int
 	// Now is the clock (default time.Now).
 	Now func() time.Time
+	// ListResting admits orders resting in an Arca operator's tree
+	// (ArcaRestingTerms). Only a relay that follows operators sets it, and its
+	// liveness probe then checks each such order against its operator's state
+	// view; without it every such offer is refused.
+	ListResting bool
 }
 
 // DefaultConfig returns sane Phase-1 defaults.
@@ -301,6 +306,14 @@ func (v *Validator) checkTerms(o *seqobv1.Offer) error {
 	if o.GetSimplicityCovenant() != nil {
 		return checkSimplicityCovenant(o)
 	}
+	if offer.IsResting(o) {
+		if err := offer.CheckRestingTerms(o); err != nil {
+			return err
+		}
+		if !v.cfg.ListResting {
+			return fmt.Errorf("an order resting in an Arca operator's tree is listed only by a relay that follows its operator (seqobd -arca-operator): this relay follows none")
+		}
+	}
 	return nil
 }
 
@@ -467,8 +480,8 @@ func internalToDisplay(s string) (string, bool) {
 // blinded maker output there is no second blinded leg, and the public swap ratio
 // would leak the amount.
 func (v *Validator) checkConfidential(o *seqobv1.Offer) error {
-	if o.GetCrossChain() != nil || o.GetLightning() != nil || offer.IsCovenant(o) {
-		return fmt.Errorf("confidential offer must use the same-chain co-sign rail (no covenant/cross-chain/lightning)")
+	if o.GetCrossChain() != nil || o.GetLightning() != nil || offer.FilledWithoutMaker(o) {
+		return fmt.Errorf("confidential offer must use the same-chain co-sign rail (no covenant/resting leaf/cross-chain/lightning)")
 	}
 	sc := o.GetSameChain()
 	if sc == nil {

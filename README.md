@@ -191,6 +191,15 @@ The matcher does not auto-cross it, because the owners it hands a match to
 and the crosser skips it for the same reason: it is filled by a taker who
 reads it from the book.
 
+An order can also rest as a leaf in an Arca operator's tree (the `order-2`
+template), under the member `ArcaRestingTerms` (`offer.proto`). Its maker
+rests it and leaves; takers fill it through the operator, each fill co-signed
+by the operator and held to the order's terms by the leaf's own program, and
+a part fill rests the remainder again at a new coin. The offer signs the
+terms, the operator's URL and key and the order id (the leaf id of the
+order's first coin); its locator, the coin it rests at now and what that coin
+holds, is outside the signed bytes, as an on-chain order's outpoint is.
+
 **Cross-chain (BTC on-chain).** The legs are two HTLCs sharing one SHA256
 hashlock, with asymmetric timelocks (the BTC leg always refunds later than the
 Sequentia leg). Forward direction: the taker locks BTC first, the maker locks
