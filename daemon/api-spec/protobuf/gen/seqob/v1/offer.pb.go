@@ -805,9 +805,10 @@ type CovenantTerms struct {
 	ExpiryLocktime uint32 `protobuf:"varint,10,opt,name=expiry_locktime,json=expiryLocktime,proto3" json:"expiry_locktime,omitempty"` // absolute CLTV the maker reclaims after: a height below 500,000,000, a median time past (unix seconds) from it
 	MakerX         []byte `protobuf:"bytes,11,opt,name=maker_x,json=makerX,proto3" json:"maker_x,omitempty"`                          // maker x-only key (32 bytes) authorizing REFUND
 	// Taproot reconstruction inputs. internal_key is the 32-byte x-only internal
-	// key (NUMS by default; a NON-NUMS key is a maker-cancellable/key-path-rug
-	// offer a taker MUST treat with suspicion). merkle_path is the control-block
-	// merkle branch (sibling hashes) proving the FILL leaf under the output key.
+	// key, NUMS when absent. Any other key is a key path that takes the order back
+	// from under a taker: takers refuse such an order and the relay does not list
+	// one. merkle_path is the control-block merkle branch (sibling hashes)
+	// proving the FILL leaf under the output key.
 	InternalKey []byte   `protobuf:"bytes,12,opt,name=internal_key,json=internalKey,proto3" json:"internal_key,omitempty"` // 32-byte x-only internal key (NUMS default)
 	MerklePath  [][]byte `protobuf:"bytes,13,rep,name=merkle_path,json=merklePath,proto3" json:"merkle_path,omitempty"`    // taproot merkle branch (32-byte sibling hashes)
 }

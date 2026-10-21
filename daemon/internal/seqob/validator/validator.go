@@ -336,6 +336,14 @@ func checkCovenant(o *seqobv1.Offer) error {
 	if ik := ct.GetInternalKey(); len(ik) != 0 && len(ik) != 32 {
 		return fmt.Errorf("covenant internal_key must be 32 bytes when present")
 	}
+	// Any internal key but NUMS is a key path: whoever holds it takes the order
+	// back at any moment, from under a taker who is filling it. Takers refuse such
+	// an order (VerifyAgainstSPK), so the relay does not list one. A Simplicity
+	// order (SimplicityCovenantTerms) carries no internal key: its terms derive
+	// the NUMS-keyed output, which the probe requires the outpoint to pay.
+	if ik := ct.GetInternalKey(); len(ik) == 32 && !bytes.Equal(ik, covenant.NUMS[:]) {
+		return fmt.Errorf("covenant internal_key %x is not the NUMS point: it is a key path that takes the order back from under any taker, so the relay lists only NUMS-keyed orders", ik)
+	}
 	if ct.GetExpiryLocktime() == 0 {
 		return fmt.Errorf("covenant expiry_locktime must be set")
 	}
