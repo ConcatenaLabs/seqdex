@@ -154,7 +154,8 @@ and `sequentia-cli`; `pkg/xchain/testdata/start-regtest.sh` falls back to the le
   covenant byte order; a change on either side must land on both.
   `daemon/internal/seqob/offer/testdata/covenant_offer_vectors.json` (an offer signed at its funding
   outpoint and served again after a move), its twin `simplicity_offer_vectors.json` for the
-  `SimplicityCovenantTerms` member, and `daemon/pkg/covenant/testdata/fill_vectors.json` (the
+  `SimplicityCovenantTerms` member, `time_in_force_offer_vectors.json` (an offer signed with each
+  `time_in_force`, a field protobuf-go writes before the settlement oneof), and `daemon/pkg/covenant/testdata/fill_vectors.json` (the
   multi-order fill layout) are copied into the web wallet, whose tests hold its code to them.
 - Byte order at the covenant boundary is display-vs-internal, and the wallet mirrors this repo's
   `reverseHex`/`displayHex` conventions. Golden vectors pin the two implementations together.
