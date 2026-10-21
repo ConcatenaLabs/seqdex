@@ -115,7 +115,7 @@ message Offer {
     LightningTerms  lightning   = 22; // submarine, pure-LN and sub-asset rails (ln_direction)
     CovenantTerms   covenant    = 23; // funded, self-enforcing resting order (passive CLOB)
     SimplicityCovenantTerms simplicity_covenant = 25; // the same, under the Simplicity template seqdex/order
-    ArcaRestingTerms arca_resting = 26; // an order resting as a leaf in an operator's tree, filled there with its maker away
+    RestingLeafTerms resting_leaf = 26; // an order resting as a leaf in an operator's tree, filled there with its maker away
   }
 
   // secp256k1 signature by maker_pubkey over the canonical serialization of all
@@ -230,7 +230,7 @@ message SimplicityCovenantTerms {
   string template_hash   = 11; // the template the terms are for (hex); a taker fills only a template it pins
 }
 
-// ArcaRestingTerms is an order resting in an operator's tree as an order-2
+// RestingLeafTerms is an order resting in an operator's tree as an order-2
 // leaf: a coin of asset_a that takers fill out of round, with its maker
 // offline, each fill co-signed by the operator and held to these terms by the
 // leaf's own program (at least ceil(filled * rate_num / rate_den) of asset_b
@@ -254,7 +254,7 @@ message SimplicityCovenantTerms {
 // The locator (coin, value) is outside the signed bytes: every fill moves the
 // order to a new coin, and the maker is away and cannot re-sign. order_id, the
 // leaf id of the order's first coin, is signed: it never moves.
-message ArcaRestingTerms {
+message RestingLeafTerms {
   string operator_url  = 1;  // the operator's base URL, as the relay's -arca-operator names it
   string operator_key  = 2;  // the operator's key S, x-only hex (its /v1/info "operator")
   string order_id      = 3;  // the leaf id of the order's first coin (hex), constant across fills

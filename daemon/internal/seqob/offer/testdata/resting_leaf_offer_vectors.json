@@ -20,7 +20,7 @@
     "expires_at_unix": "1792600000",
     "maker_pubkey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
     "min_anchor_depth": 2,
-    "arca_resting": {
+    "resting_leaf": {
       "operator_url": "https://sequentiatestnet.com/arca",
       "operator_key": "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
       "order_id": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
@@ -56,7 +56,7 @@
     "expires_at_unix": "1792600000",
     "maker_pubkey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
     "min_anchor_depth": 2,
-    "arca_resting": {
+    "resting_leaf": {
       "operator_url": "https://sequentiatestnet.com/arca",
       "operator_key": "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
       "order_id": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
@@ -92,7 +92,7 @@
     "expires_at_unix": "1792600000",
     "maker_pubkey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
     "min_anchor_depth": 2,
-    "arca_resting": {
+    "resting_leaf": {
       "operator_url": "https://sequentiatestnet.com/arca",
       "operator_key": "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
       "order_id": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
@@ -128,7 +128,7 @@
     "expires_at_unix": "1792600000",
     "maker_pubkey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
     "min_anchor_depth": 2,
-    "arca_resting": {
+    "resting_leaf": {
       "operator_url": "https://sequentiatestnet.com/arca",
       "operator_key": "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
       "order_id": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",

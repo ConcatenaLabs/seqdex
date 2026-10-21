@@ -93,7 +93,7 @@ type Config struct {
 	// Now is the clock (default time.Now).
 	Now func() time.Time
 	// ListResting admits orders resting in an Arca operator's tree
-	// (ArcaRestingTerms). Only a relay that follows operators sets it, and its
+	// (RestingLeafTerms). Only a relay that follows operators sets it, and its
 	// liveness probe then checks each such order against its operator's state
 	// view; without it every such offer is refused.
 	ListResting bool
@@ -311,7 +311,7 @@ func (v *Validator) checkTerms(o *seqobv1.Offer) error {
 			return err
 		}
 		if !v.cfg.ListResting {
-			return fmt.Errorf("an order resting in an Arca operator's tree is listed only by a relay that follows its operator (seqobd -arca-operator): this relay follows none")
+			return fmt.Errorf("an order resting in an operator's tree is listed only by a relay that follows its operator (seqobd -arca-operator): this relay follows none")
 		}
 	}
 	return nil
