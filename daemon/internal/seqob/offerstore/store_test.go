@@ -843,8 +843,9 @@ func TestSubmitAtListsACovenantRemainder(t *testing.T) {
 	for _, c := range []struct {
 		id     string
 		listed uint64
-	}{{"none", 0}, {"over", 200}, {"exact", 90}} {
-		kc, err := s.SubmitAt(mkCovOffer(t, k, c.id, "ccdd", 0, 90), c.listed)
+		vout   uint32
+	}{{"none", 0, 0}, {"over", 200, 1}, {"exact", 90, 2}} {
+		kc, err := s.SubmitAt(mkCovOffer(t, k, c.id, "ccdd", c.vout, 90), c.listed)
 		if err != nil {
 			t.Fatal(err)
 		}

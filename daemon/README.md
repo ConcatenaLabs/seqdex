@@ -83,6 +83,14 @@ signature, so after a part fill (the order rests again at the fill's output
 maker or anyone holding it, and is listed at the remainder's size. That is how
 a covenant order returns to the book after a relay restart.
 
+The book lists one offer per covenant outpoint: two offers naming one coin
+would count it twice. An offer from the same maker created later than the one
+listed at its outpoint replaces it (the listed one leaves the book, CANCELLED);
+one created at the same time or earlier is refused, and so is any other
+maker's offer for a listed outpoint (409 `covenant outpoint already listed`).
+The rule holds wherever an order enters the book or moves: a post, an edit, a
+re-rest after a part fill, a reorg's undo and a read-back of the covenant book.
+
 **The book across a restart.** The relay keeps its covenant orders, and only
 those, when given `-covenant-book`. A covenant order's maker is offline by
 design and its coin waits on the chain, so after a restart nobody may be there

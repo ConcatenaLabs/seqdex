@@ -124,6 +124,7 @@ type Store struct {
 	mu             sync.RWMutex
 	entries        map[Key]*Entry
 	pairs          map[string]map[Key]bool // pairKey -> set of keys
+	covAt          map[string]Key          // covenant outpoint "txid:vout" -> the one key listed there (outpoint.go)
 	subs           map[int]*subscriber
 	nextSub        int
 	cancelNonce    map[Key]uint64 // highest cancel nonce seen per key (replay defense, survives removal)
@@ -321,6 +322,7 @@ func New(now func() time.Time) *Store {
 	return &Store{
 		entries:      make(map[Key]*Entry),
 		pairs:        make(map[string]map[Key]bool),
+		covAt:        make(map[string]Key),
 		subs:         make(map[int]*subscriber),
 		cancelNonce:  make(map[Key]uint64),
 		settledNonce: make(map[Key]uint64),
@@ -425,6 +427,15 @@ func (s *Store) SubmitAt(o *seqobv1.Offer, listed uint64) (Key, error) {
 		s.mu.Unlock()
 		return Key{}, fmt.Errorf("offer %s/%s: %w", k.MakerPubkey, k.OfferID, ErrExists)
 	}
+	gone, err := s.claimLocked(k, o)
+	if err != nil {
+		s.mu.Unlock()
+		return Key{}, err
+	}
+	var ev *evicted
+	if gone != nil {
+		ev = s.evictLocked(*gone)
+	}
 	active, status, reRested := listing(o, listed)
 	e := &Entry{
 		Offer:        o,
@@ -445,6 +456,7 @@ func (s *Store) SubmitAt(o *seqobv1.Offer, listed uint64) (Key, error) {
 	}
 	st := e.orderStatus(k)
 	s.mu.Unlock()
+	s.announceEvicted(ev)
 	s.broadcastListed(o, st)
 	return k, nil
 }
@@ -482,6 +494,15 @@ func (s *Store) EditAt(o *seqobv1.Offer, listed uint64) error {
 		s.mu.Unlock()
 		return fmt.Errorf("edit created_at_unix moved backwards")
 	}
+	gone, err := s.claimLocked(k, o)
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	var ev *evicted
+	if gone != nil {
+		ev = s.evictLocked(*gone)
+	}
 	// Remove from the old pair bucket in case the pair changed, then re-insert.
 	s.remove(k)
 	active, status, reRested := listing(o, listed)
@@ -498,6 +519,7 @@ func (s *Store) EditAt(o *seqobv1.Offer, listed uint64) error {
 	// Emit a removed+created pair so subscribers converge regardless of pair change. Each
 	// delta carries its OWN offer's namespace: a namespace change (re-signed transparent<->
 	// confidential) must remove from the old book and create in the new one.
+	s.announceEvicted(ev)
 	s.broadcast(Event{Type: EventRemoved, Pair: old.Offer.GetPair(), Confidential: old.Offer.GetConfidential(), Ref: &seqobv1.OfferRef{OfferId: k.OfferID, MakerPubkey: k.MakerPubkey}})
 	s.broadcastListed(o, st)
 	return nil
@@ -902,9 +924,19 @@ func (s *Store) Reopen(o *seqobv1.Offer, restoreActive uint64) error {
 		s.mu.Unlock()
 		return fmt.Errorf("offer %s/%s was cancelled by its maker; not reopened", k.MakerPubkey, k.OfferID)
 	}
+	gone, err := s.claimLocked(k, o)
+	if err != nil {
+		s.mu.Unlock()
+		return fmt.Errorf("offer %s/%s not reopened: %w", k.MakerPubkey, k.OfferID, err)
+	}
+	var ev *evicted
+	if gone != nil {
+		ev = s.evictLocked(*gone)
+	}
 	e := &Entry{Offer: o, Status: status, ActiveAmount: restoreActive, CreatedAt: s.now()}
 	s.put(k, e)
 	s.mu.Unlock()
+	s.announceEvicted(ev)
 	s.broadcast(Event{Type: EventCreated, Pair: o.GetPair(), Confidential: o.GetConfidential(), Offer: o})
 	return nil
 }
@@ -1325,7 +1357,11 @@ func (s *Store) Unsubscribe(id int) {
 // --- locked helpers ---
 
 func (s *Store) put(k Key, e *Entry) {
+	if old, ok := s.entries[k]; ok {
+		s.unindexLocked(k, old.Offer)
+	}
 	s.entries[k] = e
+	s.indexLocked(k, e.Offer)
 	pk := pairKey(e.Offer.GetPair())
 	set := s.pairs[pk]
 	if set == nil {
@@ -1341,6 +1377,7 @@ func (s *Store) remove(k Key) {
 		return
 	}
 	pk := pairKey(e.Offer.GetPair())
+	s.unindexLocked(k, e.Offer)
 	delete(s.entries, k)
 	if set := s.pairs[pk]; set != nil {
 		delete(set, k)

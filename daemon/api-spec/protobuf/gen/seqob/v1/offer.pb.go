@@ -793,6 +793,8 @@ func (x *LightningTerms) GetMax_0ConfAmount() uint64 {
 // restart, by anyone holding it). The relay lists a covenant order at what its
 // outpoint holds, and admits it only when the outpoint pays the program its
 // terms derive, explicitly, holding at least min_lot and at most offer_amount.
+// It lists one offer per outpoint: the same maker's later offer replaces an
+// earlier one there, and any other offer for a listed outpoint is refused.
 type CovenantTerms struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
