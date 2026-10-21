@@ -61,6 +61,13 @@ func CanonicalOfferBytes(o *seqobv1.Offer) ([]byte, error) {
 		st.CovenantTxid = ""
 		st.CovenantVout = 0
 	}
+	// A resting leaf order's locator (the coin it rests at, and what that coin
+	// holds) moves at every fill while its maker is away: it is outside the
+	// signed bytes for the same reason (resting.go).
+	if rt := c.GetArcaResting(); rt != nil {
+		rt.Coin = ""
+		rt.Value = 0
+	}
 	return deterministic(c)
 }
 
