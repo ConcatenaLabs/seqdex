@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -335,5 +336,34 @@ func TestConfidentialOfferRules(t *testing.T) {
 	plain := signed(t, k, nil)
 	if err := New(cfg(), nil).ValidateOffer(context.Background(), plain, ""); err != nil {
 		t.Fatalf("transparent offer must still validate: %v", err)
+	}
+}
+
+// Readmit (a kept covenant order read back at start) runs every check on the
+// offer and the probe, but no rate limit: a relay lists again what it held.
+func TestReadmitChecksTheOfferButMetersNothing(t *testing.T) {
+	c := cfg()
+	c.MaxOffersPerMinPerPubkey = 1
+	v := New(c, nil)
+	k := key(t)
+	for i := 0; i < 3; i++ {
+		o := signed(t, k, func(o *seqobv1.Offer) { o.OfferId = fmt.Sprintf("kept%d", i) })
+		if _, err := v.Readmit(context.Background(), o); err != nil {
+			t.Fatalf("readmit %d: %v", i, err)
+		}
+	}
+	if _, err := v.Admit(context.Background(), signed(t, k, nil), ""); err != nil {
+		t.Fatalf("a post after the readmits: %v", err)
+	}
+	if _, err := v.Admit(context.Background(), signed(t, k, func(o *seqobv1.Offer) { o.OfferId = "next" }), ""); err == nil {
+		t.Fatal("the rate limit no longer applies to posts")
+	}
+	forged := signed(t, k, nil)
+	forged.OfferAmount++
+	if _, err := v.Readmit(context.Background(), forged); err == nil || !strings.Contains(err.Error(), "signature") {
+		t.Fatalf("a kept line altered after signing: %v", err)
+	}
+	if _, err := New(cfg(), failProbe{}).Readmit(context.Background(), signed(t, k, nil)); err == nil {
+		t.Fatal("readmit skipped the probe")
 	}
 }

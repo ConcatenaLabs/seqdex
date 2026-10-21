@@ -77,10 +77,11 @@ default documents the fleet (9955 cross, 9965 pure-LN and submarine, 9966 sub-as
 sub-asset sell, plus the confidential relay on 9975). Publicly they are the `/seqob`,
 `/seqob-pln` and `/seqob-conf` mounts.
 
-The relay holds its book in memory (only the trade log is durable, via `-trade-log`). Restarting
-a relay empties its book until every maker re-posts, which the Go makers do on reconnect; an
-offer posted by something that is not running at the time (a wallet's covenant order) comes
-back only when it is posted again. A covenant order's signed offer is public and its outpoint is
+The relay holds its book in memory; the trade log is durable with `-trade-log`, and the covenant
+orders with `-covenant-book`, which lists them again at start after checking each against the
+chain. Without that flag, restarting a relay empties its book until every maker re-posts, which
+the Go makers do on reconnect; an offer posted by something that is not running at the time (a
+wallet's covenant order) comes back only when it is posted again. A covenant order's signed offer is public and its outpoint is
 outside the signature, so anyone holding it can post it again, naming the order's current
 outpoint: after a part fill that is the remainder at the fill's output 2k+1, and the relay lists
 the order at what that outpoint holds (`watcher.ProbeCovenant`), never above the signed

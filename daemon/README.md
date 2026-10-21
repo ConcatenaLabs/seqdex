@@ -40,6 +40,9 @@ seqobd [flags]
   -trade-log         append-only JSONL trade log so last_price, trades and
                      candles survive a restart (env SEQOB_TRADE_LOG; empty =
                      in-memory only)
+  -covenant-book     file keeping the covenant orders across a restart; each
+                     is checked again against the chain when read back (env
+                     SEQOB_COVENANT_BOOK; empty = in memory only)
   -interactive-cap   soft per-maker committed-capital cap per offered asset
                      (atoms) for interactive offers; past it an offer is
                      flagged demoted (phantom depth); 0 disables
@@ -79,6 +82,21 @@ signature, so after a part fill (the order rests again at the fill's output
 2k+1) the same signed offer can be posted again naming the remainder, by its
 maker or anyone holding it, and is listed at the remainder's size. That is how
 a covenant order returns to the book after a relay restart.
+
+**The book across a restart.** The relay keeps its covenant orders, and only
+those, when given `-covenant-book`. A covenant order's maker is offline by
+design and its coin waits on the chain, so after a restart nobody may be there
+to post it again, and the order would sit unlisted until its refund. The file
+holds only public text: each order's signed offer at its current outpoint,
+with its listed size. Nothing in it is trusted when it is read back: each
+order goes through the checks a posted offer does (signature, terms, expiry,
+the outpoint on the chain) and is listed at what its outpoint holds. An order
+whose outpoint was spent while the relay was down is held at 0, and the chain
+watcher follows the spend: to the remainder a part fill made, or out of the
+book. The file is rewritten, atomically, within two seconds of a change, and
+as the relay stops. Interactive, cross-chain and Lightning offers are not
+kept: their makers or agents post them again when they reconnect, and keeping
+an interactive offer whose maker is gone would list an order nobody can fill.
 
 Every book the relay serves (the orderbook, a maker's own orders, the
 WebSocket snapshot) is a `PublicBook`: the makers' signed offers byte for
