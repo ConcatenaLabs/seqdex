@@ -17,6 +17,10 @@
 // and re-opening fills that never confirmed. The relay itself stays keyless and
 // fundless; the watcher only READS the node and drives the covenant-aware book
 // ops.
+//
+// Covenant book: with -covenant-book, the relay keeps its covenant orders in a
+// file and lists them again when it starts, each checked again (signature,
+// terms, expiry, its outpoint on the chain). Interactive offers are never kept.
 package main
 
 import (
@@ -76,6 +80,7 @@ func main() {
 		offersPerMin   = flag.Int("offers-per-min", 60, "max offers/min per maker_pubkey")
 		offersPerMinI  = flag.Int("offers-per-min-ip", 120, "max offers/min per IP")
 		tradeLog       = flag.String("trade-log", env("SEQOB_TRADE_LOG", ""), "path to an append-only JSONL trade log so last_price/trades/candles survive a relay restart (env SEQOB_TRADE_LOG; empty = in-memory only)")
+		covenantBook   = flag.String("covenant-book", env("SEQOB_COVENANT_BOOK", ""), "path to a file keeping the covenant orders across a relay restart, each checked again against the chain when read back (env SEQOB_COVENANT_BOOK; empty = in memory only)")
 		finalDepth     = flag.Int64("fill-anchor-depth", watcher.DefaultFinalAnchorDepth, "Bitcoin blocks that must bury a covenant fill's anchor, its block certified, before the relay records it final (an offer's min_anchor_depth raises it)")
 		arcaOperators  = flag.String("arca-operator", env("SEQOB_ARCA_OPERATORS", ""), "comma-separated base URLs of Arca operators whose rounds fill covenant orders; the relay records such a fill's taker as the operator's round (env SEQOB_ARCA_OPERATORS)")
 		interactiveCap = flag.Uint64("interactive-cap", 0, "P3.10 soft per-maker committed-capital cap per offer_asset (atoms): an interactive offer that pushes a maker's cumulative committed capital past this is flagged 'demoted' (phantom depth); 0 disables")
@@ -168,6 +173,17 @@ func main() {
 		OnReopen: onReopen,
 	})
 
+	// The covenant orders kept across the last restart are listed again before the
+	// relay answers anything, and before the watcher's first pass follows them.
+	var keptDone chan struct{}
+	keepStop := make(chan struct{})
+	if *covenantBook != "" {
+		n, f, d := restoreCovenantBook(*covenantBook, store, v, logger)
+		logger.Printf("covenant book %s: %d covenant orders listed again, %d held for the watcher to follow a spend, %d dropped", *covenantBook, n, f, d)
+		keptDone = make(chan struct{})
+		go keepCovenantBook(&offerstore.CovenantBookWriter{Path: *covenantBook}, store, 2*time.Second, keepStop, keptDone, logger)
+	}
+
 	srv := api.New(store, v, router, logger)
 	srv.SetCrossSessionDeadline(*xsessionTTL)
 
@@ -226,5 +242,9 @@ func main() {
 	defer cancel()
 	if err := httpSrv.Shutdown(ctx); err != nil {
 		logger.Printf("graceful shutdown error: %v", err)
+	}
+	close(keepStop)
+	if keptDone != nil {
+		<-keptDone // the covenant book written as the relay stops
 	}
 }

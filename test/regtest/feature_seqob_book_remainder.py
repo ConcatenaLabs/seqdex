@@ -27,6 +27,10 @@ it), with the production relay and its chain watcher, the maker's posting tool
           fill takes it)
   TRADED  adopted again after a third restart, filled in part and then whole,
           the listed size following the outpoint's value each time
+  KEPT    a relay given -covenant-book lists its covenant orders again by
+          itself after a restart, at what their outpoints hold; one filled
+          while the relay was down is followed to its new remainder; one that
+          expired while it was down is dropped by name
   BOOK    the orderbook serves, beside each signed offer, its status, whose
           active_amount is the outpoint's value at every step (0 while a fill
           is unconfirmed, and after the whole fill until it is final)
@@ -128,7 +132,7 @@ class SeqObBookRemainderTest(BitcoinTestFramework):
             self.log.info("relay: %s", bins["seqobd"])
         return bins
 
-    def start_relay(self):
+    def start_relay(self, extra=()):
         self.relay_port = free_port()
         self.relay_http = "http://127.0.0.1:%d" % self.relay_port
         user, password = get_auth_cookie(self.nodes[1].datadir, "elementsregtest")
@@ -137,7 +141,7 @@ class SeqObBookRemainderTest(BitcoinTestFramework):
         self.relay_log = open(os.path.join(self.options.tmpdir, "seqobd.log"), "a")
         self.relay_proc = subprocess.Popen(
             [self.bins["seqobd"], "-min-expiry", "5s", "-node-rpc", "127.0.0.1:%d" % self.rpc_auth[2],
-             "-node-rpc-user", user, "-node-rpc-pass", password, "-watch-interval", "1s"],
+             "-node-rpc-user", user, "-node-rpc-pass", password, "-watch-interval", "1s"] + list(extra),
             env=env, stdout=self.relay_log, stderr=subprocess.STDOUT)
         for _ in range(100):
             try:
@@ -159,11 +163,18 @@ class SeqObBookRemainderTest(BitcoinTestFramework):
             self.relay_log.close()
             self.relay_log = None
 
-    def restart_relay(self, why):
+    def restart_relay(self, why, extra=(), empty=True):
         self.stop_relay()
-        self.start_relay()
-        assert_equal(self.market("orderbook").get("offers", []), [])
-        self.log.info("RESTART (%s): the relay is back on :%d with an empty book", why, self.relay_port)
+        self.start_relay(extra)
+        if empty:
+            assert_equal(self.market("orderbook").get("offers", []), [])
+            self.log.info("RESTART (%s): the relay is back on :%d with an empty book", why, self.relay_port)
+        else:
+            self.log.info("RESTART (%s): the relay is back on :%d", why, self.relay_port)
+
+    def relay_log_lines(self, needle):
+        with open(os.path.join(self.options.tmpdir, "seqobd.log")) as f:
+            return [l.rstrip() for l in f if needle in l]
 
     def get(self, path):
         with urllib.request.urlopen(self.relay_http + path, timeout=5) as r:
@@ -290,7 +301,7 @@ class SeqObBookRemainderTest(BitcoinTestFramework):
         vout = [o["n"] for o in self.w.getrawtransaction(txid, True)["vout"] if o["scriptPubKey"]["hex"] == d["scriptpubkey"]][0]
         return txid, vout
 
-    def offer(self, offer_id, d, txid, vout):
+    def offer(self, offer_id, d, txid, vout, ttl=3600):
         b64 = lambda b: base64.b64encode(b).decode()
         now = int(time.time())
         return {
@@ -298,7 +309,7 @@ class SeqObBookRemainderTest(BitcoinTestFramework):
             "trade_dir": "TRADE_DIR_SELL", "base_amount": str(N), "offer_amount": str(N),
             "offer_asset": self.X, "want_amount": str(N * RATE_NUM // RATE_DEN), "want_asset": self.Y,
             "allow_partial": True, "min_fill": str(MIN_LOT),
-            "created_at_unix": str(now), "expires_at_unix": str(now + 3600),
+            "created_at_unix": str(now), "expires_at_unix": str(now + ttl),
             "covenant": {
                 "covenant_txid": txid, "covenant_vout": vout,
                 "asset_a": self.internal(self.X), "asset_b": self.internal(self.Y),
@@ -436,6 +447,57 @@ class SeqObBookRemainderTest(BitcoinTestFramework):
         self.log.info("WHOLE fill %s took %d: the order left the book; trades since the restart %s",
                       w, N - F1 - F2, sizes)
         assert_equal(sizes, sorted([F2, N - F1 - F2]))
+
+        self.run_kept(d)
+
+    def post_new(self, offer_id, d, txid, vout, ttl=3600):
+        p = subprocess.run([self.bins["seqob-relaycli"], "post", "--http", self.relay_http, "--priv", self.maker_priv],
+                           input=json.dumps(self.offer(offer_id, d, txid, vout, ttl)), capture_output=True, text=True)
+        assert p.returncode == 0, p.stderr
+        return self.wait(lambda: self.book_offer(offer_id), "%s in the book" % offer_id)
+
+    def run_kept(self, d):
+        """KEPT: a relay given -covenant-book lists its covenant orders again by itself."""
+        book = os.path.join(self.options.tmpdir, "covenant-book.jsonl")
+        kept = ["-covenant-book", book]
+        self.restart_relay("with a covenant book", kept)
+        ktx, kv = self.fund(d, N)
+        self.post_new("K", d, ktx, kv)
+        k1 = self.covfill("K", F1)
+        self.mine(1)
+        self.wait(lambda: (lambda o: o and o["covenant"]["covenant_txid"] == k1)(self.book_offer("K")), "K re-rested")
+        self.assert_book_holds("K", k1, 1, "K after its part fill")
+        self.restart_relay("the book kept", kept, empty=False)
+        back = self.book_offer("K")
+        assert back is not None, "K is not in the book after the restart"
+        assert_equal((back["covenant"]["covenant_txid"], back["covenant"]["covenant_vout"]), (k1, 1))
+        self.assert_book_holds("K", k1, 1, "K after the restart, nobody re-posting")
+        self.log.info("KEPT %s", self.relay_log_lines("covenant book")[-1].split("seqobd ", 1)[-1])
+
+        # A fill broadcast, the relay stopped before it confirms, the block mined
+        # while it is down; and an order that expires while it is down.
+        etx, ev = self.fund(d, N)
+        self.post_new("E", d, etx, ev, ttl=12)
+        k2 = self.covfill("K", F2)
+        self.stop_relay()
+        self.mine(1)
+        time.sleep(13)
+        self.start_relay(kept)
+        line = self.relay_log_lines("covenant book")[-1].split("seqobd ", 1)[-1]
+        self.log.info("KEPT %s", line)
+        assert "0 covenant orders listed again, 1 held for the watcher to follow a spend, 1 dropped" in line, line
+        gone = [l for l in self.relay_log_lines("not listed again") if "/E at %s:%d" % (etx, ev) in l]
+        assert gone and "offer already expired" in gone[-1], "the expired order was not dropped by name"
+        self.log.info("KEPT %s", gone[-1].split("seqobd ", 1)[-1])
+        self.log.info("KEPT %s", [l for l in self.relay_log_lines("held at 0 for the watcher")][-1].split("seqobd ", 1)[-1])
+        assert self.book_offer("E") is None
+        self.wait(lambda: (lambda o: o and o["covenant"]["covenant_txid"] == k2)(self.book_offer("K")),
+                  "K followed to the remainder of the fill made while the relay was down")
+        self.wait(lambda: self.book_size("K") == N - F1 - F2, "K listed at its new remainder")
+        self.assert_book_holds("K", k2, 1, "K after a fill made while the relay was down")
+        rec = self.wait(lambda: [x for x in self.market("fills")["fills"] if x["txid"] == k2], "the record of the fill made while the relay was down")[0]
+        assert_equal((rec["filled"], rec["remainder"]), (F2, N - F1 - F2))
+        self.log.info("KEPT the fill %s made while the relay was down is recorded: filled %d, remainder %d", k2, F2, N - F1 - F2)
 
 
 if __name__ == "__main__":

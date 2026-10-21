@@ -167,25 +167,7 @@ func (v *Validator) Admit(ctx context.Context, o *seqobv1.Offer, ip string) (lis
 	if err := v.checkIPRate(ip); err != nil {
 		return 0, err
 	}
-	if n := proto.Size(o); n > MaxOfferBytes {
-		return 0, fmt.Errorf("offer too large (%d bytes, max %d)", n, MaxOfferBytes)
-	}
-	// The pubkey is part of the signed bytes and is the book's key string, so it
-	// cannot be normalised here; both signers emit lowercase, and a mixed-case twin
-	// would be a second book entry for the same key.
-	if pk := o.GetMakerPubkey(); pk != strings.ToLower(pk) {
-		return 0, fmt.Errorf("maker_pubkey must be lowercase hex")
-	}
-	if err := offer.VerifyOffer(o); err != nil {
-		return 0, fmt.Errorf("signature: %w", err)
-	}
-	if o.GetSchemaVersion() != v.cfg.SchemaVersion {
-		return 0, fmt.Errorf("unsupported schema_version %d (want %d)", o.GetSchemaVersion(), v.cfg.SchemaVersion)
-	}
-	if err := v.checkTerms(o); err != nil {
-		return 0, err
-	}
-	if err := v.checkExpiry(o); err != nil {
+	if err := v.checkOffer(o); err != nil {
 		return 0, err
 	}
 	// Replay-griefing defense: an attacker can harvest a victim maker's GENUINE
@@ -208,11 +190,50 @@ func (v *Validator) Admit(ctx context.Context, o *seqobv1.Offer, ip string) (lis
 	if err := v.checkPubkeyRate(o.GetMakerPubkey()); err != nil {
 		return 0, err
 	}
-	listed, err = v.probe.CheckOffer(ctx, o)
+	return v.liveness(ctx, o)
+}
+
+// Readmit checks a covenant order a relay kept across its restart before
+// listing it again: every check on the offer itself and the liveness probe, as
+// Admit, but no rate limit and no replay gate, which meter what clients post
+// rather than what the relay already held. It returns the size to list it at.
+func (v *Validator) Readmit(ctx context.Context, o *seqobv1.Offer) (listed uint64, err error) {
+	if err := v.checkOffer(o); err != nil {
+		return 0, err
+	}
+	return v.liveness(ctx, o)
+}
+
+func (v *Validator) liveness(ctx context.Context, o *seqobv1.Offer) (uint64, error) {
+	listed, err := v.probe.CheckOffer(ctx, o)
 	if err != nil {
 		return 0, fmt.Errorf("liveness: %w", err)
 	}
 	return listed, nil
+}
+
+// checkOffer is every check on the offer itself: its size, the form of its
+// key, its signature, schema, terms and expiry.
+func (v *Validator) checkOffer(o *seqobv1.Offer) error {
+	if n := proto.Size(o); n > MaxOfferBytes {
+		return fmt.Errorf("offer too large (%d bytes, max %d)", n, MaxOfferBytes)
+	}
+	// The pubkey is part of the signed bytes and is the book's key string, so it
+	// cannot be normalised here; both signers emit lowercase, and a mixed-case twin
+	// would be a second book entry for the same key.
+	if pk := o.GetMakerPubkey(); pk != strings.ToLower(pk) {
+		return fmt.Errorf("maker_pubkey must be lowercase hex")
+	}
+	if err := offer.VerifyOffer(o); err != nil {
+		return fmt.Errorf("signature: %w", err)
+	}
+	if o.GetSchemaVersion() != v.cfg.SchemaVersion {
+		return fmt.Errorf("unsupported schema_version %d (want %d)", o.GetSchemaVersion(), v.cfg.SchemaVersion)
+	}
+	if err := v.checkTerms(o); err != nil {
+		return err
+	}
+	return v.checkExpiry(o)
 }
 
 func (v *Validator) checkTerms(o *seqobv1.Offer) error {

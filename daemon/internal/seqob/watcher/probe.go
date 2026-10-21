@@ -2,6 +2,7 @@ package watcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -35,6 +36,10 @@ type SubmitProbe struct {
 	Chain ChainView
 }
 
+// ErrNotUnspent is the probe's refusal of an outpoint that is not in the UTXO
+// set at the tip: spent (a fill or a refund), or gone.
+var ErrNotUnspent = errors.New("is not an unspent output at the tip")
+
 // CheckOffer implements validator.LivenessProbe.
 func (p SubmitProbe) CheckOffer(_ context.Context, o *seqobv1.Offer) (uint64, error) {
 	return ProbeCovenant(p.Chain, o)
@@ -59,7 +64,7 @@ func ProbeCovenant(chain ChainView, o *seqobv1.Offer) (uint64, error) {
 		return 0, nil // node unavailable: not evidence; the watcher reconciles
 	}
 	if !st.Unspent {
-		return 0, fmt.Errorf("covenant outpoint %s:%d is not an unspent output at the tip", txid, vout)
+		return 0, fmt.Errorf("covenant outpoint %s:%d %w", txid, vout, ErrNotUnspent)
 	}
 	if !strings.EqualFold(st.SPKHex, exp.OrderSPKHex) {
 		return 0, fmt.Errorf("covenant outpoint does not pay the program derived from its terms")
