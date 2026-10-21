@@ -10,7 +10,9 @@
 //
 // Subcommands:
 //
-//	derive  -a A -b B -num N -den D -minlot M -prog P -expiry E -makerx X [-internal K]
+//	derive  -a A -b B -num N -den D -minlot M -prog P -expiry E -makerx X
+//	    (-internal, which fill and check take to read an existing order, must
+//	    be the NUMS point here: a maker places only NUMS-keyed orders)
 //	    -> {fill_leaf, refund_leaf, fill_leaf_hash, refund_leaf_hash,
 //	        merkle_root, merkle_branch, output_key, negflag, scriptpubkey,
 //	        control_block}
@@ -237,6 +239,9 @@ func main() {
 		get := orderFlags(fs)
 		fs.Parse(os.Args[2:])
 		o := get()
+		if o.InternalKey != covenant.NUMS {
+			die("derive: -internal %x is not the NUMS point: it is a key path that takes the order back from under any taker; takers and the relay refuse such an order, so a maker places only NUMS-keyed ones", o.InternalKey)
+		}
 		t, err := o.Derive()
 		if err != nil {
 			die("derive: %v", err)

@@ -153,9 +153,9 @@ def build_refund_leaf(expiry_locktime, maker_x):
 def order_taptree(asset_a, asset_b, rate_num, rate_den, maker_prog, min_lot,
                   expiry_locktime, maker_x, internal_key=NUMS):
     """Build the {FILL, REFUND} taproot order. internal_key defaults to NUMS
-    (no key-path spend); a maker who wants an instant key-path cancel may pass
-    P_maker instead, in which case a taker MUST treat a non-NUMS internal key as
-    a maker-cancellable offer (client-side verify)."""
+    (no key-path spend). Any other internal key is a key path that takes the
+    order back from under a taker: takers refuse such an order and the relay
+    does not list one. The parameter stays so a test can build one."""
     fill = build_fill_leaf(asset_a, asset_b, rate_num, rate_den, maker_prog, min_lot)
     refund = build_refund_leaf(expiry_locktime, maker_x)
     tap = taproot_construct(internal_key, [("fill", fill), ("refund", refund)])

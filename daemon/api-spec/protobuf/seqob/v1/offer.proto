@@ -182,9 +182,10 @@ message CovenantTerms {
   bytes  maker_x             = 11; // maker x-only key (32 bytes) authorizing REFUND
 
   // Taproot reconstruction inputs. internal_key is the 32-byte x-only internal
-  // key (NUMS by default; a NON-NUMS key is a maker-cancellable/key-path-rug
-  // offer a taker MUST treat with suspicion). merkle_path is the control-block
-  // merkle branch (sibling hashes) proving the FILL leaf under the output key.
+  // key, NUMS when absent. Any other key is a key path that takes the order back
+  // from under a taker: takers refuse such an order and the relay does not list
+  // one. merkle_path is the control-block merkle branch (sibling hashes)
+  // proving the FILL leaf under the output key.
   bytes  internal_key        = 12; // 32-byte x-only internal key (NUMS default)
   repeated bytes merkle_path = 13; // taproot merkle branch (32-byte sibling hashes)
 }
