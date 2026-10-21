@@ -122,3 +122,87 @@ func TestCovenantRefusedForTheChainsReason(t *testing.T) {
 		t.Fatal("a refused offer is in the book")
 	}
 }
+
+// Every book the relay serves carries each order's live size beside its signed
+// offer: the REST orderbook, a maker's own orders and the WebSocket snapshot.
+// A covenant order's size follows what its outpoint holds through each fill.
+func TestBookServesWhatEachOrderHolds(t *testing.T) {
+	mk := key(t)
+	cov := mkSignedCovSell(t, mk, "cov1")
+	txid, _, _ := offer.CovenantOutpoint(cov)
+	ts, store := newServerWithProbe(t, heldProbe{held: map[string]uint64{txid: 37}})
+	k := offerstore.Key{MakerPubkey: cov.GetMakerPubkey(), OfferID: "cov1"}
+	if resp := postProto(t, ts.URL+"/v1/offers", cov); resp.StatusCode != http.StatusOK {
+		t.Fatalf("post: %d", resp.StatusCode)
+	}
+	// An interactive offer whose maker never connected: past the ghost grace the
+	// book drops it, and its status with it, so the two lists stay aligned.
+	gk := key(t)
+	ghost := mkSignedOffer(t, gk, "ghost")
+	ghost.CreatedAtUnix -= 2 * ghostGraceSecs
+	ghost.MakerSig = nil
+	if err := offer.SignOffer(ghost, gk); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Submit(ghost); err != nil {
+		t.Fatal(err)
+	}
+	live := mkSignedOffer(t, mk, "live") // interactive, its maker's offer still young
+	if _, err := store.Submit(live); err != nil {
+		t.Fatal(err)
+	}
+
+	sizes := func(b *seqobv1.PublicBook) map[string]uint64 {
+		t.Helper()
+		if len(b.GetStatuses()) != len(b.GetOffers()) {
+			t.Fatalf("%d statuses for %d offers", len(b.GetStatuses()), len(b.GetOffers()))
+		}
+		m := map[string]uint64{}
+		for i, o := range b.GetOffers() {
+			st := b.GetStatuses()[i]
+			if st.GetOfferId() != o.GetOfferId() || st.GetMakerPubkey() != o.GetMakerPubkey() {
+				t.Fatalf("status %d is %s/%s, offer is %s/%s", i, st.GetMakerPubkey(), st.GetOfferId(), o.GetMakerPubkey(), o.GetOfferId())
+			}
+			m[o.GetOfferId()] = st.GetActiveAmount()
+		}
+		return m
+	}
+	book := func() map[string]uint64 {
+		var b seqobv1.PublicBook
+		getProto(t, ts.URL+"/v1/market/gold/usdx/orderbook", &b)
+		return sizes(&b)
+	}
+	if got := book(); len(got) != 2 || got["cov1"] != 37 || got["live"] != 100 {
+		t.Fatalf("book %v, want cov1 37 and live 100 (the ghost dropped)", got)
+	}
+	// A fill in the mempool holds the order at 0; once confirmed it rests at its remainder.
+	if err := store.HoldCovenantForSpend(k, "fill1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := book(); got["cov1"] != 0 {
+		t.Fatalf("held: %v", got)
+	}
+	if err := store.RerestCovenantRemainder(k, strings.Repeat("ab", 32), 1, 12); err != nil {
+		t.Fatal(err)
+	}
+	if got := book(); got["cov1"] != 12 {
+		t.Fatalf("re-rested: %v", got)
+	}
+
+	var own seqobv1.PublicBook
+	getProto(t, ts.URL+"/v1/offers?maker_pubkey="+cov.GetMakerPubkey(), &own)
+	if got := sizes(&own); len(got) != 2 || got["cov1"] != 12 || got["live"] != 100 {
+		t.Fatalf("own orders %v", got)
+	}
+
+	c := dialWS(t, ts)
+	defer c.Close()
+	sendTo(t, c, &seqobv1.To{Msg: &seqobv1.To_MarketSubscribe{MarketSubscribe: &seqobv1.AssetPair{BaseAsset: "gold", QuoteAsset: "usdx"}}})
+	snap := readFrom(t, c).GetPublicBook()
+	if snap == nil {
+		t.Fatal("no snapshot")
+	}
+	if got := sizes(snap); len(got) != 2 || got["cov1"] != 12 {
+		t.Fatalf("WS snapshot %v", got)
+	}
+}

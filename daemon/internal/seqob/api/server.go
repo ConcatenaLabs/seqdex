@@ -8,7 +8,9 @@
 //	POST /v1/offers/cancel                       submit a signed OfferCancel
 //	GET  /v1/offers?maker_pubkey=...             a maker's own orders
 //	GET  /v1/markets                             market summaries
-//	GET  /v1/market/{base}/{quote}/orderbook     per-pair snapshot (PublicBook)
+//	GET  /v1/market/{base}/{quote}/orderbook     per-pair snapshot (PublicBook: the
+//	                                             signed offers, and statuses[i], each
+//	                                             one's live size, active_amount)
 //	POST /v1/lift                                open a lift session (StartLift)
 //	GET  /v1/ws                                  WebSocket (To/From)
 //
@@ -202,6 +204,7 @@ func (s *Server) handleOwnOffers(w http.ResponseWriter, r *http.Request) {
 	book := &seqobv1.PublicBook{}
 	for _, e := range entries {
 		book.Offers = append(book.Offers, e.Offer)
+		book.Statuses = append(book.Statuses, e.OrderStatus())
 	}
 	writeProto(w, book)
 }
@@ -266,7 +269,7 @@ func (s *Server) handleOrderbook(w http.ResponseWriter, r *http.Request) {
 		// (absent/0) serves the existing transparent book unchanged, so the live
 		// unblinded DEX is byte-for-byte untouched.
 		confidential := isTruthy(r.URL.Query().Get("confidential"))
-		writeProto(w, &seqobv1.PublicBook{Pair: pair, Offers: s.liftableOffers(s.store.SnapshotPair(pair, confidential))})
+		writeProto(w, s.publicBook(pair, s.store.SnapshotPairEntries(pair, confidential)))
 	case "trades":
 		s.handleTrades(w, r, pair)
 	case "candles":
@@ -588,6 +591,26 @@ func clientIP(r *http.Request) string {
 		return host[:i]
 	}
 	return host
+}
+
+// publicBook is the book served for a pair: its liftable offers (liftableOffers),
+// each with its live state at the same index (statuses[i] is offers[i]'s), whose
+// active_amount is what the order can be filled for now. A covenant order rests
+// at whatever its outpoint holds, which after a part fill is less than the
+// offer_amount it was signed for; a book that showed the signed size would
+// overstate its depth.
+func (s *Server) publicBook(pair *seqobv1.AssetPair, entries []offerstore.Entry) *seqobv1.PublicBook {
+	now := time.Now().Unix()
+	b := &seqobv1.PublicBook{Pair: pair}
+	for i := range entries {
+		e := &entries[i]
+		if !s.offerLiftable(e.Offer, now) {
+			continue
+		}
+		b.Offers = append(b.Offers, e.Offer)
+		b.Statuses = append(b.Statuses, e.OrderStatus())
+	}
+	return b
 }
 
 // liftableOffers drops resting offers that NOTHING can currently fill: an interactive same-chain

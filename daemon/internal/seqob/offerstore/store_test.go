@@ -860,3 +860,32 @@ func TestSubmitAtListsACovenantRemainder(t *testing.T) {
 		t.Fatalf("interactive listed %d", e.ActiveAmount)
 	}
 }
+
+// A subscriber learns a remainder's listed size with the order: created, then
+// its status, as for a re-rest; an order listed at its signed size is created only.
+func TestSubmitAtTellsSubscribersTheListedSize(t *testing.T) {
+	s := New(nil)
+	k := key(t)
+	rem := mkCovOffer(t, k, "rem", "aabb", 1, 90)
+	_, _, ch := s.Subscribe(rem.GetPair(), false)
+	if _, err := s.SubmitAt(rem, 37); err != nil {
+		t.Fatal(err)
+	}
+	if ev := recv(t, ch); ev.Type != EventCreated {
+		t.Fatalf("first delta %v", ev.Type)
+	}
+	if ev := recv(t, ch); ev.Type != EventStatus || ev.Status.GetActiveAmount() != 37 {
+		t.Fatalf("second delta %+v", ev)
+	}
+	if _, err := s.SubmitAt(mkCovOffer(t, k, "whole", "ccdd", 0, 90), 90); err != nil {
+		t.Fatal(err)
+	}
+	if ev := recv(t, ch); ev.Type != EventCreated {
+		t.Fatalf("whole: %v", ev.Type)
+	}
+	select {
+	case ev := <-ch:
+		t.Fatalf("an order at its signed size sent %+v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+}

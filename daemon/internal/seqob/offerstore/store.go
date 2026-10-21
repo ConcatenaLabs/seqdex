@@ -443,9 +443,20 @@ func (s *Store) SubmitAt(o *seqobv1.Offer, listed uint64) (Key, error) {
 			e.demoted = true
 		}
 	}
+	st := e.orderStatus(k)
 	s.mu.Unlock()
-	s.broadcast(Event{Type: EventCreated, Pair: o.GetPair(), Confidential: o.GetConfidential(), Offer: o})
+	s.broadcastListed(o, st)
 	return k, nil
+}
+
+// broadcastListed announces an order entering the book: created, and when it
+// is listed below its signed size (a covenant remainder) its status too, so a
+// subscriber learns the size it can be filled for, as RepointCovenant tells it.
+func (s *Store) broadcastListed(o *seqobv1.Offer, st *seqobv1.OrderStatus) {
+	s.broadcast(Event{Type: EventCreated, Pair: o.GetPair(), Confidential: o.GetConfidential(), Offer: o})
+	if st.GetActiveAmount() < o.GetBaseAmount() {
+		s.broadcast(Event{Type: EventStatus, Pair: o.GetPair(), Confidential: o.GetConfidential(), Status: st})
+	}
 }
 
 // Edit replaces an existing offer (re-signed, same offer_id) with new terms. The
@@ -482,12 +493,13 @@ func (s *Store) EditAt(o *seqobv1.Offer, listed uint64) error {
 		reRested:     reRested,
 	}
 	s.put(k, e)
+	st := e.orderStatus(k)
 	s.mu.Unlock()
 	// Emit a removed+created pair so subscribers converge regardless of pair change. Each
 	// delta carries its OWN offer's namespace: a namespace change (re-signed transparent<->
 	// confidential) must remove from the old book and create in the new one.
 	s.broadcast(Event{Type: EventRemoved, Pair: old.Offer.GetPair(), Confidential: old.Offer.GetConfidential(), Ref: &seqobv1.OfferRef{OfferId: k.OfferID, MakerPubkey: k.MakerPubkey}})
-	s.broadcast(Event{Type: EventCreated, Pair: o.GetPair(), Confidential: o.GetConfidential(), Offer: o})
+	s.broadcastListed(o, st)
 	return nil
 }
 
@@ -580,17 +592,6 @@ func (s *Store) SnapshotPair(p *seqobv1.AssetPair, confidential bool) []*seqobv1
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	set := s.pairs[pairKey(p)]
-	out := make([]*seqobv1.Offer, 0, len(set))
-	for k := range set {
-		if e, ok := s.entries[k]; ok && e.Offer.GetConfidential() == confidential {
-			out = append(out, e.Offer)
-		}
-	}
-	return out
-}
-
-func (s *Store) snapshotLocked(pk string, confidential bool) []*seqobv1.Offer {
-	set := s.pairs[pk]
 	out := make([]*seqobv1.Offer, 0, len(set))
 	for k := range set {
 		if e, ok := s.entries[k]; ok && e.Offer.GetConfidential() == confidential {
@@ -1269,6 +1270,18 @@ func (s *Store) RunExpirySweeper(interval time.Duration, stop <-chan struct{}) {
 // pair (still within the requested namespace). Returns the current snapshot, a subscription
 // id, and the delta channel.
 func (s *Store) Subscribe(pairFilter *seqobv1.AssetPair, confidential bool) ([]*seqobv1.Offer, int, <-chan Event) {
+	entries, id, ch := s.SubscribeEntries(pairFilter, confidential)
+	snap := make([]*seqobv1.Offer, len(entries))
+	for i := range entries {
+		snap[i] = entries[i].Offer
+	}
+	return snap, id, ch
+}
+
+// SubscribeEntries is Subscribe with the snapshot as entry copies, so a book
+// served from it carries each order's live state (Entry.OrderStatus) taken at
+// the same instant the subscription starts.
+func (s *Store) SubscribeEntries(pairFilter *seqobv1.AssetPair, confidential bool) ([]Entry, int, <-chan Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := s.nextSub
@@ -1280,14 +1293,18 @@ func (s *Store) Subscribe(pairFilter *seqobv1.AssetPair, confidential bool) ([]*
 	sub := &subscriber{pair: pk, confidential: confidential, ch: make(chan Event, s.subBuf)}
 	s.subs[id] = sub
 
-	var snap []*seqobv1.Offer
+	var snap []Entry
 	if pk != "" {
-		snap = s.snapshotLocked(pk, confidential)
+		for k := range s.pairs[pk] {
+			if e, ok := s.entries[k]; ok && e.Offer.GetConfidential() == confidential {
+				snap = append(snap, *e)
+			}
+		}
 	} else {
-		snap = make([]*seqobv1.Offer, 0, len(s.entries))
+		snap = make([]Entry, 0, len(s.entries))
 		for _, e := range s.entries {
 			if e.Offer.GetConfidential() == confidential {
-				snap = append(snap, e.Offer)
+				snap = append(snap, *e)
 			}
 		}
 	}
@@ -1332,6 +1349,11 @@ func (s *Store) remove(k Key) {
 		}
 	}
 }
+
+// OrderStatus is the entry's live state as the relay serves it: its status and
+// active_amount, the base atoms that can be filled now (a covenant order: what
+// its outpoint holds; 0 while a spend of it is unconfirmed).
+func (e *Entry) OrderStatus() *seqobv1.OrderStatus { return e.orderStatus(keyOf(e.Offer)) }
 
 func (e *Entry) orderStatus(k Key) *seqobv1.OrderStatus {
 	return &seqobv1.OrderStatus{

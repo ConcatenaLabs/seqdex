@@ -391,7 +391,7 @@ func (s *Server) wsSubscribe(c *wsConn, pair *seqobv1.AssetPair) {
 		c.sendErr(429, fmt.Sprintf("market_subscribe: at most %d subscriptions per connection", maxSubsPerConn))
 		return
 	}
-	snap, id, ch := s.store.Subscribe(pair, confidential)
+	snap, id, ch := s.store.SubscribeEntries(pair, confidential)
 	stop := make(chan struct{})
 
 	c.mu.Lock()
@@ -409,7 +409,7 @@ func (s *Server) wsSubscribe(c *wsConn, pair *seqobv1.AssetPair) {
 	// ghosts made the two sources disagree about the same market, and a wallet's ladder
 	// showed whichever painted last (seen live: ~40 dead seeded offers "deep" over the WS,
 	// 2 fillable ones over REST). One market, one book.
-	_ = c.send(&seqobv1.From{Msg: &seqobv1.From_PublicBook{PublicBook: &seqobv1.PublicBook{Pair: pair, Offers: s.liftableOffers(snap)}}})
+	_ = c.send(&seqobv1.From{Msg: &seqobv1.From_PublicBook{PublicBook: s.publicBook(pair, snap)}})
 	go s.forwardDeltas(c, ch, stop)
 }
 

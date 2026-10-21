@@ -58,7 +58,9 @@ POST /v1/offers                             submit a signed Offer
 POST /v1/offers/cancel                      submit a signed OfferCancel
 GET  /v1/offers?maker_pubkey=<hex>          a maker's own orders
 GET  /v1/markets                            market summaries
-GET  /v1/market/{base}/{quote}/orderbook    per-pair snapshot
+GET  /v1/market/{base}/{quote}/orderbook    per-pair snapshot: the signed
+                                            offers, and statuses[i], the live
+                                            state of offers[i]
 GET  /v1/market/{base}/{quote}/trades       recent trades
 GET  /v1/market/{base}/{quote}/candles      OHLCV from the trades
 GET  /v1/market/{base}/{quote}/fills        covenant fill records (JSON)
@@ -77,6 +79,13 @@ signature, so after a part fill (the order rests again at the fill's output
 2k+1) the same signed offer can be posted again naming the remainder, by its
 maker or anyone holding it, and is listed at the remainder's size. That is how
 a covenant order returns to the book after a relay restart.
+
+Every book the relay serves (the orderbook, a maker's own orders, the
+WebSocket snapshot) is a `PublicBook`: the makers' signed offers byte for
+byte, and beside each one, at the same index in `statuses`, its
+`OrderStatus`, whose `active_amount` is what the order can be filled for now.
+That is the size to show: after a part fill a covenant order holds less than
+its signed `offer_amount`, and while a fill of it is unconfirmed it is 0.
 
 Live instances: `https://sequentiatestnet.com/seqob/v1/...` (on-chain rails),
 `/seqob-pln/v1/...` (Lightning rails), `/seqob-conf/v1/...` (confidential
