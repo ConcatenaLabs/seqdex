@@ -21,10 +21,13 @@ package main
 //	  -amount <asset-A atoms | 0 = whole covenant>[,...]
 //	  -seq-rpc http://user:pass@host:port -seq-wallet <w>
 //	  [-base <hex> -quote <hex>]   (the offer's market; scanned from /v1/markets when omitted)
-//	  [-fee-asset <display hex>]   (default: the chain's pegged bitcoin asset)
+//	  [-fee-asset <display hex>]   (default: the asset the fill pays in, if the node accepts it for
+//	                                fees; else the accepted asset whose largest coin in the wallet
+//	                                covers the most fees; refused if the node accepts none)
 //	  [-spend-fee <atoms>]         (explicit network fee in the fee asset's own atoms)
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -47,7 +50,7 @@ func cmdCovFill(args []string) {
 	amounts := fs.String("amount", "0", "asset-A atoms to take of each offer, comma-separated (0 = the whole covenant; a dust remainder auto-shrinks)")
 	seqRPCURL := fs.String("seq-rpc", "", "Sequentia node RPC URL http://user:pass@host:port (required)")
 	seqWallet := fs.String("seq-wallet", "", "Sequentia node wallet funding the fill (pays asset B + the fee, receives asset A) (required)")
-	feeAsset := fs.String("fee-asset", "", "fee asset (display hex; default: the chain's pegged bitcoin asset)")
+	feeAsset := fs.String("fee-asset", "", "fee asset (display hex; default: the asset the fill pays in, if the node accepts it for fees, else the accepted asset whose largest coin in the wallet covers the most fees)")
 	spendFee := fs.Uint64("spend-fee", 2000, "explicit network fee, in the fee asset's own atoms")
 	allowCancellable := fs.Bool("allow-maker-cancellable", false, "fill a non-NUMS-internal-key covenant (maker key-path cancel/rug risk); default: refuse")
 	maxPay := fs.Uint64("max-pay", 0, "refuse if a covenant demands more than this many asset-B atoms (0 = derive each from the offer's own advertised price)")
@@ -127,11 +130,31 @@ func cmdCovFill(args []string) {
 
 	fee := *feeAsset
 	if fee == "" {
-		pegged, perr := chain.PeggedAsset()
-		if perr != nil {
-			fatal("no -fee-asset given and getsidechaininfo failed (%v); pass -fee-asset explicitly", perr)
+		// The open fee market's wallet rule: no asset is the default. The asset the
+		// fill moves out of the taker's wallet is the first take's payment asset.
+		var moved string
+		sold := map[string]bool{}
+		for i, t := range takes {
+			leaf := t.Order.Sells()
+			paysIn := t.Order.PaysIn()
+			if t.Sim != nil {
+				leaf, paysIn = t.Sim.Sells(), t.Sim.PaysIn()
+			}
+			sold[displayHex32(leaf)] = true
+			if i == 0 {
+				moved = displayHex32(paysIn)
+			}
 		}
-		fee = pegged
+		picked, perr := covfill.FeeAssetFor(chain.RPC(), moved, sold)
+		if perr != nil {
+			fatal("%v", perr)
+		}
+		fee = picked
+		why := "the asset the fill pays in, which the node accepts for fees"
+		if fee != moved {
+			why = "the node does not accept the asset the fill pays in for fees; this is the accepted asset whose largest coin in the wallet covers the most fees"
+		}
+		fmt.Printf("fee asset %s: %s\n", fee, why)
 	}
 
 	res, err := covfill.FillCovenant(covfill.Params{
@@ -192,4 +215,13 @@ func findOffer(relay, base, quote, offerID, makerPub string) *seqobv1.Offer {
 		}
 	}
 	return nil
+}
+
+// displayHex32 is an internal-order asset id in display (RPC) order.
+func displayHex32(internal [32]byte) string {
+	b := make([]byte, 32)
+	for i := range b {
+		b[i] = internal[31-i]
+	}
+	return hex.EncodeToString(b)
 }
