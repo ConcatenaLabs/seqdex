@@ -26,10 +26,17 @@ message Market {
 
 message MarketList { repeated Market markets = 1; }
 
-// Per-pair order book.
+// Per-pair order book (also a maker's own orders, and the WebSocket snapshot).
+// offers are the makers' signed offers, byte for byte. statuses[i] is the
+// relay's live state of offers[i]: its active_amount is the base atoms the order
+// can be filled for now, which is what a book shows as its size. For a covenant
+// order that is what its outpoint holds: after a part fill the order rests at its
+// remainder, below the offer_amount it was signed for, and while a fill of it is
+// unconfirmed it is 0. offer_amount stays the maker's signed figure.
 message PublicBook {
   AssetPair pair        = 1;
   repeated Offer offers = 2; // signed; any client can verify independently
+  repeated OrderStatus statuses = 3; // one per offer, in the same order
 }
 
 // A taker lifts a chosen resting offer. taker_session_pubkey is the ephemeral key

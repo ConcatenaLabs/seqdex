@@ -223,7 +223,7 @@ func cmdBook(args []string) {
 		fatal("get book: %v", err)
 	}
 	fmt.Printf("order book %s/%s (%d offers)\n", *base, *quote, len(book.GetOffers()))
-	for _, o := range book.GetOffers() {
+	for i, o := range book.GetOffers() {
 		// SECURITY (ITEM B): the relay is untrusted and serves this list WITHOUT
 		// proving the maker signed each row, so a malicious relay can inject
 		// fabricated offers. Verify the maker's signature over every offer before
@@ -234,8 +234,14 @@ func cmdBook(args []string) {
 				o.GetOfferId(), short(o.GetMakerPubkey()), err)
 			continue
 		}
-		fmt.Printf("  %s  dir=%s base=%d  give %d %s  want %d %s  maker=%s\n",
-			o.GetOfferId(), shortDir(o.GetTradeDir()), o.GetBaseAmount(),
+		// What the order can be filled for now (statuses[i], beside the signed offer):
+		// a covenant order resting at its remainder holds less than it was signed for.
+		listed := o.GetBaseAmount()
+		if sts := book.GetStatuses(); i < len(sts) && sts[i].GetOfferId() == o.GetOfferId() {
+			listed = sts[i].GetActiveAmount()
+		}
+		fmt.Printf("  %s  dir=%s base=%d listed=%d  give %d %s  want %d %s  maker=%s\n",
+			o.GetOfferId(), shortDir(o.GetTradeDir()), o.GetBaseAmount(), listed,
 			o.GetOfferAmount(), o.GetOfferAsset(), o.GetWantAmount(), o.GetWantAsset(),
 			short(o.GetMakerPubkey()))
 	}

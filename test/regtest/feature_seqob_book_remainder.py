@@ -27,6 +27,9 @@ it), with the production relay and its chain watcher, the maker's posting tool
           fill takes it)
   TRADED  adopted again after a third restart, filled in part and then whole,
           the listed size following the outpoint's value each time
+  BOOK    the orderbook serves, beside each signed offer, its status, whose
+          active_amount is the outpoint's value at every step (0 while a fill
+          is unconfirmed, and after the whole fill until it is final)
 
 Every fill pays its fee in an issued asset; none touches the policy asset.
 Requires the Go toolchain and a configured, built Sequentia node checkout; see
@@ -175,6 +178,22 @@ class SeqObBookRemainderTest(BitcoinTestFramework):
                 return o
         return None
 
+    def book_size(self, offer_id):
+        """The size the book serves for an order: its status beside the signed offer."""
+        b = self.market("orderbook")
+        offers, statuses = b.get("offers", []), b.get("statuses", [])
+        assert len(statuses) == len(offers), "the book serves %d statuses for %d offers" % (len(statuses), len(offers))
+        for o, st in zip(offers, statuses):
+            if o["offer_id"] == offer_id:
+                assert_equal((st["offer_id"], st["maker_pubkey"]), (o["offer_id"], o["maker_pubkey"]))
+                return int(st.get("active_amount", 0))
+        return None
+
+    def assert_book_holds(self, offer_id, txid, vout, what):
+        size, held = self.book_size(offer_id), self.held(txid, vout)
+        assert size == held, "%s: the book serves %s for an outpoint holding %s (signed offer_amount %d)" % (what, size, held, N)
+        self.log.info("BOOK %s: served at %d, the outpoint %s:%d holds %d", what, size, txid, vout, held)
+
     def wait(self, predicate, what, timeout=30):
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -219,6 +238,7 @@ class SeqObBookRemainderTest(BitcoinTestFramework):
                      (ftx, 1, signed["maker_sig"]))
         self.log.info("ADOPTED the signed offer re-posted at %s:1 is listed at %d (the outpoint holds %d)",
                       ftx, int(st["active_amount"]), self.held(ftx, 1))
+        self.assert_book_holds("O", ftx, 1, "after the re-post")
 
     def held(self, txid, vout):
         u = self.nodes[1].gettxout(txid, vout, True)
@@ -346,8 +366,11 @@ class SeqObBookRemainderTest(BitcoinTestFramework):
         signed = self.wait(lambda: self.book_offer("O"), "the order in the book")
         assert_equal(self.listed_at(signed), (N, "OFFER_STATUS_OPEN"))
         self.log.info("LISTED %s:%d at %d", txid, vout, N)
+        self.assert_book_holds("O", txid, vout, "as funded")
 
         ftx = self.covfill("O", F1)
+        self.wait(lambda: self.book_size("O") == 0, "the order held at 0 while its fill is unconfirmed")
+        self.log.info("BOOK while the fill %s is in the mempool: served at 0", ftx)
         self.mine(1)
         moved = self.wait(lambda: (lambda o: o if o and o["covenant"]["covenant_txid"] == ftx else None)(self.book_offer("O")),
                           "the order re-rested at the fill's output 1")
@@ -355,6 +378,7 @@ class SeqObBookRemainderTest(BitcoinTestFramework):
         assert_equal(moved["maker_sig"], signed["maker_sig"])
         assert_equal(self.held(ftx, 1), N - F1)
         assert_equal(self.listed_at(moved), (N - F1, "OFFER_STATUS_PARTIAL"))
+        self.assert_book_holds("O", ftx, 1, "after the part fill")
         self.log.info("PARTIAL fill %s took %d: the order rests at %s:1 holding %d, listed at %d",
                       ftx, F1, ftx, self.held(ftx, 1), N - F1)
 
@@ -395,12 +419,15 @@ class SeqObBookRemainderTest(BitcoinTestFramework):
                           "the re-listed order re-rested again")
         assert_equal(self.held(f2, 1), N - F1 - F2)
         assert_equal(self.listed_at(again)[0], N - F1 - F2)
+        self.assert_book_holds("O", f2, 1, "after the re-listed order's part fill")
         self.log.info("PARTIAL fill %s of the re-listed order took %d: listed at %d, the outpoint holds %d",
                       f2, F2, N - F1 - F2, self.held(f2, 1))
         self.bury()
 
         w = self.covfill("O", 0)
         self.mine(1)
+        self.wait(lambda: self.book_size("O") == 0, "the order served at 0 until its whole fill is final")
+        self.log.info("BOOK after the whole fill %s, until it is final: served at 0 (the outpoint is spent)", w)
         rec = self.wait(lambda: [x for x in self.market("fills")["fills"] if x["txid"] == w], "the whole fill's record")[0]
         assert_equal((rec["filled"], rec["remainder"]), (N - F1 - F2, 0))
         self.bury()
