@@ -15,7 +15,7 @@ func restingOffer(o *seqobv1.Offer) {
 	o.Pair = &seqobv1.AssetPair{BaseAsset: a, QuoteAsset: b}
 	o.OfferAsset, o.WantAsset = a, b
 	o.BaseAmount, o.OfferAmount, o.WantAmount = 600_000, 600_000, 1_200_000
-	o.Settlement = &seqobv1.Offer_ArcaResting{ArcaResting: &seqobv1.ArcaRestingTerms{
+	o.Settlement = &seqobv1.Offer_RestingLeaf{RestingLeaf: &seqobv1.RestingLeafTerms{
 		OperatorUrl: "http://127.0.0.1:3535", OperatorKey: strings.Repeat("5c", 32), OrderId: strings.Repeat("d1", 32),
 		AssetA: a, AssetB: b, RateNum: 2, RateDen: 1, MinLot: 10_000,
 		LandedMaker: make([]byte, 32), LandedExpiry: 1_892_611_631, RefundKey: make([]byte, 32),
@@ -34,7 +34,7 @@ func TestRestingOfferNeedsARelayThatFollowsItsOperator(t *testing.T) {
 	if err := New(c, nil).ValidateOffer(context.Background(), o, ""); err != nil {
 		t.Fatalf("a relay that follows operators: %v", err)
 	}
-	bad := signed(t, key(t), func(o *seqobv1.Offer) { restingOffer(o); o.GetArcaResting().RateNum = 3 })
+	bad := signed(t, key(t), func(o *seqobv1.Offer) { restingOffer(o); o.GetRestingLeaf().RateNum = 3 })
 	if err := New(c, nil).ValidateOffer(context.Background(), bad, ""); err == nil || !strings.Contains(err.Error(), "does not equal") {
 		t.Fatalf("another rate: %v", err)
 	}

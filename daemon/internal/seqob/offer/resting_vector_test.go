@@ -14,7 +14,7 @@ import (
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
 )
 
-var updateRestingVectors = flag.Bool("update-resting-vectors", false, "rewrite testdata/arca_resting_offer_vectors.json")
+var updateRestingVectors = flag.Bool("update-resting-vectors", false, "rewrite testdata/resting_leaf_offer_vectors.json")
 
 // The vector pins, across Go and the web wallet's seqob.js, the signed bytes of
 // an order resting as a leaf in an operator's tree: its terms, operator and
@@ -23,7 +23,7 @@ var updateRestingVectors = flag.Bool("update-resting-vectors", false, "rewrite t
 // where a fill rested it again. Both sides read the relay's wire form
 // (protojson, proto names, bytes in base64), compute the same canonical bytes
 // and sign them to the same signature (RFC 6979).
-const restingVectorFile = "testdata/arca_resting_offer_vectors.json"
+const restingVectorFile = "testdata/resting_leaf_offer_vectors.json"
 
 type restingVectors struct {
 	About         string          `json:"about"`
@@ -51,7 +51,7 @@ func restingVectorOffer() *seqobv1.Offer {
 		TradeDir: seqobv1.TradeDir_TRADE_DIR_SELL, BaseAmount: 600000, OfferAmount: 600000, OfferAsset: a,
 		WantAmount: 1200000, WantAsset: b, AllowPartial: true, MinFill: 10000,
 		CreatedAtUnix: 1792000000, ExpiresAtUnix: 1792600000, MinAnchorDepth: 2,
-		Settlement: &seqobv1.Offer_ArcaResting{ArcaResting: &seqobv1.ArcaRestingTerms{
+		Settlement: &seqobv1.Offer_RestingLeaf{RestingLeaf: &seqobv1.RestingLeafTerms{
 			OperatorUrl: "https://sequentiatestnet.com/arca", OperatorKey: strings.Repeat("5c", 32),
 			OrderId: strings.Repeat("d1", 32), AssetA: a, AssetB: b, RateNum: 2, RateDen: 1, MinLot: 10000,
 			LandedMaker: b32(0x31), LandedExpiry: 1792611631, RefundKey: b32(0x41),
@@ -73,10 +73,10 @@ func TestRestingOfferVerifiesWhereTheRelayFollowsIt(t *testing.T) {
 		SetRestingLocator(moved, strings.Repeat("e2", 32), 300000)
 		mv, _ := wire.Marshal(moved)
 		badRate := cloneOffer(o)
-		badRate.GetArcaResting().RateNum = 3
+		badRate.GetRestingLeaf().RateNum = 3
 		br, _ := wire.Marshal(badRate)
 		badOrder := cloneOffer(o)
-		badOrder.GetArcaResting().OrderId = strings.Repeat("d2", 32)
+		badOrder.GetRestingLeaf().OrderId = strings.Repeat("d2", 32)
 		bo, _ := wire.Marshal(badOrder)
 		v := restingVectors{
 			About: "An order resting as a leaf in an operator's tree, signed where it first rests (rested), served by the relay " +
@@ -108,7 +108,7 @@ func TestRestingOfferVerifiesWhereTheRelayFollowsIt(t *testing.T) {
 		return &o
 	}
 	rested, moved := read("rested", v.Rested), read("moved", v.Moved)
-	if c, val, _ := RestingLocator(moved); c == rested.GetArcaResting().GetCoin() || val != 300000 {
+	if c, val, _ := RestingLocator(moved); c == rested.GetRestingLeaf().GetCoin() || val != 300000 {
 		t.Fatal("the moved offer does not rest elsewhere")
 	}
 	for name, o := range map[string]*seqobv1.Offer{"rested": rested, "moved": moved} {
@@ -145,15 +145,15 @@ func TestCheckRestingTermsRefuses(t *testing.T) {
 		want string
 	}{
 		"buy":          {func(o *seqobv1.Offer) { o.TradeDir = seqobv1.TradeDir_TRADE_DIR_BUY }, "TRADE_DIR_SELL"},
-		"rate":         {func(o *seqobv1.Offer) { o.GetArcaResting().RateNum = 3 }, "does not equal the offer's want/offer"},
-		"height":       {func(o *seqobv1.Offer) { o.GetArcaResting().LandedExpiry = 50000 }, "is a height"},
-		"url":          {func(o *seqobv1.Offer) { o.GetArcaResting().OperatorUrl = "file:///etc" }, "http(s) base URL"},
-		"upper":        {func(o *seqobv1.Offer) { o.GetArcaResting().OrderId = strings.Repeat("D1", 32) }, "order_id must be 32-byte lowercase hex"},
-		"same asset":   {func(o *seqobv1.Offer) { o.GetArcaResting().AssetB = o.GetArcaResting().GetAssetA() }, "same asset"},
-		"other asset":  {func(o *seqobv1.Offer) { o.GetArcaResting().AssetB = strings.Repeat("3d", 32) }, "but the offer gives"},
-		"below lot":    {func(o *seqobv1.Offer) { o.GetArcaResting().Value = 9999 }, "below the order's min_lot"},
-		"above signed": {func(o *seqobv1.Offer) { o.GetArcaResting().Value = 600001 }, "more than the offer_amount 600000 its maker signed"},
-		"no key":       {func(o *seqobv1.Offer) { o.GetArcaResting().RefundKey = nil }, "32 bytes"},
+		"rate":         {func(o *seqobv1.Offer) { o.GetRestingLeaf().RateNum = 3 }, "does not equal the offer's want/offer"},
+		"height":       {func(o *seqobv1.Offer) { o.GetRestingLeaf().LandedExpiry = 50000 }, "is a height"},
+		"url":          {func(o *seqobv1.Offer) { o.GetRestingLeaf().OperatorUrl = "file:///etc" }, "http(s) base URL"},
+		"upper":        {func(o *seqobv1.Offer) { o.GetRestingLeaf().OrderId = strings.Repeat("D1", 32) }, "order_id must be 32-byte lowercase hex"},
+		"same asset":   {func(o *seqobv1.Offer) { o.GetRestingLeaf().AssetB = o.GetRestingLeaf().GetAssetA() }, "same asset"},
+		"other asset":  {func(o *seqobv1.Offer) { o.GetRestingLeaf().AssetB = strings.Repeat("3d", 32) }, "but the offer gives"},
+		"below lot":    {func(o *seqobv1.Offer) { o.GetRestingLeaf().Value = 9999 }, "below the order's min_lot"},
+		"above signed": {func(o *seqobv1.Offer) { o.GetRestingLeaf().Value = 600001 }, "more than the offer_amount 600000 its maker signed"},
+		"no key":       {func(o *seqobv1.Offer) { o.GetRestingLeaf().RefundKey = nil }, "32 bytes"},
 	}
 	if err := CheckRestingTerms(restingVectorOffer()); err != nil {
 		t.Fatalf("control: %v", err)

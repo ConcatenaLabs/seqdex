@@ -277,7 +277,7 @@ type Offer struct {
 	//	*Offer_Lightning
 	//	*Offer_Covenant
 	//	*Offer_SimplicityCovenant
-	//	*Offer_ArcaResting
+	//	*Offer_RestingLeaf
 	Settlement isOffer_Settlement `protobuf_oneof:"settlement"`
 	// secp256k1 signature by maker_pubkey over the canonical serialization of all
 	// fields above INCLUDING the whole settlement oneof, so every (current and
@@ -499,9 +499,9 @@ func (x *Offer) GetSimplicityCovenant() *SimplicityCovenantTerms {
 	return nil
 }
 
-func (x *Offer) GetArcaResting() *ArcaRestingTerms {
-	if x, ok := x.GetSettlement().(*Offer_ArcaResting); ok {
-		return x.ArcaResting
+func (x *Offer) GetRestingLeaf() *RestingLeafTerms {
+	if x, ok := x.GetSettlement().(*Offer_RestingLeaf); ok {
+		return x.RestingLeaf
 	}
 	return nil
 }
@@ -537,8 +537,8 @@ type Offer_SimplicityCovenant struct {
 	SimplicityCovenant *SimplicityCovenantTerms `protobuf:"bytes,25,opt,name=simplicity_covenant,json=simplicityCovenant,proto3,oneof"` // the same, under the Simplicity template seqdex/order
 }
 
-type Offer_ArcaResting struct {
-	ArcaResting *ArcaRestingTerms `protobuf:"bytes,26,opt,name=arca_resting,json=arcaResting,proto3,oneof"` // an order resting as a leaf in an operator's tree, filled there with its maker away
+type Offer_RestingLeaf struct {
+	RestingLeaf *RestingLeafTerms `protobuf:"bytes,26,opt,name=resting_leaf,json=restingLeaf,proto3,oneof"` // an order resting as a leaf in an operator's tree, filled there with its maker away
 }
 
 func (*Offer_SameChain) isOffer_Settlement() {}
@@ -551,7 +551,7 @@ func (*Offer_Covenant) isOffer_Settlement() {}
 
 func (*Offer_SimplicityCovenant) isOffer_Settlement() {}
 
-func (*Offer_ArcaResting) isOffer_Settlement() {}
+func (*Offer_RestingLeaf) isOffer_Settlement() {}
 
 type SameChainTerms struct {
 	state         protoimpl.MessageState
@@ -1102,7 +1102,7 @@ func (x *SimplicityCovenantTerms) GetTemplateHash() string {
 	return ""
 }
 
-// ArcaRestingTerms is an order resting in an operator's tree as an order-2
+// RestingLeafTerms is an order resting in an operator's tree as an order-2
 // leaf: a coin of asset_a that takers fill out of round, with its maker
 // offline, each fill co-signed by the operator and held to these terms by the
 // leaf's own program (at least ceil(filled * rate_num / rate_den) of asset_b
@@ -1126,7 +1126,7 @@ func (x *SimplicityCovenantTerms) GetTemplateHash() string {
 // The locator (coin, value) is outside the signed bytes: every fill moves the
 // order to a new coin, and the maker is away and cannot re-sign. order_id, the
 // leaf id of the order's first coin, is signed: it never moves.
-type ArcaRestingTerms struct {
+type RestingLeafTerms struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
@@ -1147,8 +1147,8 @@ type ArcaRestingTerms struct {
 	Value uint64 `protobuf:"varint,13,opt,name=value,proto3" json:"value,omitempty"` // the atoms of asset_a that coin holds
 }
 
-func (x *ArcaRestingTerms) Reset() {
-	*x = ArcaRestingTerms{}
+func (x *RestingLeafTerms) Reset() {
+	*x = RestingLeafTerms{}
 	if protoimpl.UnsafeEnabled {
 		mi := &file_seqob_v1_offer_proto_msgTypes[7]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1156,13 +1156,13 @@ func (x *ArcaRestingTerms) Reset() {
 	}
 }
 
-func (x *ArcaRestingTerms) String() string {
+func (x *RestingLeafTerms) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ArcaRestingTerms) ProtoMessage() {}
+func (*RestingLeafTerms) ProtoMessage() {}
 
-func (x *ArcaRestingTerms) ProtoReflect() protoreflect.Message {
+func (x *RestingLeafTerms) ProtoReflect() protoreflect.Message {
 	mi := &file_seqob_v1_offer_proto_msgTypes[7]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1174,96 +1174,96 @@ func (x *ArcaRestingTerms) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ArcaRestingTerms.ProtoReflect.Descriptor instead.
-func (*ArcaRestingTerms) Descriptor() ([]byte, []int) {
+// Deprecated: Use RestingLeafTerms.ProtoReflect.Descriptor instead.
+func (*RestingLeafTerms) Descriptor() ([]byte, []int) {
 	return file_seqob_v1_offer_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *ArcaRestingTerms) GetOperatorUrl() string {
+func (x *RestingLeafTerms) GetOperatorUrl() string {
 	if x != nil {
 		return x.OperatorUrl
 	}
 	return ""
 }
 
-func (x *ArcaRestingTerms) GetOperatorKey() string {
+func (x *RestingLeafTerms) GetOperatorKey() string {
 	if x != nil {
 		return x.OperatorKey
 	}
 	return ""
 }
 
-func (x *ArcaRestingTerms) GetOrderId() string {
+func (x *RestingLeafTerms) GetOrderId() string {
 	if x != nil {
 		return x.OrderId
 	}
 	return ""
 }
 
-func (x *ArcaRestingTerms) GetAssetA() string {
+func (x *RestingLeafTerms) GetAssetA() string {
 	if x != nil {
 		return x.AssetA
 	}
 	return ""
 }
 
-func (x *ArcaRestingTerms) GetAssetB() string {
+func (x *RestingLeafTerms) GetAssetB() string {
 	if x != nil {
 		return x.AssetB
 	}
 	return ""
 }
 
-func (x *ArcaRestingTerms) GetRateNum() uint64 {
+func (x *RestingLeafTerms) GetRateNum() uint64 {
 	if x != nil {
 		return x.RateNum
 	}
 	return 0
 }
 
-func (x *ArcaRestingTerms) GetRateDen() uint64 {
+func (x *RestingLeafTerms) GetRateDen() uint64 {
 	if x != nil {
 		return x.RateDen
 	}
 	return 0
 }
 
-func (x *ArcaRestingTerms) GetMinLot() uint64 {
+func (x *RestingLeafTerms) GetMinLot() uint64 {
 	if x != nil {
 		return x.MinLot
 	}
 	return 0
 }
 
-func (x *ArcaRestingTerms) GetLandedMaker() []byte {
+func (x *RestingLeafTerms) GetLandedMaker() []byte {
 	if x != nil {
 		return x.LandedMaker
 	}
 	return nil
 }
 
-func (x *ArcaRestingTerms) GetLandedExpiry() uint32 {
+func (x *RestingLeafTerms) GetLandedExpiry() uint32 {
 	if x != nil {
 		return x.LandedExpiry
 	}
 	return 0
 }
 
-func (x *ArcaRestingTerms) GetRefundKey() []byte {
+func (x *RestingLeafTerms) GetRefundKey() []byte {
 	if x != nil {
 		return x.RefundKey
 	}
 	return nil
 }
 
-func (x *ArcaRestingTerms) GetCoin() string {
+func (x *RestingLeafTerms) GetCoin() string {
 	if x != nil {
 		return x.Coin
 	}
 	return ""
 }
 
-func (x *ArcaRestingTerms) GetValue() uint64 {
+func (x *RestingLeafTerms) GetValue() uint64 {
 	if x != nil {
 		return x.Value
 	}
@@ -1422,11 +1422,11 @@ var file_seqob_v1_offer_proto_rawDesc = []byte{
 	0x32, 0x21, 0x2e, 0x73, 0x65, 0x71, 0x6f, 0x62, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x69, 0x6d, 0x70,
 	0x6c, 0x69, 0x63, 0x69, 0x74, 0x79, 0x43, 0x6f, 0x76, 0x65, 0x6e, 0x61, 0x6e, 0x74, 0x54, 0x65,
 	0x72, 0x6d, 0x73, 0x48, 0x00, 0x52, 0x12, 0x73, 0x69, 0x6d, 0x70, 0x6c, 0x69, 0x63, 0x69, 0x74,
-	0x79, 0x43, 0x6f, 0x76, 0x65, 0x6e, 0x61, 0x6e, 0x74, 0x12, 0x3f, 0x0a, 0x0c, 0x61, 0x72, 0x63,
-	0x61, 0x5f, 0x72, 0x65, 0x73, 0x74, 0x69, 0x6e, 0x67, 0x18, 0x1a, 0x20, 0x01, 0x28, 0x0b, 0x32,
-	0x1a, 0x2e, 0x73, 0x65, 0x71, 0x6f, 0x62, 0x2e, 0x76, 0x31, 0x2e, 0x41, 0x72, 0x63, 0x61, 0x52,
-	0x65, 0x73, 0x74, 0x69, 0x6e, 0x67, 0x54, 0x65, 0x72, 0x6d, 0x73, 0x48, 0x00, 0x52, 0x0b, 0x61,
-	0x72, 0x63, 0x61, 0x52, 0x65, 0x73, 0x74, 0x69, 0x6e, 0x67, 0x12, 0x1b, 0x0a, 0x09, 0x6d, 0x61,
+	0x79, 0x43, 0x6f, 0x76, 0x65, 0x6e, 0x61, 0x6e, 0x74, 0x12, 0x3f, 0x0a, 0x0c, 0x72, 0x65, 0x73,
+	0x74, 0x69, 0x6e, 0x67, 0x5f, 0x6c, 0x65, 0x61, 0x66, 0x18, 0x1a, 0x20, 0x01, 0x28, 0x0b, 0x32,
+	0x1a, 0x2e, 0x73, 0x65, 0x71, 0x6f, 0x62, 0x2e, 0x76, 0x31, 0x2e, 0x52, 0x65, 0x73, 0x74, 0x69,
+	0x6e, 0x67, 0x4c, 0x65, 0x61, 0x66, 0x54, 0x65, 0x72, 0x6d, 0x73, 0x48, 0x00, 0x52, 0x0b, 0x72,
+	0x65, 0x73, 0x74, 0x69, 0x6e, 0x67, 0x4c, 0x65, 0x61, 0x66, 0x12, 0x1b, 0x0a, 0x09, 0x6d, 0x61,
 	0x6b, 0x65, 0x72, 0x5f, 0x73, 0x69, 0x67, 0x18, 0x1f, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x08, 0x6d,
 	0x61, 0x6b, 0x65, 0x72, 0x53, 0x69, 0x67, 0x42, 0x0c, 0x0a, 0x0a, 0x73, 0x65, 0x74, 0x74, 0x6c,
 	0x65, 0x6d, 0x65, 0x6e, 0x74, 0x22, 0x6c, 0x0a, 0x0e, 0x53, 0x61, 0x6d, 0x65, 0x43, 0x68, 0x61,
@@ -1519,8 +1519,8 @@ var file_seqob_v1_offer_proto_rawDesc = []byte{
 	0x0a, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x09, 0x72, 0x65, 0x66, 0x75, 0x6e, 0x64, 0x4b, 0x65, 0x79,
 	0x12, 0x23, 0x0a, 0x0d, 0x74, 0x65, 0x6d, 0x70, 0x6c, 0x61, 0x74, 0x65, 0x5f, 0x68, 0x61, 0x73,
 	0x68, 0x18, 0x0b, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0c, 0x74, 0x65, 0x6d, 0x70, 0x6c, 0x61, 0x74,
-	0x65, 0x48, 0x61, 0x73, 0x68, 0x22, 0x85, 0x03, 0x0a, 0x10, 0x41, 0x72, 0x63, 0x61, 0x52, 0x65,
-	0x73, 0x74, 0x69, 0x6e, 0x67, 0x54, 0x65, 0x72, 0x6d, 0x73, 0x12, 0x21, 0x0a, 0x0c, 0x6f, 0x70,
+	0x65, 0x48, 0x61, 0x73, 0x68, 0x22, 0x85, 0x03, 0x0a, 0x10, 0x52, 0x65, 0x73, 0x74, 0x69, 0x6e,
+	0x67, 0x4c, 0x65, 0x61, 0x66, 0x54, 0x65, 0x72, 0x6d, 0x73, 0x12, 0x21, 0x0a, 0x0c, 0x6f, 0x70,
 	0x65, 0x72, 0x61, 0x74, 0x6f, 0x72, 0x5f, 0x75, 0x72, 0x6c, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09,
 	0x52, 0x0b, 0x6f, 0x70, 0x65, 0x72, 0x61, 0x74, 0x6f, 0x72, 0x55, 0x72, 0x6c, 0x12, 0x21, 0x0a,
 	0x0c, 0x6f, 0x70, 0x65, 0x72, 0x61, 0x74, 0x6f, 0x72, 0x5f, 0x6b, 0x65, 0x79, 0x18, 0x02, 0x20,
@@ -1601,7 +1601,7 @@ var file_seqob_v1_offer_proto_goTypes = []interface{}{
 	(*LightningTerms)(nil),          // 6: seqob.v1.LightningTerms
 	(*CovenantTerms)(nil),           // 7: seqob.v1.CovenantTerms
 	(*SimplicityCovenantTerms)(nil), // 8: seqob.v1.SimplicityCovenantTerms
-	(*ArcaRestingTerms)(nil),        // 9: seqob.v1.ArcaRestingTerms
+	(*RestingLeafTerms)(nil),        // 9: seqob.v1.RestingLeafTerms
 	(*OfferCancel)(nil),             // 10: seqob.v1.OfferCancel
 }
 var file_seqob_v1_offer_proto_depIdxs = []int32{
@@ -1613,7 +1613,7 @@ var file_seqob_v1_offer_proto_depIdxs = []int32{
 	6, // 5: seqob.v1.Offer.lightning:type_name -> seqob.v1.LightningTerms
 	7, // 6: seqob.v1.Offer.covenant:type_name -> seqob.v1.CovenantTerms
 	8, // 7: seqob.v1.Offer.simplicity_covenant:type_name -> seqob.v1.SimplicityCovenantTerms
-	9, // 8: seqob.v1.Offer.arca_resting:type_name -> seqob.v1.ArcaRestingTerms
+	9, // 8: seqob.v1.Offer.resting_leaf:type_name -> seqob.v1.RestingLeafTerms
 	9, // [9:9] is the sub-list for method output_type
 	9, // [9:9] is the sub-list for method input_type
 	9, // [9:9] is the sub-list for extension type_name
@@ -1712,7 +1712,7 @@ func file_seqob_v1_offer_proto_init() {
 			}
 		}
 		file_seqob_v1_offer_proto_msgTypes[7].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ArcaRestingTerms); i {
+			switch v := v.(*RestingLeafTerms); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -1742,7 +1742,7 @@ func file_seqob_v1_offer_proto_init() {
 		(*Offer_Lightning)(nil),
 		(*Offer_Covenant)(nil),
 		(*Offer_SimplicityCovenant)(nil),
-		(*Offer_ArcaResting)(nil),
+		(*Offer_RestingLeaf)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

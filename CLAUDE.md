@@ -160,7 +160,7 @@ and `sequentia-cli`; `pkg/xchain/testdata/start-regtest.sh` falls back to the le
   covenant byte order; a change on either side must land on both.
   `daemon/internal/seqob/offer/testdata/covenant_offer_vectors.json` (an offer signed at its funding
   outpoint and served again after a move), its twin `simplicity_offer_vectors.json` for the
-  `SimplicityCovenantTerms` member, `arca_resting_offer_vectors.json` for `ArcaRestingTerms` (an
+  `SimplicityCovenantTerms` member, `resting_leaf_offer_vectors.json` for `RestingLeafTerms` (an
   order resting in an Arca operator's tree, whose locator, the coin it rests at and what that coin
   holds, is outside the signed bytes and whose order id is inside), `time_in_force_offer_vectors.json` (an offer signed with each
   `time_in_force`, a field protobuf-go writes before the settlement oneof), and `daemon/pkg/covenant/testdata/fill_vectors.json` (the

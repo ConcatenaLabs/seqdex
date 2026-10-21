@@ -15,7 +15,7 @@
 > - Section 4.1: the `settlement` oneof has a fourth variant, `CovenantTerms
 >   = 23` (a funded, self-enforcing resting order), and a fifth,
 >   `SimplicityCovenantTerms = 25` (the same under the Simplicity template
->   seqdex/order), a sixth, `ArcaRestingTerms = 26` (an order resting as a
+>   seqdex/order), a sixth, `RestingLeafTerms = 26` (an order resting as a
 >   leaf in an Arca operator's tree, filled there with its maker away), and `LightningTerms` now covers submarine, pure-LN and
 >   sub-asset directions.
 > - Section 7: tdexd serves same-chain trades only; the `XchainService`
