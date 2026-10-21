@@ -85,7 +85,8 @@ wallet's covenant order) comes back only when it is posted again. A covenant ord
 outside the signature, so anyone holding it can post it again, naming the order's current
 outpoint: after a part fill that is the remainder at the fill's output 2k+1, and the relay lists
 the order at what that outpoint holds (`watcher.ProbeCovenant`), never above the signed
-`offer_amount`.
+`offer_amount`. It lists one offer per covenant outpoint (`offerstore/outpoint.go`): a maker's later
+offer for an outpoint replaces its earlier one, and any other is refused.
 
 Everything else in `cmd/` is a one-shot CLI or a regtest helper.
 

@@ -45,7 +45,8 @@ func restoreCovenantBook(path string, store *offerstore.Store, v *validator.Vali
 			size, spent = kc.Active, kc.Active == 0
 		}
 		if _, err := store.RestoreCovenant(o, size, kc.ReRested, spent); err != nil {
-			logger.Printf("covenant book: %s/%s: %v", o.GetMakerPubkey(), o.GetOfferId(), err)
+			// One offer per outpoint (offerstore.ErrOutpointListed) holds here too.
+			logger.Printf("covenant book: %s/%s at %s:%d not listed again: %v", o.GetMakerPubkey(), o.GetOfferId(), txid, vout, err)
 			dropped++
 			continue
 		}

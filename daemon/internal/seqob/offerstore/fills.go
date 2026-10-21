@@ -208,7 +208,22 @@ func (s *Store) RepointCovenant(k Key, txid string, vout uint32, size uint64, re
 	}
 	no := proto.Clone(e.Offer).(*seqobv1.Offer)
 	offer.SetCovenantOutpoint(no, txid, vout)
+	// One order per outpoint: if another offer already lists the remainder, the
+	// rule decides which stands (outpoint.go).
+	gone, err := s.claimLocked(k, no)
+	if err != nil {
+		ev := s.evictLocked(k)
+		s.mu.Unlock()
+		s.announceEvicted(ev)
+		return nil
+	}
+	var ev *evicted
+	if gone != nil {
+		ev = s.evictLocked(*gone)
+	}
+	s.unindexLocked(k, e.Offer)
 	e.Offer = no
+	s.indexLocked(k, no)
 	e.reRested = reRested
 	if size > no.GetBaseAmount() {
 		size = no.GetBaseAmount()
@@ -226,6 +241,7 @@ func (s *Store) RepointCovenant(k Key, txid string, vout uint32, size uint64, re
 	conf := no.GetConfidential()
 	st := e.orderStatus(k)
 	s.mu.Unlock()
+	s.announceEvicted(ev)
 	// Emit created (subscribers re-learn the outpoint) then status.
 	s.broadcast(Event{Type: EventCreated, Pair: pair, Confidential: conf, Offer: no})
 	s.broadcast(Event{Type: EventStatus, Pair: pair, Confidential: conf, Status: st})

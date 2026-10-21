@@ -31,6 +31,10 @@ it), with the production relay and its chain watcher, the maker's posting tool
           itself after a restart, at what their outpoints hold; one filled
           while the relay was down is followed to its new remainder; one that
           expired while it was down is dropped by name
+  ONE     one offer per covenant outpoint: the maker's later offer for an
+          outpoint replaces its earlier one, which posted again is refused;
+          another maker's offer for it is refused; a part fill re-rests it
+          once; a covenant book with two lines for one outpoint lists one
   BOOK    the orderbook serves, beside each signed offer, its status, whose
           active_amount is the outpoint's value at every step (0 while a fill
           is unconfirmed, and after the whole fill until it is final)
@@ -229,9 +233,9 @@ class SeqObBookRemainderTest(BitcoinTestFramework):
         o["covenant"]["covenant_txid"], o["covenant"]["covenant_vout"] = txid, vout
         return o
 
-    def refused(self, what, offer, want):
+    def refused(self, what, offer, want, code_want=400):
         code, j = self.post_signed(offer)
-        assert code == 400 and want in j.get("message", ""), (what, code, j)
+        assert code == code_want and want in j.get("message", ""), (what, code, j)
         self.log.info("REFUSED %s: %s", what, j["message"])
 
     def listed_at(self, offer):
@@ -449,12 +453,75 @@ class SeqObBookRemainderTest(BitcoinTestFramework):
         assert_equal(sizes, sorted([F2, N - F1 - F2]))
 
         self.run_kept(d)
+        self.run_one_per_outpoint(d)
 
-    def post_new(self, offer_id, d, txid, vout, ttl=3600):
-        p = subprocess.run([self.bins["seqob-relaycli"], "post", "--http", self.relay_http, "--priv", self.maker_priv],
+    def post_new(self, offer_id, d, txid, vout, ttl=3600, priv=None, refusal=None):
+        p = subprocess.run([self.bins["seqob-relaycli"], "post", "--http", self.relay_http, "--priv", priv or self.maker_priv],
                            input=json.dumps(self.offer(offer_id, d, txid, vout, ttl)), capture_output=True, text=True)
+        if refusal is not None:
+            assert p.returncode != 0 and refusal in p.stderr, (refusal, p.stderr)
+            return p.stderr.strip().split("seqob-relaycli: ", 1)[-1]
         assert p.returncode == 0, p.stderr
         return self.wait(lambda: self.book_offer(offer_id), "%s in the book" % offer_id)
+
+    def listed_per_outpoint(self):
+        """Every outpoint the book lists, with the offer ids listed at it."""
+        at = {}
+        for o in self.market("orderbook").get("offers", []):
+            c = o["covenant"]
+            at.setdefault("%s:%d" % (c["covenant_txid"], c.get("covenant_vout", 0)), []).append(o["offer_id"])
+        return at
+
+    def assert_one_per_outpoint(self, what):
+        at = self.listed_per_outpoint()
+        twice = {op: ids for op, ids in at.items() if len(ids) > 1}
+        assert not twice, "%s: outpoints listed more than once: %s" % (what, twice)
+        self.log.info("ONE %s: %d offers over %d outpoints", what, sum(len(v) for v in at.values()), len(at))
+
+    def run_one_per_outpoint(self, d):
+        """ONE: the relay lists one offer per covenant outpoint."""
+        dtx, dv = self.fund(d, N)
+        d1 = self.post_new("D1", d, dtx, dv)
+        time.sleep(1.2)  # created_at_unix is in seconds: the relist is created later
+        self.post_new("D2", d, dtx, dv)  # the maker relists the order under a fresh id
+        self.wait(lambda: self.book_offer("D1") is None, "D1 replaced by its maker's later offer D2")
+        assert_equal(self.listed_per_outpoint()["%s:%d" % (dtx, dv)], ["D2"])
+        self.log.info("ONE the maker's later offer D2 for %s:%d replaced D1", dtx, dv)
+        self.refused("the maker's earlier offer D1 posted again for the outpoint D2 lists", d1,
+                     "covenant outpoint already listed: %s:%d rests under this maker's offer D2" % (dtx, dv), 409)
+        msg = self.post_new("X", d, dtx, dv, priv="22" * 32, refusal="rests under another maker's offer")
+        self.log.info("REFUSED another maker's offer X for the outpoint: %s", msg)
+        self.assert_one_per_outpoint("after the relist and the refusals")
+
+        f = self.covfill("D2", F1)
+        self.mine(1)
+        self.wait(lambda: (lambda o: o and o["covenant"]["covenant_txid"] == f)(self.book_offer("D2")), "D2 re-rested")
+        self.assert_book_holds("D2", f, 1, "D2 after its part fill")
+        assert_equal(self.listed_per_outpoint()["%s:1" % f], ["D2"])
+        self.refused("D1 posted again naming D2's remainder", self.at(d1, f, 1),
+                     "covenant outpoint already listed: %s:1 rests under this maker's offer D2" % f, 409)
+        self.assert_one_per_outpoint("after the part fill")
+
+        # A covenant book file holding two lines for one outpoint (as a relay that
+        # admitted both would have written it): read back, one offer is listed.
+        d2 = self.book_offer("D2")
+        book = os.path.join(self.options.tmpdir, "covenant-book.jsonl")
+        self.stop_relay()
+        with open(book) as fh:
+            lines = [l for l in fh if l.strip() and '"offer_id":"D2"' not in l.replace(" ", "")]
+        for o in (d2, self.at(d1, f, 1)):  # the later one first, then the earlier one
+            lines.append(json.dumps({"offer": o, "active": N - F1}) + "\n")
+        with open(book, "w") as fh:
+            fh.writelines(lines)
+        self.start_relay(["-covenant-book", book])
+        line = self.relay_log_lines("covenant book")[-1].split("seqobd ", 1)[-1]
+        self.log.info("ONE %s", line)
+        gone = [l for l in self.relay_log_lines("not listed again") if "/D1 at %s:1" % f in l]
+        assert gone and "covenant outpoint already listed" in gone[-1], "the earlier kept line was not refused by name"
+        self.log.info("ONE %s", gone[-1].split("seqobd ", 1)[-1])
+        assert_equal(self.listed_per_outpoint()["%s:1" % f], ["D2"])
+        self.assert_book_holds("D2", f, 1, "D2 read back from the covenant book")
+        self.assert_one_per_outpoint("after the read-back")
 
     def run_kept(self, d):
         """KEPT: a relay given -covenant-book lists its covenant orders again by itself."""
