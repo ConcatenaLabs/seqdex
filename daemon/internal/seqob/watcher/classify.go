@@ -109,6 +109,10 @@ type CovState struct {
 	// versus existing only as a mempool output (e.g. a not-yet-mined remainder).
 	// Advisory; logged, not decisive.
 	ConfirmedUTXO bool
+	// Confidential reports an unspent outpoint whose asset or amount the node
+	// shows only as a commitment (a blinded output). Value and AssetDisplay are
+	// then not what it holds, and the order's leaf cannot spend it.
+	Confidential bool
 
 	// Spent-branch fields, valid when !Unspent:
 	SpenderTxid      string // the tx that spends the outpoint; "" if none found

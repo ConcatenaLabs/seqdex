@@ -465,7 +465,8 @@ func (s *Server) wsUnsubscribe(c *wsConn, pair *seqobv1.AssetPair) {
 }
 
 func (s *Server) wsOfferSubmit(c *wsConn, o *seqobv1.Offer, ip string) {
-	if err := s.validator.ValidateOffer(context.Background(), o, ip); err != nil {
+	listed, err := s.validator.Admit(context.Background(), o, ip)
+	if err != nil {
 		if errors.Is(err, validator.ErrReplay) {
 			// ITEM A: byte-identical replay of an already-resting offer. It cost the
 			// maker no rate budget; do not re-submit (the store would reject the
@@ -481,7 +482,7 @@ func (s *Server) wsOfferSubmit(c *wsConn, o *seqobv1.Offer, ip string) {
 		c.sendErr(400, "invalid offer: "+err.Error())
 		return
 	}
-	if _, err := s.store.Submit(o); err != nil {
+	if _, err := s.store.SubmitAt(o, listed); err != nil {
 		// A DURABLE offer (cross-chain / lightning / covenant) survives its maker's WS drop, so a
 		// reconnecting settlement agent re-posts a REFRESHED (re-signed, new expiry) copy against the
 		// still-resting key. Treat that as an EDIT + re-register (so lifts route to the reconnected
@@ -497,7 +498,7 @@ func (s *Server) wsOfferSubmit(c *wsConn, o *seqobv1.Offer, ip string) {
 			// proves nothing about who holds this socket. A reconnecting maker re-signs
 			// with the current time, which is newer.
 			prev, _ := s.store.Get(offerstore.Key{MakerPubkey: o.GetMakerPubkey(), OfferID: o.GetOfferId()})
-			if eerr := s.store.Edit(o); eerr != nil {
+			if eerr := s.store.EditAt(o, listed); eerr != nil {
 				c.sendErr(409, "submit(refresh): "+eerr.Error())
 				return
 			}
@@ -531,7 +532,8 @@ func (s *Server) wsOfferSubmit(c *wsConn, o *seqobv1.Offer, ip string) {
 }
 
 func (s *Server) wsOfferEdit(c *wsConn, o *seqobv1.Offer, ip string) {
-	if err := s.validator.ValidateOffer(context.Background(), o, ip); err != nil {
+	listed, err := s.validator.Admit(context.Background(), o, ip)
+	if err != nil {
 		if errors.Is(err, validator.ErrReplay) {
 			// No-op edit identical to the resting offer (ITEM A): no budget charged,
 			// nothing to change; re-ack the live status.
@@ -541,15 +543,12 @@ func (s *Server) wsOfferEdit(c *wsConn, o *seqobv1.Offer, ip string) {
 		c.sendErr(400, "invalid offer: "+err.Error())
 		return
 	}
-	if err := s.store.Edit(o); err != nil {
+	if err := s.store.EditAt(o, listed); err != nil {
 		c.sendErr(409, "edit: "+err.Error())
 		return
 	}
 	s.ownOffer(c, o)
-	_ = c.send(&seqobv1.From{Msg: &seqobv1.From_OrderStatus{OrderStatus: &seqobv1.OrderStatus{
-		OfferId: o.GetOfferId(), MakerPubkey: o.GetMakerPubkey(),
-		Status: seqobv1.OfferStatus_OFFER_STATUS_OPEN, ActiveAmount: o.GetBaseAmount(),
-	}}})
+	_ = c.send(&seqobv1.From{Msg: &seqobv1.From_OrderStatus{OrderStatus: s.restingStatus(o)}})
 }
 
 // registerMaker binds this connection as the reachable endpoint for makerPubkey

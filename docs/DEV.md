@@ -282,7 +282,8 @@ placement. The end-to-end proofs are the regtest scripts in `test/regtest/`
 (`feature_seqob_covenant_fill.py`, `feature_seqob_joint_covenant.py`,
 `feature_seqob_matcher_covenant.py`, `feature_seqob_watcher.py`,
 `feature_seqob_bridge.py`, `feature_seqob_multi_fill.py`,
-`feature_seqob_simplicity_order.py`, `feature_seqob_simplicity_book.py`); they drive the
+`feature_seqob_simplicity_order.py`, `feature_seqob_simplicity_book.py`,
+`feature_seqob_book_remainder.py`); they drive the
 production Go builders through the CLIs:
 
 `-expiry` is the order's REFUND lock, `expiry_locktime`: a block height below

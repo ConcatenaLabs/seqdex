@@ -395,7 +395,24 @@ var ErrExists = errors.New("offer already resting")
 
 // Submit verifies the offer's signature and inserts it as a new OPEN order.
 // It is an error (ErrExists) to Submit a key that already exists (use Edit to re-sign).
-func (s *Store) Submit(o *seqobv1.Offer) (Key, error) {
+func (s *Store) Submit(o *seqobv1.Offer) (Key, error) { return s.SubmitAt(o, 0) }
+
+// listing is the entry state for an offer listed at listed base atoms: 0 (or
+// anything not below the signed base_amount) lists it at its signed size, OPEN;
+// less lists it PARTIAL at that size. Only a covenant order is listed below its
+// signed size, at what its outpoint holds (the validator's chain probe): its
+// outpoint is then a remainder of the order, so it is marked re-rested, and a
+// reorg that takes the outpoint away holds the order instead of dropping it.
+func listing(o *seqobv1.Offer, listed uint64) (uint64, seqobv1.OfferStatus, bool) {
+	if listed == 0 || listed >= o.GetBaseAmount() || !offer.IsCovenant(o) {
+		return o.GetBaseAmount(), seqobv1.OfferStatus_OFFER_STATUS_OPEN, false
+	}
+	return listed, seqobv1.OfferStatus_OFFER_STATUS_PARTIAL, true
+}
+
+// SubmitAt is Submit for an order listed at listed base atoms (see listing):
+// the relay passes the size the validator admitted it at.
+func (s *Store) SubmitAt(o *seqobv1.Offer, listed uint64) (Key, error) {
 	if err := offer.VerifyOffer(o); err != nil {
 		return Key{}, fmt.Errorf("offer signature: %w", err)
 	}
@@ -408,11 +425,13 @@ func (s *Store) Submit(o *seqobv1.Offer) (Key, error) {
 		s.mu.Unlock()
 		return Key{}, fmt.Errorf("offer %s/%s: %w", k.MakerPubkey, k.OfferID, ErrExists)
 	}
+	active, status, reRested := listing(o, listed)
 	e := &Entry{
 		Offer:        o,
-		Status:       seqobv1.OfferStatus_OFFER_STATUS_OPEN,
-		ActiveAmount: o.GetBaseAmount(),
+		Status:       status,
+		ActiveAmount: active,
 		CreatedAt:    s.now(),
+		reRested:     reRested,
 	}
 	s.put(k, e)
 	// P3.10 soft oversell: for an INTERACTIVE offer, once the maker's cumulative
@@ -432,7 +451,12 @@ func (s *Store) Submit(o *seqobv1.Offer) (Key, error) {
 // Edit replaces an existing offer (re-signed, same offer_id) with new terms. The
 // new offer's created_at_unix must not move backwards. active_amount resets to
 // the new base_amount.
-func (s *Store) Edit(o *seqobv1.Offer) error {
+func (s *Store) Edit(o *seqobv1.Offer) error { return s.EditAt(o, 0) }
+
+// EditAt is Edit for an order listed at listed base atoms (see listing): a
+// covenant order re-signed while it rests at its remainder keeps the size its
+// outpoint holds.
+func (s *Store) EditAt(o *seqobv1.Offer, listed uint64) error {
 	if err := offer.VerifyOffer(o); err != nil {
 		return fmt.Errorf("offer signature: %w", err)
 	}
@@ -449,11 +473,13 @@ func (s *Store) Edit(o *seqobv1.Offer) error {
 	}
 	// Remove from the old pair bucket in case the pair changed, then re-insert.
 	s.remove(k)
+	active, status, reRested := listing(o, listed)
 	e := &Entry{
 		Offer:        o,
-		Status:       seqobv1.OfferStatus_OFFER_STATUS_OPEN,
-		ActiveAmount: o.GetBaseAmount(),
+		Status:       status,
+		ActiveAmount: active,
 		CreatedAt:    s.now(),
+		reRested:     reRested,
 	}
 	s.put(k, e)
 	s.mu.Unlock()

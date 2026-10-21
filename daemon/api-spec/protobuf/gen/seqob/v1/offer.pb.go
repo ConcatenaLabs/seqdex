@@ -226,7 +226,7 @@ type Offer struct {
 	Pair          *AssetPair `protobuf:"bytes,3,opt,name=pair,proto3" json:"pair,omitempty"`
 	TradeDir      TradeDir   `protobuf:"varint,4,opt,name=trade_dir,json=tradeDir,proto3,enum=seqob.v1.TradeDir" json:"trade_dir,omitempty"`
 	BaseAmount    uint64     `protobuf:"varint,5,opt,name=base_amount,json=baseAmount,proto3" json:"base_amount,omitempty"`    // total size in base atoms
-	OfferAmount   uint64     `protobuf:"varint,6,opt,name=offer_amount,json=offerAmount,proto3" json:"offer_amount,omitempty"` // exact atoms the maker gives
+	OfferAmount   uint64     `protobuf:"varint,6,opt,name=offer_amount,json=offerAmount,proto3" json:"offer_amount,omitempty"` // exact atoms the maker gives (a covenant order: the most it sells; the relay lists it at what its outpoint holds)
 	OfferAsset    string     `protobuf:"bytes,7,opt,name=offer_asset,json=offerAsset,proto3" json:"offer_asset,omitempty"`     // hex (= base or quote per trade_dir)
 	WantAmount    uint64     `protobuf:"varint,8,opt,name=want_amount,json=wantAmount,proto3" json:"want_amount,omitempty"`    // exact atoms the maker wants in return
 	WantAsset     string     `protobuf:"bytes,9,opt,name=want_asset,json=wantAsset,proto3" json:"want_asset,omitempty"`        // hex
@@ -785,6 +785,14 @@ func (x *LightningTerms) GetMax_0ConfAmount() uint64 {
 // cancel, but is not load-bearing for settlement correctness (the chain is
 // authoritative). Design: docs/simplicity-dex-covenant-offers-design.md
 // section 4 (the design space; the shipped leaf is tapscript, pkg/covenant).
+//
+// The outpoint is outside the signed bytes. A part fill re-creates the order
+// under the same program at the fill's output 2k+1, holding less than
+// offer_amount; the relay's watcher re-points the offer there, and the same
+// signed offer may be posted again naming that remainder (after a relay
+// restart, by anyone holding it). The relay lists a covenant order at what its
+// outpoint holds, and admits it only when the outpoint pays the program its
+// terms derive, explicitly, holding at least min_lot and at most offer_amount.
 type CovenantTerms struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -949,7 +957,8 @@ func (x *CovenantTerms) GetMerklePath() [][]byte {
 // a partial fill rests again at 2k+1 under the same script. The refund key
 // takes the coin back once the lock time reaches expiry_locktime. As for
 // CovenantTerms, the outpoint is chain state the relay's watcher re-points
-// after a partial fill, outside the signed bytes.
+// after a partial fill, outside the signed bytes, and the relay lists the
+// order at what its outpoint holds.
 type SimplicityCovenantTerms struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

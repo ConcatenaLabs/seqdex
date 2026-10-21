@@ -34,12 +34,12 @@ func TestASimplicityOrderIsNUMSKeyedByConstruction(t *testing.T) {
 	o2 := &seqobv1.Offer{OfferAmount: 5_000_000, Settlement: &seqobv1.Offer_SimplicityCovenant{SimplicityCovenant: st}}
 	chain := newFakeChain()
 	chain.states["s0:0"] = CovState{Unspent: true, Value: 5_000_000, AssetDisplay: exp.AssetADisplay, SPKHex: other}
-	err = SubmitProbe{Chain: chain}.CheckOffer(context.Background(), o2)
+	_, err = SubmitProbe{Chain: chain}.CheckOffer(context.Background(), o2)
 	if err == nil || !strings.Contains(err.Error(), "does not pay the program derived from its terms") {
 		t.Fatalf("a key-path coin: %v", err)
 	}
 	chain.states["s0:0"] = CovState{Unspent: true, Value: 5_000_000, AssetDisplay: exp.AssetADisplay, SPKHex: exp.OrderSPKHex}
-	if err := (SubmitProbe{Chain: chain}).CheckOffer(context.Background(), o2); err != nil {
+	if _, err := (SubmitProbe{Chain: chain}).CheckOffer(context.Background(), o2); err != nil {
 		t.Fatalf("the NUMS-keyed coin: %v", err)
 	}
 }

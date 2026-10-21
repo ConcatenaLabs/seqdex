@@ -12,7 +12,7 @@ Simplicity active from genesis, and asserts over the relay's REST API:
   POST    the order, whose fill product (2e13 atoms at a 13-digit price) the
           tapscript leaf cannot carry, is validated, probed on the chain and
           served in the book; a post naming another template, and one whose
-          outpoint holds other than offer_amount, are refused for their reasons
+          outpoint holds more than offer_amount, are refused for their reasons
   PARTIAL seqob-cli covfill takes 6e12 of it at input 0: the watcher records
           the fill from its outputs (credit at 0, rest at 1), serves the order
           at (fill txid, 1), and marks the fill final two blocks later
@@ -249,7 +249,8 @@ class SeqObSimplicityBookTest(BitcoinTestFramework):
         self.start_relay()
         try:
             self.post(self.offer("bad-template", txid, vout, N, template="00" * 32), "is not seqdex/order")
-            self.post(self.offer("bad-amount", txid, vout, 10_000_000_000_000), "holds %d atoms, offer advertises 10000000000000" % N)
+            self.post(self.offer("bad-amount", txid, vout, 10_000_000_000_000),
+                      "holds %d atoms, more than the offer_amount 10000000000000 its maker signed" % N)
             self.post(self.offer("S", txid, vout, N))
             served = self.wait(lambda: self.book_offer("S"), "the order in the book")
             assert_equal(served["simplicity_covenant"]["covenant_txid"], txid)
