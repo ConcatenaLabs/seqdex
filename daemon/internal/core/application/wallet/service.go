@@ -13,6 +13,7 @@ import (
 	"github.com/vulpemventures/go-elements/elementsutil"
 	"github.com/vulpemventures/go-elements/network"
 	"github.com/vulpemventures/go-elements/psetv2"
+	"github.com/vulpemventures/go-elements/slip77"
 )
 
 type Service struct {
@@ -373,16 +374,17 @@ func (s *Service) CompleteSwap(
 	if swapRequest.GetFeeAsset() == swapRequest.GetAssetP() && feesToAdd {
 		amountP += swapRequest.GetFeeAmount()
 	}
-	if blind && len(info.BlindingKey) == 0 {
+	recvKey := s.ownBlindingKey(ctx, account, info.Script, info.BlindingKey)
+	if blind && len(recvKey) == 0 {
 		return "", nil, -1, fmt.Errorf("account %s spends a confidential coin but derives no blinding key for %s", account, addresses[0])
 	}
 	outputs := []ports.TxOutput{
 		output{
 			swapRequest.GetAssetP(), amountP,
-			hex.EncodeToString(info.Script), outBlindKey(info.BlindingKey),
+			hex.EncodeToString(info.Script), outBlindKey(recvKey),
 		},
 	}
-	makerOutKeys = append(makerOutKeys, hex.EncodeToString(info.BlindingKey))
+	makerOutKeys = append(makerOutKeys, hex.EncodeToString(recvKey))
 	if change > 0 {
 		addresses, err := accountManager.DeriveChangeAddresses(ctx, account, 1)
 		if err != nil {
@@ -392,11 +394,12 @@ func (s *Service) CompleteSwap(
 		if err != nil {
 			return "", nil, -1, fmt.Errorf("change address %q: %w", addresses[0], err)
 		}
+		changeKey := s.ownBlindingKey(ctx, account, info.Script, info.BlindingKey)
 		outputs = append(outputs, output{
 			swapRequest.GetAssetR(), change, hex.EncodeToString(info.Script),
-			outBlindKey(info.BlindingKey),
+			outBlindKey(changeKey),
 		})
-		makerOutKeys = append(makerOutKeys, hex.EncodeToString(info.BlindingKey))
+		makerOutKeys = append(makerOutKeys, hex.EncodeToString(changeKey))
 	}
 
 	allInputs := append(existingInputs, inputs...)
@@ -562,7 +565,7 @@ func (s *Service) CompleteSwap(
 				}
 				outputs = append(outputs, output{
 					feeAssetNet, change, hex.EncodeToString(info.Script),
-					outBlindKey(info.BlindingKey),
+					outBlindKey(s.ownBlindingKey(ctx, feeFundAccount, info.Script, info.BlindingKey)),
 				})
 			}
 
@@ -622,6 +625,50 @@ func (s *Service) CompleteSwap(
 
 // isConfidentialBlinder reports whether a utxo blinder (hex) is a real blinding
 // factor. Ocean reports an explicit coin's blinders empty or all zero.
+// ownBlindingKey is the blinding pubkey for one of the account's own outputs: the address's
+// own key when it is confidential, else the key the wallet derives for that script from the
+// account's master blinding key (SLIP77) -- the key it reads that script's blinded outputs
+// with. An account that hands out transparent addresses still holds the blinded coins it
+// received before, and spending one needs blinded outputs to absorb its blinding factors.
+// Without a key here a maker refused every swap such a coin was selected for ("spends a
+// confidential coin but derives no blinding key"), and re-posted the offer to fail again.
+// Nil when the account's master blinding key is not known.
+func (s *Service) ownBlindingKey(
+	ctx context.Context, account string, script, given []byte,
+) []byte {
+	if len(given) > 0 {
+		return given
+	}
+	info, err := s.wallet.Wallet().Info(ctx)
+	if err != nil || info == nil {
+		return nil
+	}
+	for _, a := range info.GetAccounts() {
+		if a.GetLabel() == account || a.GetNamespace() == account {
+			return blindingKeyFor(a.GetMasterBlindingKey(), script)
+		}
+	}
+	return nil
+}
+
+// blindingKeyFor is the SLIP77 blinding pubkey (compressed) of script under the master
+// blinding key in hex, or nil when that key is missing or malformed.
+func blindingKeyFor(masterBlindingKeyHex string, script []byte) []byte {
+	buf, err := hex.DecodeString(masterBlindingKeyHex)
+	if err != nil || len(buf) == 0 {
+		return nil
+	}
+	master, err := slip77.FromMasterKey(buf)
+	if err != nil {
+		return nil
+	}
+	_, pub, err := master.DeriveKey(script)
+	if err != nil || pub == nil {
+		return nil
+	}
+	return pub.SerializeCompressed()
+}
+
 func isConfidentialBlinder(hexBlinder string) bool {
 	if hexBlinder == "" {
 		return false
