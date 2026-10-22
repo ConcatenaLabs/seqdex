@@ -308,6 +308,10 @@ equal credits paid to it at once.
 ./bin/seqob-covenant simderive  -a <A> -b <B> -num N -den D -minlot M -maker SPK -expiry E -refund X
 ./bin/seqob-covenant simwitness ...simderive flags... -path fill|whole|refund [-sig SIG]
 ./bin/seqob-covenant simcheck   ...simderive flags... -tx HEX -k K -locked L [-partial]
+# a pool (seqdex/pool) and a clearing round of round orders (seqdex/round-order);
+# each reads a JSON spec on stdin, documented in cmd/seqob-covenant/pool_round.go
+./bin/seqob-covenant poolderive < pool.json
+./bin/seqob-covenant round < round.json         # price, fills, layout, the clearer's signature
 echo '<cross json>' | ./bin/seqob-settler plan
 ./bin/seqobd -listen :9955 -node-rpc 127.0.0.1:19996 -node-rpc-user <user> -node-rpc-pass <pass>
 #   ^ the relay runs the covenant chain-watcher when given -node-rpc

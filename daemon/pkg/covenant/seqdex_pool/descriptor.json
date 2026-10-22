@@ -1,0 +1,249 @@
+{
+  "descriptor": 2,
+  "template": {
+    "budget": {
+      "max": 4000050,
+      "offset": 50,
+      "per_witness_byte": 4
+    },
+    "internal_key": "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0",
+    "name": "seqdex/pool",
+    "params": [
+      {
+        "label": "One of the pool's two assets, held by its BASE coin",
+        "name": "BASE",
+        "role": "asset",
+        "type": "u256"
+      },
+      {
+        "label": "The other asset, held by its QUOTE coin",
+        "name": "QUOTE",
+        "role": "asset",
+        "type": "u256"
+      },
+      {
+        "label": "Bid: the pool buys BASE paying at most BID_NUM atoms of QUOTE for every BID_DEN atoms of BASE",
+        "name": "BID_NUM",
+        "role": "number",
+        "type": "u64"
+      },
+      {
+        "label": "Bid denominator: BID_NUM atoms of QUOTE for every BID_DEN atoms of BASE",
+        "name": "BID_DEN",
+        "role": "number",
+        "type": "u64"
+      },
+      {
+        "label": "Ask: the pool sells BASE asking at least ASK_NUM atoms of QUOTE for every ASK_DEN atoms of BASE",
+        "name": "ASK_NUM",
+        "role": "number",
+        "type": "u64"
+      },
+      {
+        "label": "Ask denominator: ASK_NUM atoms of QUOTE for every ASK_DEN atoms of BASE",
+        "name": "ASK_DEN",
+        "role": "number",
+        "type": "u64"
+      },
+      {
+        "label": "Least BASE a fill moves",
+        "name": "MIN_LOT",
+        "role": "amount",
+        "type": "u64"
+      },
+      {
+        "label": "Least BASE a fill that pays BASE out leaves in the pool",
+        "name": "RESERVE_BASE",
+        "role": "amount",
+        "type": "u64"
+      },
+      {
+        "label": "Least QUOTE a fill that pays QUOTE out leaves in the pool",
+        "name": "RESERVE_QUOTE",
+        "role": "amount",
+        "type": "u64"
+      },
+      {
+        "label": "The maker's key, the only key that withdraws",
+        "name": "MAKER_KEY",
+        "role": "pubkey",
+        "type": "Pubkey"
+      }
+    ],
+    "paths": [
+      {
+        "effect": "A fill in which the pool sells BASE: the BASE coin at input j, the pool's QUOTE coin at input j+1; outputs 2j and 2j+1 are the pool again at this same script. The pool pays out at least MIN_LOT of BASE, keeps at least RESERVE_BASE, and takes in at least ASK_NUM of QUOTE per ASK_DEN of BASE paid out. PATH is Left(true).",
+        "leaf": "pool",
+        "name": "sell",
+        "who": "anyone"
+      },
+      {
+        "effect": "A fill in which the pool buys BASE: as sell, the pool taking in at least MIN_LOT of BASE and paying out at most BID_NUM of QUOTE per BID_DEN of BASE taken in, keeping at least RESERVE_QUOTE. PATH is Left(false).",
+        "leaf": "pool",
+        "name": "buy",
+        "who": "anyone"
+      },
+      {
+        "effect": "The QUOTE coin beside a fill or a withdrawal: input j-1 is the pool's BASE coin at this same script, whose program judges the move. PATH is Right(Left(())).",
+        "leaf": "pool",
+        "name": "pair",
+        "who": "anyone"
+      },
+      {
+        "effect": "The maker withdraws a coin of the pool, signing the whole transaction. PATH is Right(Right(())).",
+        "leaf": "pool",
+        "name": "withdraw",
+        "who": "MAKER_KEY"
+      }
+    ],
+    "slots": [],
+    "summary": "A SeqDEX pool: a maker's two coins, one of each asset, that anyone fills from either side at the pool's bid and ask, never below its reserve, and that only the maker withdraws. No spend carries an annex.",
+    "tree": {
+      "branch": [
+        {
+          "leaf": "pool",
+          "simplicity": {
+            "cmr": "770bbf39eb4505312f6e5ac3ae7d54c79384e8fcd625917b2ca19c2a092771eb",
+            "compiler": {
+              "name": "simplicityhl",
+              "version": "0.7.2"
+            },
+            "max_cost_wu": 500,
+            "source": "seqdex_pool.simf",
+            "source_sha256": "a3896913e23119c36d07b7f67b181bdfd70184324aca8e9292244a1e4cae283e",
+            "witness": [
+              {
+                "name": "BASE",
+                "source": "param:BASE",
+                "type": "u256"
+              },
+              {
+                "name": "QUOTE",
+                "source": "param:QUOTE",
+                "type": "u256"
+              },
+              {
+                "name": "BID_NUM",
+                "source": "param:BID_NUM",
+                "type": "u64"
+              },
+              {
+                "name": "BID_DEN",
+                "source": "param:BID_DEN",
+                "type": "u64"
+              },
+              {
+                "name": "ASK_NUM",
+                "source": "param:ASK_NUM",
+                "type": "u64"
+              },
+              {
+                "name": "ASK_DEN",
+                "source": "param:ASK_DEN",
+                "type": "u64"
+              },
+              {
+                "name": "MIN_LOT",
+                "source": "param:MIN_LOT",
+                "type": "u64"
+              },
+              {
+                "name": "RESERVE_BASE",
+                "source": "param:RESERVE_BASE",
+                "type": "u64"
+              },
+              {
+                "name": "RESERVE_QUOTE",
+                "source": "param:RESERVE_QUOTE",
+                "type": "u64"
+              },
+              {
+                "name": "MAKER_KEY",
+                "source": "param:MAKER_KEY",
+                "type": "Pubkey"
+              },
+              {
+                "name": "PATH",
+                "source": "spender",
+                "type": "Either<bool, Either<(), ()>>"
+              },
+              {
+                "name": "MAKER_SIG",
+                "source": "signature:sig_all_hash:MAKER_KEY",
+                "type": "Signature"
+              }
+            ]
+          }
+        },
+        {
+          "data": [
+            "BASE",
+            "QUOTE",
+            "BID_NUM",
+            "BID_DEN",
+            "ASK_NUM",
+            "ASK_DEN",
+            "MIN_LOT",
+            "RESERVE_BASE",
+            "RESERVE_QUOTE",
+            "MAKER_KEY"
+          ],
+          "leaf": "terms"
+        }
+      ]
+    },
+    "version": 1
+  },
+  "template_hash": "ce898f6e75efe7c9755e14536180b39d50ec6d79eefd0ce3e3b60fd05c34474c",
+  "chains": [
+    {
+      "name": "sequentia-testnet",
+      "genesis": "ddd11d54c87a2bd94400fd31ce05d8e1110bb4b78e7103f738342086fc4ea92e",
+      "bech32_hrp": "tb"
+    },
+    {
+      "name": "elementsregtest",
+      "genesis": null,
+      "bech32_hrp": "ert"
+    }
+  ],
+  "measured": {
+    "record": "harness/records/x4.json",
+    "sell": {
+      "transaction": "the pool's two coins, a payment coin and a fee coin; the pool again, the taker's base, the payment change, the fee change and the fee",
+      "vsize": 1297,
+      "weight": 5188,
+      "program_bytes": 1353,
+      "witness_bytes": 153,
+      "cost_bound_wu": 499,
+      "budget_wu": 6490
+    },
+    "buy": {
+      "transaction": "the same layout",
+      "vsize": 1298,
+      "weight": 5190,
+      "program_bytes": 1355,
+      "witness_bytes": 153,
+      "cost_bound_wu": 500,
+      "budget_wu": 6498
+    },
+    "pair": {
+      "transaction": "the quote coin beside the sell",
+      "vsize": 1297,
+      "weight": 5188,
+      "program_bytes": 791,
+      "witness_bytes": 153,
+      "cost_bound_wu": 317,
+      "budget_wu": 4242
+    },
+    "withdraw": {
+      "transaction": "both coins and a fee coin; each coin to the maker, the fee change and the fee",
+      "vsize": 852,
+      "weight": 3408,
+      "program_bytes": 569,
+      "witness_bytes": 217,
+      "cost_bound_wu": 314,
+      "budget_wu": 3610
+    }
+  }
+}

@@ -325,7 +325,10 @@ daemon/                The Go daemon module (fork of tdex-daemon).
                        for a tapscript order, byte-identical to the proven
                        Python (derive | fill | filltx | check); address,
                        witness and judgement of a Simplicity order (simderive
-                       | simwitness | simcheck).
+                       | simwitness | simcheck); a maker's pool and a
+                       clearing round at one price (poolderive | roundderive
+                       | round | roundsign | poolfill | poolwithdraw |
+                       roundrefund).
   cmd/seqob-crosser/   Crossing agent: polls every relay, builds the union
                        book per pair, and when a resting bid crosses a resting
                        ask it takes BOTH sides with its own inventory. One
