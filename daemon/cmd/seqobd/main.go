@@ -82,7 +82,8 @@ func main() {
 		tradeLog       = flag.String("trade-log", env("SEQOB_TRADE_LOG", ""), "path to an append-only JSONL trade log so last_price/trades/candles survive a relay restart (env SEQOB_TRADE_LOG; empty = in-memory only)")
 		covenantBook   = flag.String("covenant-book", env("SEQOB_COVENANT_BOOK", ""), "path to a file keeping the covenant orders across a relay restart, each checked again against the chain when read back (env SEQOB_COVENANT_BOOK; empty = in memory only)")
 		finalDepth     = flag.Int64("fill-anchor-depth", watcher.DefaultFinalAnchorDepth, "Bitcoin blocks that must bury a covenant fill's anchor, its block certified, before the relay records it final (an offer's min_anchor_depth raises it)")
-		arcaOperators  = flag.String("arca-operator", env("SEQOB_ARCA_OPERATORS", ""), "comma-separated base URLs of Arca operators whose rounds fill covenant orders; the relay records such a fill's taker as the operator's round (env SEQOB_ARCA_OPERATORS)")
+		arcaOperators  = flag.String("arca-operator", env("SEQOB_ARCA_OPERATORS", ""), "comma-separated base URLs of Arca operators the relay follows: their rounds' fills of covenant orders are recorded as theirs, and orders resting in their trees are listed, followed and delisted from their state views (env SEQOB_ARCA_OPERATORS; needs -node-rpc)")
+		restingEvery   = flag.Duration("resting-interval", 3*time.Second, "how often the relay asks each operator how the orders resting in its tree stand")
 		interactiveCap = flag.Uint64("interactive-cap", 0, "P3.10 soft per-maker committed-capital cap per offer_asset (atoms): an interactive offer that pushes a maker's cumulative committed capital past this is flagged 'demoted' (phantom depth); 0 disables")
 	)
 	flag.Parse()
@@ -120,6 +121,22 @@ func main() {
 		nodeHost, nodePort = h, p
 		// A covenant offer is admitted only if its outpoint is funded as advertised.
 		probe = watcher.SubmitProbe{Chain: watcher.NewRPCChain(nodeHost, nodePort, *nodeUser, *nodePass)}
+	}
+	// The Arca operators the relay follows: an order resting in one's tree is
+	// admitted only when the operator's state view shows it at its locator.
+	var arcaOps *watcher.ArcaRounds
+	if ops := strings.TrimSpace(*arcaOperators); ops != "" {
+		if *nodeRPC == "" {
+			logger.Fatalf("-arca-operator needs -node-rpc: the relay checks each operator's chain and measures fills on its own node")
+		}
+		chain := watcher.NewRPCChain(nodeHost, nodePort, *nodeUser, *nodePass)
+		genesis, err := watcher.GenesisHash(chain)
+		if err != nil {
+			logger.Fatalf("-arca-operator needs the node's genesis block: %v", err)
+		}
+		arcaOps = watcher.NewArcaRounds(strings.Split(ops, ","), genesis)
+		vcfg.ListResting = true
+		probe = watcher.Probes{Chain: chain, Resting: &watcher.RestingProbe{Ops: arcaOps, Chain: chain}}
 	}
 	v := validator.New(vcfg, probe)
 
@@ -197,13 +214,13 @@ func main() {
 		chain := watcher.NewRPCChain(nodeHost, nodePort, *nodeUser, *nodePass)
 		w := watcher.New(chain, watcher.NewStoreBook(store), logger)
 		w.SetFinalAnchorDepth(*finalDepth)
-		if ops := strings.TrimSpace(*arcaOperators); ops != "" {
-			genesis, err := watcher.GenesisHash(chain)
-			if err != nil {
-				logger.Fatalf("-arca-operator needs the node's genesis block: %v", err)
-			}
-			w.SetRounds(watcher.NewArcaRounds(strings.Split(ops, ","), genesis))
-			logger.Printf("covenant fills by the rounds of the Arca operators %s are recorded as theirs", ops)
+		if arcaOps != nil {
+			w.SetRounds(arcaOps)
+			logger.Printf("covenant fills by the rounds of the Arca operators %s are recorded as theirs", *arcaOperators)
+			rf := watcher.NewResting(arcaOps, chain, store, logger)
+			rf.SetFinalAnchorDepth(*finalDepth)
+			go rf.Run(*restingEvery, stop)
+			logger.Printf("orders resting in the trees of %s are followed every %s (a fill is final once the round its order rests on is final at anchor depth %d)", *arcaOperators, *restingEvery, *finalDepth)
 		}
 		go w.Run(*watchInterval, stop)
 		logger.Printf("covenant chain-watcher enabled (node %s, every %s; a fill is final once its block is certified and its anchor buried %d)", *nodeRPC, *watchInterval, *finalDepth)

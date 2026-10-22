@@ -26,8 +26,18 @@ import (
 // already lists.
 var ErrOutpointListed = errors.New("covenant outpoint already listed")
 
-// outpointOf is a covenant offer's outpoint as the book indexes it.
+// ErrOrderListed refuses an offer for an order resting in an operator's tree
+// that another offer already lists.
+var ErrOrderListed = errors.New("resting order already listed")
+
+// outpointOf is where the book indexes an order that is its coin: a covenant
+// offer's outpoint, or, for an order resting in an operator's tree, the
+// operator and the order id (which do not move as fills move the order from
+// coin to coin). The same one-listing rule holds for both.
 func outpointOf(o *seqobv1.Offer) (string, bool) {
+	if offer.IsResting(o) {
+		return offer.RestingOrderKey(o)
+	}
 	txid, vout, ok := offer.CovenantOutpoint(o)
 	if !ok || txid == "" {
 		return "", false
@@ -52,12 +62,16 @@ func (s *Store) claimLocked(k Key, o *seqobv1.Offer) (*Key, error) {
 		delete(s.covAt, op)
 		return nil, nil
 	}
+	listed := ErrOutpointListed
+	if offer.IsResting(o) {
+		listed = ErrOrderListed
+	}
 	if k2.MakerPubkey != k.MakerPubkey {
-		return nil, fmt.Errorf("%w: %s rests under another maker's offer %s/%s", ErrOutpointListed, op, k2.MakerPubkey, k2.OfferID)
+		return nil, fmt.Errorf("%w: %s rests under another maker's offer %s/%s", listed, op, k2.MakerPubkey, k2.OfferID)
 	}
 	if o.GetCreatedAtUnix() <= e2.Offer.GetCreatedAtUnix() {
 		return nil, fmt.Errorf("%w: %s rests under this maker's offer %s, created at %d, not before this one's %d",
-			ErrOutpointListed, op, k2.OfferID, e2.Offer.GetCreatedAtUnix(), o.GetCreatedAtUnix())
+			listed, op, k2.OfferID, e2.Offer.GetCreatedAtUnix(), o.GetCreatedAtUnix())
 	}
 	return &k2, nil
 }

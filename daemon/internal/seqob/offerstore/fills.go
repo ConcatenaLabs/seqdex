@@ -58,8 +58,8 @@ type FillOutput struct {
 type FillTaker struct {
 	Via        string   `json:"via"`
 	Operator   string   `json:"operator,omitempty"`    // the Arca operator's key (x-only hex)
-	RoundTxid  string   `json:"round_txid,omitempty"`  // == the fill's txid
-	BatchVouts []uint32 `json:"batch_vouts,omitempty"` // the round's batch outputs holding the takers' leaves
+	RoundTxid  string   `json:"round_txid,omitempty"`  // arca_round: the fill's txid; operator_tree: the round the order's first coin rests in
+	BatchVouts []uint32 `json:"batch_vouts,omitempty"` // arca_round: the batch outputs holding the takers' leaves; operator_tree: the order's
 	Note       string   `json:"note,omitempty"`
 }
 
@@ -69,7 +69,7 @@ type CovenantFill struct {
 	OfferID   string             `json:"offer_id"`
 	Maker     string             `json:"maker_pubkey"`
 	Pair      *seqobv1.AssetPair `json:"-"`
-	Txid      string             `json:"txid"`
+	Txid      string             `json:"txid"`  // the fill transaction; for a fill in an operator's tree (operator_tree), the operator's transfer id
 	Input     uint32             `json:"input"` // k
 	Spent     string             `json:"spent"` // the order's outpoint the fill spent, txid:vout
 	Locked    uint64             `json:"locked"`

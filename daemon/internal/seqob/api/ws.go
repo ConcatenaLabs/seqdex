@@ -631,7 +631,7 @@ func (s *Server) wsOfferCancel(c *wsConn, cancel *seqobv1.OfferCancel) {
 // terms. A nil offer is exempt so the guard never pre-empts openLift's own reporting of
 // an unknown/closed offer.
 func liftGuardExempts(o *seqobv1.Offer) bool {
-	return o == nil || offer.IsCovenant(o)
+	return o == nil || offer.FilledWithoutMaker(o)
 }
 
 func (s *Server) wsStartLift(c *wsConn, sl *seqobv1.StartLift) {

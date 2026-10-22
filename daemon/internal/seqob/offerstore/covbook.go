@@ -2,11 +2,14 @@ package offerstore
 
 // The covenant book file keeps a relay's covenant orders across a restart.
 //
-// Only covenant orders are kept. Each is the maker's signed offer (public text)
-// pointing at a coin on the chain, and the maker is offline by design, so after
-// a restart nobody may be there to post it again. Everything in the file is
-// checked again when it is read back (the signature, the terms, the expiry and
-// the outpoint on the chain), so a stale line can only be dropped, never listed.
+// Only orders filled with their makers away are kept: covenant orders, each the
+// maker's signed offer (public text) pointing at a coin on the chain, and orders
+// resting in an Arca operator's tree, each pointing at the coin the operator
+// holds. Their makers are offline by design, so after a restart nobody may be
+// there to post them again. Everything in the file is checked again when it is
+// read back (the signature, the terms, the expiry, and the outpoint on the chain
+// or the order in its operator's state view), so a stale line can only be
+// dropped, never listed.
 // Interactive offers are not kept: their makers post them again on reconnect,
 // and keeping one whose maker is gone would list an order nobody can fill.
 
@@ -47,6 +50,9 @@ var keptJSON = protojson.MarshalOptions{UseProtoNames: true}
 // give equal bytes.
 func (s *Store) CovenantBookBytes() ([]byte, error) {
 	covs := s.SnapshotCovenants()
+	for _, r := range s.SnapshotResting() {
+		covs = append(covs, CovenantEntry{Key: r.Key, Offer: r.Offer, Active: r.Active})
+	}
 	sort.Slice(covs, func(i, j int) bool {
 		if covs[i].Key.MakerPubkey != covs[j].Key.MakerPubkey {
 			return covs[i].Key.MakerPubkey < covs[j].Key.MakerPubkey
@@ -138,8 +144,8 @@ func ReadCovenantBook(path string) (kept []KeptCovenant, bad []error, err error)
 			bad = append(bad, fmt.Errorf("line %d: offer: %v", n, err))
 			continue
 		}
-		if !offer.IsCovenant(&o) {
-			bad = append(bad, fmt.Errorf("line %d: offer %s is not a covenant order", n, o.GetOfferId()))
+		if !offer.FilledWithoutMaker(&o) {
+			bad = append(bad, fmt.Errorf("line %d: offer %s is not a covenant or resting order", n, o.GetOfferId()))
 			continue
 		}
 		kept = append(kept, KeptCovenant{Offer: &o, Active: l.Active, ReRested: l.ReRested})
@@ -153,8 +159,8 @@ func ReadCovenantBook(path string) (kept []KeptCovenant, bad []error, err error)
 // held at 0 for the chain watcher to follow the spend (to the remainder a part
 // fill made, or out of the book). listed is clamped to the signed size.
 func (s *Store) RestoreCovenant(o *seqobv1.Offer, listed uint64, reRested, spent bool) (Key, error) {
-	if !offer.IsCovenant(o) {
-		return Key{}, fmt.Errorf("offer %s is not a covenant order", o.GetOfferId())
+	if !offer.FilledWithoutMaker(o) {
+		return Key{}, fmt.Errorf("offer %s is not a covenant or resting order", o.GetOfferId())
 	}
 	if listed == 0 || listed > o.GetBaseAmount() {
 		listed = o.GetBaseAmount()

@@ -93,6 +93,12 @@ func hasSettlementOwner(incoming, resting *seqobv1.Offer) bool {
 	if incoming.GetSimplicityCovenant() != nil || resting.GetSimplicityCovenant() != nil {
 		return false
 	}
+	// An order resting in an operator's tree is filled only through its
+	// operator, by a taker that reads it from the book: no owner here settles
+	// a cross with it.
+	if offer.IsResting(incoming) || offer.IsResting(resting) {
+		return false
+	}
 	return resting.GetCovenant() != nil
 }
 

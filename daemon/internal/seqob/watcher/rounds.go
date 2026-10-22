@@ -52,8 +52,15 @@ type arcaOperator struct {
 	genesis  string
 	cursor   string
 	rounds   map[string][]uint32 // round txid -> batch outputs
+	order    []string            // round txids, oldest first, as the operator lists them
 	verified map[string]bool     // round txid -> its batch outputs pay its published trees
 	lastPage time.Time
+
+	// For orders resting in its tree (resting.go).
+	marginSecs   int64              // fills.order_margin_seconds
+	deadlineSecs int64              // participations.exit_deadline_seconds
+	leafAt       map[string]leafPos // leaf id -> the batch output holding it
+	scanned      map[string]bool    // "txid:vout" of trees read for leaf ids
 }
 
 // NewArcaRounds follows the operators at urls (each the base URL of an Arca
@@ -63,7 +70,8 @@ func NewArcaRounds(urls []string, genesis string) *ArcaRounds {
 	a := &ArcaRounds{genesis: strings.ToLower(genesis), http: &http.Client{Timeout: 10 * time.Second}}
 	for _, u := range urls {
 		if u = strings.TrimRight(strings.TrimSpace(u), "/"); u != "" {
-			a.ops = append(a.ops, &arcaOperator{url: u, rounds: map[string][]uint32{}, verified: map[string]bool{}})
+			a.ops = append(a.ops, &arcaOperator{url: u, rounds: map[string][]uint32{}, verified: map[string]bool{},
+				leafAt: map[string]leafPos{}, scanned: map[string]bool{}})
 		}
 	}
 	return a
@@ -126,45 +134,16 @@ const minRepage = time.Second
 func (a *ArcaRounds) roundOf(op *arcaOperator, txid string, outputs []covenant.Output) (RoundInfo, bool, error) {
 	op.mu.Lock()
 	defer op.mu.Unlock()
-	if op.key == "" {
-		var info struct {
-			Operator    string `json:"operator"`
-			GenesisHash string `json:"genesis_hash"`
-		}
-		if err := a.call(http.MethodGet, op.url+"/v1/info", nil, &info); err != nil {
-			return RoundInfo{}, false, err
-		}
-		op.key, op.genesis = strings.ToLower(info.Operator), strings.ToLower(info.GenesisHash)
+	if err := a.infoOf(op); err != nil {
+		return RoundInfo{}, false, err
 	}
 	if a.genesis != "" && op.genesis != a.genesis {
 		return RoundInfo{}, false, nil // an operator on another chain fills nothing here
 	}
 	batches, listed := op.rounds[txid]
 	if !listed && time.Since(op.lastPage) >= minRepage {
-		op.lastPage = time.Now()
-		for page := 0; page < 50; page++ {
-			req := map[string]interface{}{}
-			if op.cursor != "" {
-				req["after"] = op.cursor
-			}
-			var res struct {
-				Rounds []struct {
-					Cursor  string   `json:"cursor"`
-					Txid    string   `json:"txid"`
-					Batches []uint32 `json:"batches"`
-				} `json:"rounds"`
-				Next string `json:"next"`
-			}
-			if err := a.call(http.MethodPost, op.url+"/v1/rounds", req, &res); err != nil {
-				return RoundInfo{}, false, err
-			}
-			for _, r := range res.Rounds {
-				op.rounds[strings.ToLower(r.Txid)] = r.Batches
-			}
-			if len(res.Rounds) == 0 || res.Next == "" {
-				break
-			}
-			op.cursor = res.Next
+		if err := a.pageRounds(op); err != nil {
+			return RoundInfo{}, false, err
 		}
 		batches, listed = op.rounds[txid]
 	}
@@ -182,6 +161,65 @@ func (a *ArcaRounds) roundOf(op *arcaOperator, txid string, outputs []covenant.O
 		return RoundInfo{}, false, nil
 	}
 	return RoundInfo{Operator: op.key, URL: op.url, BatchVouts: append([]uint32(nil), batches...)}, true, nil
+}
+
+// infoOf reads the operator's /v1/info once: its key, its chain, and the
+// times its resting orders keep to. The caller holds op.mu.
+func (a *ArcaRounds) infoOf(op *arcaOperator) error {
+	if op.key != "" {
+		return nil
+	}
+	var info struct {
+		Operator    string `json:"operator"`
+		GenesisHash string `json:"genesis_hash"`
+		Fills       struct {
+			OrderMarginSeconds int64 `json:"order_margin_seconds"`
+		} `json:"fills"`
+		Participations struct {
+			ExitDeadlineSeconds int64 `json:"exit_deadline_seconds"`
+		} `json:"participations"`
+	}
+	if err := a.call(http.MethodGet, op.url+"/v1/info", nil, &info); err != nil {
+		return err
+	}
+	op.key, op.genesis = strings.ToLower(info.Operator), strings.ToLower(info.GenesisHash)
+	op.marginSecs, op.deadlineSecs = info.Fills.OrderMarginSeconds, info.Participations.ExitDeadlineSeconds
+	return nil
+}
+
+// pageRounds reads the rounds the operator built since the last page read.
+// The caller holds op.mu.
+func (a *ArcaRounds) pageRounds(op *arcaOperator) error {
+	op.lastPage = time.Now()
+	for page := 0; page < 50; page++ {
+		req := map[string]interface{}{}
+		if op.cursor != "" {
+			req["after"] = op.cursor
+		}
+		var res struct {
+			Rounds []struct {
+				Cursor  string   `json:"cursor"`
+				Txid    string   `json:"txid"`
+				Batches []uint32 `json:"batches"`
+			} `json:"rounds"`
+			Next string `json:"next"`
+		}
+		if err := a.call(http.MethodPost, op.url+"/v1/rounds", req, &res); err != nil {
+			return err
+		}
+		for _, r := range res.Rounds {
+			t := strings.ToLower(r.Txid)
+			if _, seen := op.rounds[t]; !seen {
+				op.order = append(op.order, t)
+			}
+			op.rounds[t] = r.Batches
+		}
+		if len(res.Rounds) == 0 || res.Next == "" {
+			break
+		}
+		op.cursor = res.Next
+	}
+	return nil
 }
 
 // batchesPayTheirTrees checks each batch output the operator names against the

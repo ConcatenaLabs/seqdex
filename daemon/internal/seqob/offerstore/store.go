@@ -358,7 +358,7 @@ func (s *Store) CommittedInteractiveCapital(makerPubkey, offerAsset string) uint
 func (s *Store) committedInteractiveLocked(makerPubkey, offerAsset string) uint64 {
 	var total uint64
 	for k, e := range s.entries {
-		if k.MakerPubkey != makerPubkey || offer.IsCovenant(e.Offer) {
+		if k.MakerPubkey != makerPubkey || offer.FilledWithoutMaker(e.Offer) {
 			continue
 		}
 		if e.Offer.GetOfferAsset() != offerAsset {
@@ -406,7 +406,7 @@ func (s *Store) Submit(o *seqobv1.Offer) (Key, error) { return s.SubmitAt(o, 0) 
 // outpoint is then a remainder of the order, so it is marked re-rested, and a
 // reorg that takes the outpoint away holds the order instead of dropping it.
 func listing(o *seqobv1.Offer, listed uint64) (uint64, seqobv1.OfferStatus, bool) {
-	if listed == 0 || listed >= o.GetBaseAmount() || !offer.IsCovenant(o) {
+	if listed == 0 || listed >= o.GetBaseAmount() || !offer.FilledWithoutMaker(o) {
 		return o.GetBaseAmount(), seqobv1.OfferStatus_OFFER_STATUS_OPEN, false
 	}
 	return listed, seqobv1.OfferStatus_OFFER_STATUS_PARTIAL, true
@@ -449,7 +449,7 @@ func (s *Store) SubmitAt(o *seqobv1.Offer, listed uint64) (Key, error) {
 	// committed capital in this offer_asset (now including this offer) exceeds the soft
 	// cap, flag this marginal offer as demoted (likely phantom depth). Computed after
 	// put() so committedInteractiveLocked includes this offer. Covenant offers exempt.
-	if s.interactiveCap > 0 && !offer.IsCovenant(o) {
+	if s.interactiveCap > 0 && !offer.FilledWithoutMaker(o) {
 		if s.committedInteractiveLocked(k.MakerPubkey, o.GetOfferAsset()) > s.interactiveCap {
 			e.demoted = true
 		}
@@ -1036,7 +1036,7 @@ func (s *Store) RemoveInteractiveByMaker(makerPubkey string) int {
 	s.mu.Lock()
 	victims := make([]Key, 0)
 	for k, e := range s.entries {
-		if k.MakerPubkey == makerPubkey && !offer.IsCovenant(e.Offer) {
+		if k.MakerPubkey == makerPubkey && !offer.FilledWithoutMaker(e.Offer) {
 			victims = append(victims, k)
 		}
 	}
@@ -1074,7 +1074,7 @@ func (s *Store) RemoveInteractiveByKeys(keys []Key) int {
 	evs := make([]ev, 0, len(keys))
 	for _, k := range keys {
 		e, ok := s.entries[k]
-		if !ok || offer.IsCovenant(e.Offer) {
+		if !ok || offer.FilledWithoutMaker(e.Offer) {
 			continue
 		}
 		evs = append(evs, ev{pair: e.Offer.GetPair(), conf: e.Offer.GetConfidential(), ref: &seqobv1.OfferRef{OfferId: k.OfferID, MakerPubkey: k.MakerPubkey}})
@@ -1093,7 +1093,7 @@ func (s *Store) RemoveByMaker(makerPubkey string) int {
 	for k, e := range s.entries {
 		// Evict ONLY interactive same-chain co-sign offers (they need the maker online now). A same-chain
 		// COVENANT offer carries a covenant and is permissionless, so it is spared alongside cross/lightning.
-		if k.MakerPubkey == makerPubkey && e.Offer.GetSameChain() != nil && !offer.IsCovenant(e.Offer) {
+		if k.MakerPubkey == makerPubkey && e.Offer.GetSameChain() != nil && !offer.FilledWithoutMaker(e.Offer) {
 			victims = append(victims, k)
 		}
 	}

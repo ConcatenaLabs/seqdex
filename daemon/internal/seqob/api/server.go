@@ -415,7 +415,7 @@ var restLiftAttachGrace = newDurationVar(30 * time.Second)
 // expireUnattachedLift aborts a REST-opened lift on a non-covenant offer if no taker
 // has attached to the session by the grace deadline. Covenant lifts hold no slot.
 func (s *Server) expireUnattachedLift(sid string, k offerstore.Key) {
-	if e, ok := s.store.Get(k); !ok || offer.IsCovenant(e.Offer) {
+	if e, ok := s.store.Get(k); !ok || offer.FilledWithoutMaker(e.Offer) {
 		return
 	}
 	time.AfterFunc(restLiftAttachGrace.Get(), func() {
@@ -456,6 +456,10 @@ func (s *Server) openLift(sl *seqobv1.StartLift) (*session.Session, error) {
 	e, ok := s.store.Get(k)
 	if !ok {
 		return nil, errString("offer not found or not open")
+	}
+	if offer.IsResting(e.Offer) {
+		return nil, errString("this order rests in an operator's tree: fill it through its operator (" +
+			e.Offer.GetRestingLeaf().GetOperatorUrl() + "/v1/order_fill), not by a lift")
 	}
 	if sl.GetTakeAmount() > e.ActiveAmount {
 		return nil, errString("take_amount exceeds active_amount")
@@ -669,5 +673,5 @@ const ghostGraceSecs = 90
 // Only a plain interactive same-chain offer does: everything else either settles without the maker
 // (covenant) or is served by an agent that reconnects (cross-chain, Lightning/sub-asset).
 func needsLiveMaker(o *seqobv1.Offer) bool {
-	return !offer.IsCovenant(o) && o.GetLightning() == nil && o.GetCrossChain() == nil
+	return !offer.FilledWithoutMaker(o) && o.GetLightning() == nil && o.GetCrossChain() == nil
 }
