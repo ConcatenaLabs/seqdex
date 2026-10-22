@@ -49,6 +49,11 @@
 //	    Judges a transaction as the order's program at input k would, the
 //	    order's coin holding L atoms of A explicitly (pkg/covenant
 //	    SimOrder.CheckFill), in the same reply as check.
+//
+// The pool and the clearing round (templates seqdex/pool and
+// seqdex/round-order): poolderive, roundderive, round, roundsign, poolfill,
+// poolwithdraw and roundrefund, each reading a JSON spec on stdin; see
+// pool_round.go.
 package main
 
 import (
@@ -169,7 +174,10 @@ func hexes(stack [][]byte) []string {
 
 func main() {
 	if len(os.Args) < 2 {
-		die("usage: seqob-covenant <derive|fill|filltx|check|simderive|simwitness|simcheck> [flags]")
+		die("usage: seqob-covenant <derive|fill|filltx|check|simderive|simwitness|simcheck|poolderive|roundderive|round|roundsign|poolfill|poolwithdraw|roundrefund> [flags]")
+	}
+	if poolRound(os.Args[1]) {
+		return
 	}
 	switch os.Args[1] {
 	case "simderive":

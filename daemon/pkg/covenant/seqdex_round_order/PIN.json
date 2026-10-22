@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/ConcatenaLabs/sequentia-contracts",
+  "commit": "60195f1e7cb563d16c24fb2126832bb7f5fb5c04",
+  "path": "templates/seqdex_round_order",
+  "sha256": {
+    "descriptor.json": "83952d6bf9f209b50909b862a18f6af294d4d5c74bc0b452e4c73d96c287bbe6",
+    "fills.json": "bee3fa496ebc4852d78aa19ea0f1952c1ccb902f5a79fd9abaeee39fdfc4a74f",
+    "vectors.json": "920875978ecd2589e3dae9959db3f20163e3602ae33b33dbb2982592a7b9c9f7"
+  }
+}

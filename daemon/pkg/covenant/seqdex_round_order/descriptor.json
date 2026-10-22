@@ -1,0 +1,236 @@
+{
+  "descriptor": 2,
+  "template": {
+    "budget": {
+      "max": 4000050,
+      "offset": 50,
+      "per_witness_byte": 4
+    },
+    "internal_key": "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0",
+    "name": "seqdex/round-order",
+    "params": [
+      {
+        "label": "The asset the order sells, which the coin holds",
+        "name": "ASSET_A",
+        "role": "asset",
+        "type": "u256"
+      },
+      {
+        "label": "The asset a fill pays in",
+        "name": "ASSET_B",
+        "role": "asset",
+        "type": "u256"
+      },
+      {
+        "label": "Limit: the order accepts no less than LIMIT_NUM atoms of ASSET_B for every LIMIT_DEN atoms of ASSET_A",
+        "name": "LIMIT_NUM",
+        "role": "number",
+        "type": "u64"
+      },
+      {
+        "label": "Limit denominator: LIMIT_NUM atoms of ASSET_B for every LIMIT_DEN atoms of ASSET_A",
+        "name": "LIMIT_DEN",
+        "role": "number",
+        "type": "u64"
+      },
+      {
+        "label": "Least a fill takes, and least a remainder holds, in ASSET_A",
+        "name": "MIN_LOT",
+        "role": "amount",
+        "type": "u64"
+      },
+      {
+        "label": "The maker's payout script, which every fill pays",
+        "name": "MAKER",
+        "role": "script_hash",
+        "type": "u256"
+      },
+      {
+        "label": "From this lock time the refund key may take the coin back: below 500,000,000 a block height, else a Unix time compared with the median time past",
+        "name": "EXPIRY",
+        "role": "number",
+        "type": "u32"
+      },
+      {
+        "label": "The key that takes the coin back after EXPIRY",
+        "name": "REFUND_KEY",
+        "role": "pubkey",
+        "type": "Pubkey"
+      },
+      {
+        "label": "The clearer: only a round this key signs fills the order",
+        "name": "CLEARER",
+        "role": "pubkey",
+        "type": "Pubkey"
+      }
+    ],
+    "paths": [
+      {
+        "effect": "Fills the order in part in a round: the round's last output publishes its one price, N of QUOTE per D of BASE, for the order's two assets; output 2k pays MAKER exactly ceil(fill x rate) of ASSET_B at that price, which is at least the limit, and output 2k+1 holds the remainder, at least MIN_LOT, at this same script. CLEARER signs the round transaction. This coin is input k. PATH is Left((true, (FLIP, (N, D)))).",
+        "leaf": "order",
+        "name": "fill",
+        "who": "CLEARER"
+      },
+      {
+        "effect": "Fills the whole order in a round, as fill with no remainder; output 2k+1 is the round's. PATH is Left((false, (FLIP, (N, D)))).",
+        "leaf": "order",
+        "name": "fill_whole",
+        "who": "CLEARER"
+      },
+      {
+        "effect": "Once the transaction's lock time reaches EXPIRY, the refund key takes the coin, signing the whole transaction. PATH is Right(()).",
+        "leaf": "order",
+        "name": "refund",
+        "who": "REFUND_KEY"
+      }
+    ],
+    "slots": [],
+    "summary": "A SeqDEX round order: filled, in part or in whole, only in a clearing round its clearer signs, at the one price the round publishes in its last output and never below its limit; after expiry the refund key takes it back. No spend carries an annex.",
+    "tree": {
+      "branch": [
+        {
+          "leaf": "order",
+          "simplicity": {
+            "cmr": "270257e102fb0bf65f1c163ca392c49157a0acb9f1eaafe2016914b61720e3e7",
+            "compiler": {
+              "name": "simplicityhl",
+              "version": "0.7.2"
+            },
+            "max_cost_wu": 697,
+            "source": "seqdex_round_order.simf",
+            "source_sha256": "0090f7b20fdc305a44007287c608a418b3bca2081b9916aa3c368c7c7fc945f7",
+            "witness": [
+              {
+                "name": "ASSET_A",
+                "source": "param:ASSET_A",
+                "type": "u256"
+              },
+              {
+                "name": "ASSET_B",
+                "source": "param:ASSET_B",
+                "type": "u256"
+              },
+              {
+                "name": "LIMIT_NUM",
+                "source": "param:LIMIT_NUM",
+                "type": "u64"
+              },
+              {
+                "name": "LIMIT_DEN",
+                "source": "param:LIMIT_DEN",
+                "type": "u64"
+              },
+              {
+                "name": "MIN_LOT",
+                "source": "param:MIN_LOT",
+                "type": "u64"
+              },
+              {
+                "name": "MAKER",
+                "source": "param:MAKER",
+                "type": "u256"
+              },
+              {
+                "name": "EXPIRY",
+                "source": "param:EXPIRY",
+                "type": "u32"
+              },
+              {
+                "name": "REFUND_KEY",
+                "source": "param:REFUND_KEY",
+                "type": "Pubkey"
+              },
+              {
+                "name": "CLEARER",
+                "source": "param:CLEARER",
+                "type": "Pubkey"
+              },
+              {
+                "name": "PATH",
+                "source": "spender",
+                "type": "Either<(bool, (bool, (u64, u64))), ()>"
+              },
+              {
+                "name": "CLEARER_SIG",
+                "source": "spender",
+                "type": "Signature"
+              },
+              {
+                "name": "REFUND_SIG",
+                "source": "signature:sig_all_hash:REFUND_KEY",
+                "type": "Signature"
+              }
+            ]
+          }
+        },
+        {
+          "data": [
+            "ASSET_A",
+            "ASSET_B",
+            "LIMIT_NUM",
+            "LIMIT_DEN",
+            "MIN_LOT",
+            "MAKER",
+            "EXPIRY",
+            "REFUND_KEY",
+            "CLEARER"
+          ],
+          "leaf": "terms"
+        }
+      ]
+    },
+    "version": 1
+  },
+  "template_hash": "beb7d0004a13958214cf9968a82ddf8dc24b4e0cfcddc0d84f49a8d38338d254",
+  "chains": [
+    {
+      "name": "sequentia-testnet",
+      "genesis": "ddd11d54c87a2bd94400fd31ce05d8e1110bb4b78e7103f738342086fc4ea92e",
+      "bech32_hrp": "tb"
+    },
+    {
+      "name": "elementsregtest",
+      "genesis": null,
+      "bech32_hrp": "ert"
+    }
+  ],
+  "measured": {
+    "record": "harness/records/x4.json",
+    "fill_whole": {
+      "transaction": "a round of four orders, the clearer's two gap coins and a fee coin; twelve outputs, the clearing output last",
+      "vsize": 3107,
+      "weight": 12426,
+      "program_bytes": 1602,
+      "witness_bytes": 269,
+      "cost_bound_wu": 651,
+      "budget_wu": 7958
+    },
+    "fill_whole_flip": {
+      "transaction": "the same round, a bid filled whole",
+      "vsize": 3107,
+      "weight": 12426,
+      "program_bytes": 1606,
+      "witness_bytes": 269,
+      "cost_bound_wu": 651,
+      "budget_wu": 7974
+    },
+    "fill_flip": {
+      "transaction": "the same round, a bid filled in part",
+      "vsize": 3107,
+      "weight": 12426,
+      "program_bytes": 1718,
+      "witness_bytes": 269,
+      "cost_bound_wu": 697,
+      "budget_wu": 8422
+    },
+    "refund": {
+      "transaction": "the remainder and a fee coin; the refund, the fee change and the fee",
+      "vsize": 529,
+      "weight": 2115,
+      "program_bytes": 561,
+      "witness_bytes": 253,
+      "cost_bound_wu": 295,
+      "budget_wu": 3730
+    }
+  }
+}

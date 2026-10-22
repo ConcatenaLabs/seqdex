@@ -33,8 +33,9 @@ There is **no committed `go.work`**; it is kept local by design.
 - `daemon/internal/seqob/` — the order book: `api`, `client`, `matcher`, `offer`, `offerstore`,
   `covfill`, `reorg`, `session`, `settler`, `validator`, `watcher`, `bridge`.
 - `daemon/pkg/xchain/` — the shared cross-chain HTLC engine.
-- `daemon/pkg/covenant/` — the covenant leaf builders: the tapscript CLOB leaf and the
-  Simplicity order (`SimOrder`).
+- `daemon/pkg/covenant/` — the covenant leaf builders: the tapscript CLOB leaf, the
+  Simplicity order (`SimOrder`), the maker's pool (`SimPool`), the round order
+  (`RoundOrder`) and the clearing round at one price (`clearing.go`).
 - `wallet/` — the Ocean fork, the Sequentia wallet daemon.
 
 ## The naming trap: `xchain` is LIVE

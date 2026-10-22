@@ -362,6 +362,27 @@ both template copies, `pkg/covenant/seqdex_order_2/` and
 `pkg/covenant/seqdex_order/`, each of which its `PIN.json` ties to a commit of
 sequentia-contracts.
 
+The pool and the clearing round have their own subcommands, each reading a
+JSON spec on stdin (`cmd/seqob-covenant/pool_round.go` documents the specs).
+A pool (`pkg/covenant` `SimPool`, template `seqdex/pool`) is a maker's two
+coins, one of each asset of a market, that anyone fills from either side at
+its bid and ask, never below the reserve the maker states, and that only the
+maker's key withdraws. A round order (`RoundOrder`, template
+`seqdex/round-order`) fills only in a round its clearer signs, at the one price
+the round publishes in its last output, credited exactly at that price and
+never below its limit. `poolderive` and `roundderive` give an instance's
+address; `poolfill` lays out a fill of a pool at its quotes; `round` chooses a
+round's price over its round orders and pools (`ClearPrice`: the most base
+exchanged, then the least left unmatched, then the lowest price), fills them
+(`Allocate`), lays the round out (`BuildRound`) and signs it as the clearer;
+`roundsign` signs any given transaction as the clearer; `poolwithdraw` and
+`roundrefund` sign a withdrawal or a refund over each input's Simplicity
+`sig_all_hash`, which `pkg/covenant` computes itself (`SimSigAllHash`,
+`SimTxHash`, `ClearingDigest`, held to the contracts toolchain by
+`pkg/covenant/testdata/simhash_vectors.json`). The template copies in
+`pkg/covenant/seqdex_pool/` and `seqdex_round_order/` are tied to a commit of
+sequentia-contracts by their `PIN.json`.
+
 ### `cmd/seqob-relaycli`: relay scripting client
 
 `post` signs an offer and POSTs it (the stateless maker path); `take` signs,
@@ -444,7 +465,10 @@ internal/seqob/reorg       Bitcoin-anchor reorg detection helpers
 pkg/covenant               the covenant leaf builders: the tapscript FILL/REFUND
                            leaves (NUMS key, output key, fill planning) and the
                            Simplicity order (SimOrder: address, witnesses,
-                           fill planning and judgement, no compiler)
+                           fill planning and judgement, no compiler); the
+                           pool (SimPool) and the round order (RoundOrder),
+                           the clearing rule and the round's layout, and
+                           Simplicity's tx_hash and sig_all_hash
 pkg/xchain                 the HTLC engine: legs (elements/bitcoin/lightning),
                            orchestrator, VerifySeqLegSafe anchor gate,
                            submarine, pure-LN and sub-asset swaps, regtest
