@@ -468,6 +468,16 @@ func serve(conn *websocket.Conn, makers map[string]*client.Maker, ladder []*seqo
 		return liveSessions.Load() == 0 || time.Since(time.Unix(lastAccept.Load(), 0)) > 10*time.Minute
 	}
 	armRequoteExit(o, idle)
+	// HEAR OUR OWN FILLS. The relay sends an order's status changes only to connections that
+	// subscribed to its market, so a maker that never subscribed never learns a rung was
+	// filled whole, and the re-post below (on FILLED / UTXO_INVALIDATED) never ran: a taken
+	// rung stayed off the book until the next re-price. Subscribe to our own market, in our
+	// book's namespace, on every connection.
+	ownMarket := &seqobv1.To{Msg: &seqobv1.To_MarketSubscribe{MarketSubscribe: &seqobv1.AssetPair{
+		BaseAsset: o.GetPair().GetBaseAsset(), QuoteAsset: o.GetPair().GetQuoteAsset(), Confidential: o.GetConfidential()}}}
+	if err := writeWS(conn, ownMarket); err != nil {
+		fmt.Printf("subscribe to our market: %v\n", err)
+	}
 	// Reconnect resilience + STAY on the book. Exiting on a WS error lets the supervisor restart us,
 	// which mints a NEW offer_id → a taker who lifted the old id races a replaced offer and gets "no
 	// maker co-sign". So we reconnect and re-post the SAME offer_id (refreshed window + re-sign). Two
@@ -516,6 +526,9 @@ func serve(conn *websocket.Conn, makers map[string]*client.Maker, ladder []*seqo
 				nc.Close()
 				time.Sleep(backoff)
 				continue
+			}
+			if we := writeWS(nc, ownMarket); we != nil {
+				fmt.Printf("reconnect: subscribe to our market: %v\n", we)
 			}
 			// RE-ATTACH EVERY IN-FLIGHT SESSION, exactly as serveCross does.
 			//
