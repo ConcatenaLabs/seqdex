@@ -104,7 +104,7 @@ func TestReadCovenantBookSkipsWhatItCannotRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	kept, bad, err := ReadCovenantBook(path)
-	if err != nil || len(kept) != 1 || len(bad) != 2 || !strings.Contains(bad[1].Error(), "not a covenant order") {
+	if err != nil || len(kept) != 1 || len(bad) != 2 || !strings.Contains(bad[1].Error(), "not a covenant or resting order") {
 		t.Fatalf("kept %d bad %v err %v", len(kept), bad, err)
 	}
 }

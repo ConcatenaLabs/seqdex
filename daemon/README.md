@@ -40,18 +40,23 @@ seqobd [flags]
   -trade-log         append-only JSONL trade log so last_price, trades and
                      candles survive a restart (env SEQOB_TRADE_LOG; empty =
                      in-memory only)
-  -covenant-book     file keeping the covenant orders across a restart; each
-                     is checked again against the chain when read back (env
-                     SEQOB_COVENANT_BOOK; empty = in memory only)
+  -covenant-book     file keeping the covenant orders, and the orders resting
+                     in operators' trees, across a restart; each is checked
+                     again (against the chain, or its operator) when read
+                     back (env SEQOB_COVENANT_BOOK; empty = in memory only)
   -interactive-cap   soft per-maker committed-capital cap per offered asset
                      (atoms) for interactive offers; past it an offer is
                      flagged demoted (phantom depth); 0 disables
   -fill-anchor-depth Bitcoin blocks that must bury a covenant fill's anchor,
                      its block certified, before the relay records the fill
                      final (default 2; an offer's min_anchor_depth raises it)
-  -arca-operator     comma-separated base URLs of Arca operators; a covenant
-                     fill made by one of their rounds is recorded as that
-                     round's (env SEQOB_ARCA_OPERATORS)
+  -arca-operator     comma-separated base URLs of Arca operators the relay
+                     follows: a covenant fill made by one of their rounds is
+                     recorded as that round's, and orders resting in their
+                     trees are listed and followed (env SEQOB_ARCA_OPERATORS;
+                     needs -node-rpc)
+  -resting-interval  how often the relay asks each operator how the orders
+                     resting in its tree stand (default 3s)
 ```
 
 HTTP surface (bodies are protojson of `api-spec/protobuf/seqob/v1`):
@@ -66,7 +71,8 @@ GET  /v1/market/{base}/{quote}/orderbook    per-pair snapshot: the signed
                                             state of offers[i]
 GET  /v1/market/{base}/{quote}/trades       recent trades
 GET  /v1/market/{base}/{quote}/candles      OHLCV from the trades
-GET  /v1/market/{base}/{quote}/fills        covenant fill records (JSON)
+GET  /v1/market/{base}/{quote}/fills        fill records of covenant and resting
+                                            orders (JSON)
 POST /v1/lift                               open a lift session
 GET  /v1/ws                                 WebSocket (To/From envelope): book
                                             subscriptions, offer submission,
@@ -91,8 +97,59 @@ maker's offer for a listed outpoint (409 `covenant outpoint already listed`).
 The rule holds wherever an order enters the book or moves: a post, an edit, a
 re-rest after a part fill, a reorg's undo and a read-back of the covenant book.
 
-**The book across a restart.** The relay keeps its covenant orders, and only
-those, when given `-covenant-book`. A covenant order's maker is offline by
+**Orders resting in an operator's tree.** An order can rest as an `order-2`
+leaf in the tree of an Arca operator the relay follows (`-arca-operator`),
+under the offer member `RestingLeafTerms`. Its maker rests it and leaves;
+takers fill it through the operator (`POST <operator>/v1/order_fill`), never
+through the relay, and each fill is co-signed by the operator and held to the
+order's terms by the leaf's program. The relay's evidence is the operator's
+state view (`POST /v1/order_state`), so:
+
+- it admits such an offer only when the operator, one it follows and on the
+  relay's chain, has the offer's `operator_key` and reports the order
+  `resting` at the offer's locator (`coin`) holding exactly its `value`,
+  under exactly the offer's terms, and the order is before its delist time.
+  Otherwise the post is refused, naming why: the operator reports no such
+  order, reports it at another coin or holding another value, reports other
+  terms, or reports it `cancelled`, `filled` or otherwise not resting; or the
+  delist time has passed. The order is listed at its coin's value, never
+  above the `offer_amount` its maker signed;
+- every `-resting-interval` it asks the view again (one read per operator, up
+  to 100 orders each). A fill moves a part-filled order to a new coin under a
+  new salt: the relay moves the listing there and lists it at what that coin
+  holds, the signed offer unchanged (the locator is outside the signature). It
+  delists the order (`FILLED`, `CANCELLED` or `EXPIRED`) when the operator
+  reports it filled whole, cancelled, used up (`exhausted`: its four credit
+  keys spent), not live (landed on the chain, or gone), or no longer has it,
+  and at its delist time: the earlier of the landed order's REFUND time less
+  the operator's order margin (six hours) and the exit deadline of the batches
+  its coin rests on (three days before their first expiry), "now" being the
+  later of the relay's clock and the chain's median time. While the operator
+  cannot be asked, its orders are listed at 0, and so is an order whose coin is
+  not live yet (`pending`) or that the operator shows `filled` by a part fill
+  whose remainder it does not hold yet: neither can be filled until the operator
+  names the coin it rests at. An order that is filled, cancelled or otherwise done
+  while a fill of it is recorded at the operator and not signed is listed at 0 until
+  it is signed, so that fill is recorded before the order leaves the book;
+- it records each signed fill the view reports, keyed by the operator's
+  transfer id (an in-tree fill has no txid): the coin spent, what it held,
+  what was filled, the maker's credit, the remainder, and as taker
+  `operator_tree` with the operator's key and the round (and batch output) the
+  order's first coin rests in. The fill is `confirmed` while that round is in
+  a block of the active chain, `final` once it is final as a covenant fill is
+  (certified, anchor buried `-fill-anchor-depth`), and `undone` if the round
+  leaves the active chain, its trade retracted; it is recorded again if the
+  round comes back.
+
+The book lists one offer per resting order, by operator key and order id, as
+it lists one per covenant outpoint: the same maker's later offer replaces the
+listed one, and any other is refused (409 `resting order already listed`). A
+lift of a resting order is refused: it is filled through its operator.
+
+**The book across a restart.** The relay keeps its covenant orders and the
+orders resting in operators' trees, and only those, when given
+`-covenant-book`; a resting order is checked again against its operator's
+state view when read back, as a post is. A covenant order's maker is offline by
 design and its coin waits on the chain, so after a restart nobody may be there
 to post it again, and the order would sit unlisted until its refund. The file
 holds only public text: each order's signed offer at its current outpoint,

@@ -32,12 +32,18 @@ func restoreCovenantBook(path string, store *offerstore.Store, v *validator.Vali
 	for _, kc := range kept {
 		o := kc.Offer
 		txid, vout, _ := offer.CovenantOutpoint(o)
+		if c, _, ok := offer.RestingLocator(o); ok {
+			txid, vout = "coin "+c, 0
+		}
 		size, err := v.Readmit(context.Background(), o)
 		spent := errors.Is(err, watcher.ErrNotUnspent)
 		if err != nil && !spent {
 			logger.Printf("covenant book: %s/%s at %s:%d not listed again: %v", o.GetMakerPubkey(), o.GetOfferId(), txid, vout, err)
 			dropped++
 			continue
+		}
+		if spent && offer.IsResting(o) {
+			spent = false
 		}
 		if err == nil && size == 0 {
 			// The node could not be asked: the size it was listed at (held, if it
