@@ -133,6 +133,7 @@ type Store struct {
 	now            func() time.Time
 	trades         map[string][]Trade         // pairKey -> recent trades ring (newest last), lazy
 	fills          map[string][]*CovenantFill // pairKey -> recent covenant fill records (newest last), lazy
+	interactive    []*InteractiveWatch        // interactive fills the chain watcher follows to finality, oldest first, lazy
 	tradeLog       *os.File                   // B1: append-only JSONL sink so trade history survives a relay restart (nil = disabled)
 	interactiveCap uint64                     // P3.10: per-maker soft cap on committed capital per offer_asset (0 = disabled). An interactive offer that pushes the maker's cumulative offer_amount in an asset past this is demoted.
 }

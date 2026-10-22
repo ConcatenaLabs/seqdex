@@ -219,6 +219,9 @@ func (w *Watcher) ReconcileOnce() (Stats, error) {
 		w.recheck(k, tr, anchor, aerr == nil, &st)
 	}
 
+	// 1b. The interactive fills the relay recorded: their transactions' standing.
+	w.followInteractive(anchor, aerr == nil, &st)
+
 	// 2. The resting orders.
 	covs := w.book.SnapshotCovenants()
 	st.Scanned = len(covs)

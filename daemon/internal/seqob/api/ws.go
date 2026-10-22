@@ -917,6 +917,9 @@ func (s *Server) wsSettleAck(c *wsConn, sa *seqobv1.SettleAck) {
 			// which e.Offer (needed for the trade's pair + execution price) is no longer fetchable.
 			// Record WITH the settle txid so a reorg can retract this exact print (P3.9).
 			s.store.RecordTradeTx(e.Offer, fill, sa.GetSettleTxid())
+			// The chain watcher follows the settling tx to finality (and undoes it across an
+			// anchor reorg), serving its record with the pair's fills.
+			s.store.WatchInteractiveFill(k, e.Offer, fill, sa.GetSettleTxid())
 			// anchor_confs the maker declares for the settling tx (0 keeps the 0-conf-tolerant
 			// default). A fill with anchor_confs >= min_anchor_depth reaches FILLED; previously
 			// this was hard-coded 0, so a min_anchor_depth>0 offer could never finalize.
