@@ -44,6 +44,9 @@ const (
 	// a leaf in the round's batch, so no output of the round pays the taker:
 	// the record names the operator's key and the round.
 	TakerArcaRound = "arca_round"
+	// TakerClearingRound: a round order filled in a clearing round its clearer
+	// signed, at the one price the round's last output publishes (Price).
+	TakerClearingRound = "clearing_round"
 )
 
 // FillOutput is one output of a fill transaction as the record shows it.
@@ -61,6 +64,18 @@ type FillTaker struct {
 	RoundTxid  string   `json:"round_txid,omitempty"`  // arca_round: the fill's txid; operator_tree: the round the order's first coin rests in
 	BatchVouts []uint32 `json:"batch_vouts,omitempty"` // arca_round: the batch outputs holding the takers' leaves; operator_tree: the order's
 	Note       string   `json:"note,omitempty"`
+	// clearing_round: the clearer's key (x-only hex) and the round's price.
+	Clearer string      `json:"clearer,omitempty"`
+	Price   *RoundPrice `json:"price,omitempty"`
+}
+
+// RoundPrice is the one price a clearing round publishes: n atoms of quote for
+// every d atoms of base, asset ids display hex.
+type RoundPrice struct {
+	Base  string `json:"base"`
+	Quote string `json:"quote"`
+	N     uint64 `json:"n"`
+	D     uint64 `json:"d"`
 }
 
 // CovenantFill is the record of one covenant order filled by one transaction.

@@ -116,6 +116,8 @@ message Offer {
     CovenantTerms   covenant    = 23; // funded, self-enforcing resting order (passive CLOB)
     SimplicityCovenantTerms simplicity_covenant = 25; // the same, under the Simplicity template seqdex/order
     RestingLeafTerms resting_leaf = 26; // an order resting as a leaf in an operator's tree, filled there with its maker away
+    PoolTerms       pool        = 27; // one side of a maker's two-sided pool under seqdex/pool, filled by anyone at its quote
+    RoundOrderTerms round_order = 28; // an order under seqdex/round-order, filled only in a round its clearer signs
   }
 
   // secp256k1 signature by maker_pubkey over the canonical serialization of all
@@ -231,6 +233,68 @@ message SimplicityCovenantTerms {
   uint32 expiry_locktime = 9;  // refund lock: a height below 500,000,000, a median time past (unix seconds) from it
   bytes  refund_key      = 10; // 32-byte x-only key that takes the coin back after expiry_locktime
   string template_hash   = 11; // the template the terms are for (hex); a taker fills only a template it pins
+}
+
+// PoolTerms is one side of a maker's two-sided pool under the Simplicity
+// template seqdex/pool (sequentia-contracts, templates/seqdex_pool): two coins
+// at one address, one of `base` and one of `quote`, which anyone fills from
+// either side at the pool's quotes and only the maker's key withdraws. The pool
+// buys base paying at most bid_num of quote per bid_den of base, and sells base
+// asking at least ask_num per ask_den; a fill pays out at least min_lot of base
+// and never leaves the side it pays out below its reserve.
+//
+// A pool posts two offers, both TRADE_DIR_SELL, both carrying these terms: its
+// ask, offering base for quote at the ask, and its bid, offering quote for base
+// at the bid (listed on the reversed market). The relay derives the pool's
+// script from the terms, finds both coins at it holding their assets
+// explicitly, and lists the ask at what the base coin holds above
+// reserve_base and the bid at what the quote coin holds above reserve_quote,
+// never above the offer_amount its maker signed. A fill moves the pool to the
+// spender's outputs 2j and 2j+1 (j the base coin's input); the relay follows
+// both offers there and delists them when the maker withdraws.
+//
+// The coins (base_txid:base_vout, quote_txid:quote_vout) are chain state,
+// outside the signed bytes, as a covenant order's outpoint is.
+message PoolTerms {
+  string base_txid     = 1;  // the pool's base coin (display txid hex)
+  uint32 base_vout     = 2;
+  string quote_txid    = 3;  // the pool's quote coin (display txid hex)
+  uint32 quote_vout    = 4;
+  string base          = 5;  // 32-byte internal-order asset id hex
+  string quote         = 6;  // 32-byte internal-order asset id hex
+  uint64 bid_num       = 7;  // the pool pays at most bid_num of quote per bid_den of base
+  uint64 bid_den       = 8;
+  uint64 ask_num       = 9;  // the pool asks at least ask_num of quote per ask_den of base
+  uint64 ask_den       = 10;
+  uint64 min_lot       = 11; // the least base a fill moves
+  uint64 reserve_base  = 12; // what a fill paying base out must leave
+  uint64 reserve_quote = 13; // what a fill paying quote out must leave
+  bytes  maker_key     = 14; // 32-byte x-only key, the only one that withdraws
+  string template_hash = 15; // the template the terms are for (hex)
+}
+
+// RoundOrderTerms is a FUNDED order under the Simplicity template
+// seqdex/round-order (sequentia-contracts, templates/seqdex_round_order): a
+// coin of asset_a that fills only in a clearing round its clearer signs, at
+// the one price the round publishes in its last output, credited exactly
+// ceil(filled * price) of asset_b and never below limit_num/limit_den; a
+// partial fill rests again at 2k+1 under the same script; the refund key takes
+// it back once the lock time reaches expiry_locktime. No taker lifts it: it
+// is listed for its clearer, which collects it into a round, and the relay
+// records each round that fills it. The outpoint is outside the signed bytes.
+message RoundOrderTerms {
+  string covenant_txid   = 1;  // the funded output (display txid hex)
+  uint32 covenant_vout   = 2;
+  string asset_a         = 3;  // 32-byte internal-order asset id hex: the asset the order sells
+  string asset_b         = 4;  // 32-byte internal-order asset id hex: the asset a fill pays in
+  uint64 limit_num       = 5;  // the least it accepts: limit_num of asset_b per limit_den of asset_a
+  uint64 limit_den       = 6;
+  uint64 min_lot         = 7;  // floors every fill and every remainder
+  bytes  maker_script    = 8;  // the scriptPubKey every credit pays: a plain key's script
+  uint32 expiry_locktime = 9;  // refund lock: a height below 500,000,000, a median time past from it
+  bytes  refund_key      = 10; // 32-byte x-only
+  bytes  clearer         = 11; // 32-byte x-only: the only key whose rounds fill the order
+  string template_hash   = 12; // the template the terms are for (hex)
 }
 
 // RestingLeafTerms is an order resting in an operator's tree as an order-3

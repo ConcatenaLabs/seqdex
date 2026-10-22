@@ -314,6 +314,9 @@ type Probes struct {
 
 // CheckOffer implements validator.LivenessProbe.
 func (p Probes) CheckOffer(ctx context.Context, o *seqobv1.Offer) (uint64, error) {
+	if offer.IsPool(o) {
+		return ProbePool(p.Chain, o)
+	}
 	if offer.IsResting(o) {
 		if p.Resting == nil {
 			return 0, fmt.Errorf("the relay follows no operator")

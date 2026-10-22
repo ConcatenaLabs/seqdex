@@ -27,9 +27,10 @@ import (
 func IsResting(o *seqobv1.Offer) bool { return o.GetRestingLeaf() != nil }
 
 // FilledWithoutMaker reports whether o is filled with its maker away: a
-// covenant order on the chain, or an order resting in an operator's tree.
-// Such an order needs no live maker connection and holds no lift slot.
-func FilledWithoutMaker(o *seqobv1.Offer) bool { return IsCovenant(o) || IsResting(o) }
+// covenant order on the chain, a side of a pool, or an order resting in an
+// operator's tree. Such an order needs no live maker connection and holds no
+// lift slot.
+func FilledWithoutMaker(o *seqobv1.Offer) bool { return IsCovenant(o) || IsPool(o) || IsResting(o) }
 
 // RestingLocator is where a resting leaf order rests now: the coin's leaf id
 // and the atoms of asset_a it holds.

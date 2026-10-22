@@ -38,6 +38,13 @@ func outpointOf(o *seqobv1.Offer) (string, bool) {
 	if offer.IsResting(o) {
 		return offer.RestingOrderKey(o)
 	}
+	if offer.IsPool(o) {
+		txid, vout, ok := offer.PoolOwnCoin(o)
+		if !ok || txid == "" {
+			return "", false
+		}
+		return fmt.Sprintf("%s:%d", strings.ToLower(txid), vout), true
+	}
 	txid, vout, ok := offer.CovenantOutpoint(o)
 	if !ok || txid == "" {
 		return "", false

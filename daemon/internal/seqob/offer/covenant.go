@@ -3,6 +3,7 @@ package offer
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
 	"github.com/aejkcs50/seqdex/daemon/pkg/covenant"
@@ -15,10 +16,17 @@ import (
 // asks only whether an offer is funded on the chain and where it rests; these
 // helpers answer that for either member.
 
-// IsCovenant reports whether o is a funded resting order, under either leaf.
+// IsCovenant reports whether o is a funded resting order on the chain: a
+// tapscript or Simplicity order, or a round order (RoundOrderTerms), which
+// rests and re-rests at 2k+1 like them but fills only in a round its clearer
+// signs (IsRoundOrder). A pool is not one: it rests at two coins (pool.go).
 func IsCovenant(o *seqobv1.Offer) bool {
-	return o.GetCovenant() != nil || o.GetSimplicityCovenant() != nil
+	return o.GetCovenant() != nil || o.GetSimplicityCovenant() != nil || o.GetRoundOrder() != nil
 }
+
+// IsRoundOrder reports whether o fills only in a clearing round its clearer
+// signs: no taker lifts it, and no matcher crosses it.
+func IsRoundOrder(o *seqobv1.Offer) bool { return o.GetRoundOrder() != nil }
 
 // CovenantOutpoint is where a covenant offer rests (display txid).
 func CovenantOutpoint(o *seqobv1.Offer) (txid string, vout uint32, ok bool) {
@@ -26,6 +34,9 @@ func CovenantOutpoint(o *seqobv1.Offer) (txid string, vout uint32, ok bool) {
 		return t.GetCovenantTxid(), t.GetCovenantVout(), true
 	}
 	if t := o.GetSimplicityCovenant(); t != nil {
+		return t.GetCovenantTxid(), t.GetCovenantVout(), true
+	}
+	if t := o.GetRoundOrder(); t != nil {
 		return t.GetCovenantTxid(), t.GetCovenantVout(), true
 	}
 	return "", 0, false
@@ -43,6 +54,10 @@ func SetCovenantOutpoint(o *seqobv1.Offer, txid string, vout uint32) bool {
 		t.CovenantTxid, t.CovenantVout = txid, vout
 		return true
 	}
+	if t := o.GetRoundOrder(); t != nil {
+		t.CovenantTxid, t.CovenantVout = txid, vout
+		return true
+	}
 	return false
 }
 
@@ -51,7 +66,42 @@ func CovenantMinLot(o *seqobv1.Offer) uint64 {
 	if t := o.GetCovenant(); t != nil {
 		return t.GetMinLot()
 	}
+	if t := o.GetRoundOrder(); t != nil {
+		return t.GetMinLot()
+	}
 	return o.GetSimplicityCovenant().GetMinLot()
+}
+
+// RoundOrderOf is the round order a RoundOrderTerms describes, its terms
+// checked (covenant.RoundOrder.Validate) and its template the one this build
+// pins. Asset ids are internal-order hex.
+func RoundOrderOf(t *seqobv1.RoundOrderTerms) (covenant.RoundOrder, error) {
+	var o covenant.RoundOrder
+	if t == nil {
+		return o, fmt.Errorf("no round order terms")
+	}
+	if !strings.EqualFold(t.GetTemplateHash(), covenant.RoundOrderTemplateHash) {
+		return o, fmt.Errorf("template %q is not seqdex/round-order %s, the one this build reads", t.GetTemplateHash(), covenant.RoundOrderTemplateHash)
+	}
+	a, err := hex32(t.GetAssetA())
+	if err != nil {
+		return o, fmt.Errorf("asset_a: %w", err)
+	}
+	b, err := hex32(t.GetAssetB())
+	if err != nil {
+		return o, fmt.Errorf("asset_b: %w", err)
+	}
+	if len(t.GetRefundKey()) != 32 || len(t.GetClearer()) != 32 {
+		return o, fmt.Errorf("refund_key and clearer must be 32 bytes")
+	}
+	o = covenant.RoundOrder{AssetA: a, AssetB: b, LimitNum: t.GetLimitNum(), LimitDen: t.GetLimitDen(),
+		MinLot: t.GetMinLot(), MakerScript: append([]byte{}, t.GetMakerScript()...), Expiry: t.GetExpiryLocktime()}
+	copy(o.RefundKey[:], t.GetRefundKey())
+	copy(o.Clearer[:], t.GetClearer())
+	if err := o.Validate(); err != nil {
+		return covenant.RoundOrder{}, err
+	}
+	return o, nil
 }
 
 // SimOrderOf is the Simplicity order a SimplicityCovenantTerms describes, its

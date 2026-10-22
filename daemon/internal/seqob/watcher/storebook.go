@@ -18,7 +18,7 @@ func (b *storeBook) SnapshotCovenants() []CovEntry {
 	src := b.s.SnapshotCovenants()
 	out := make([]CovEntry, 0, len(src))
 	for _, c := range src {
-		out = append(out, CovEntry{Key: c.Key, Offer: c.Offer, Terms: c.Terms, Sim: c.Sim, Active: c.Active, ReRested: c.ReRested})
+		out = append(out, CovEntry{Key: c.Key, Offer: c.Offer, Terms: c.Terms, Sim: c.Sim, Round: c.Round, Active: c.Active, ReRested: c.ReRested})
 	}
 	return out
 }
@@ -64,3 +64,20 @@ func (b *storeBook) RemoveGhost(k offerstore.Key, reason string) error {
 func (b *storeBook) HoldGhost(k offerstore.Key, reason string) error {
 	return b.s.HoldCovenantGhost(k, reason)
 }
+
+// The pool follower's part (pools.go).
+func (b *storeBook) SnapshotPools() []offerstore.PoolEntry { return b.s.SnapshotPools() }
+
+func (b *storeBook) RepointPool(k offerstore.Key, baseTxid string, baseVout uint32, quoteTxid string, quoteVout uint32, active uint64) {
+	b.s.RepointPool(k, baseTxid, baseVout, quoteTxid, quoteVout, active)
+}
+
+func (b *storeBook) ReconcilePool(k offerstore.Key, active uint64) { b.s.ReconcilePool(k, active) }
+
+func (b *storeBook) RemovePool(k offerstore.Key, status seqobv1.OfferStatus) error {
+	return b.s.RemovePool(k, status)
+}
+
+func (b *storeBook) RecordPoolMove(m offerstore.PoolMove) { b.s.RecordPoolMove(m) }
+
+var _ PoolBook = (*storeBook)(nil)

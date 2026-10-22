@@ -28,6 +28,9 @@ type FillReading struct {
 	// would refuse what the chain took. The chain is right; the reading then
 	// comes from the outputs alone.
 	Disagrees string
+	// Clearing is the price a clearing round published in its last output, for
+	// a round order filled in one.
+	Clearing *offerstore.RoundPrice
 }
 
 // ReadFill reads what sp did to the order it spent, which held locked atoms of

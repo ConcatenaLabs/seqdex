@@ -36,12 +36,16 @@ type CovEntry struct {
 	Offer    *seqobv1.Offer                   // the signed offer as it rests (its outpoint is outside the signed bytes)
 	Terms    *seqobv1.CovenantTerms           // a tapscript order's terms, or nil
 	Sim      *seqobv1.SimplicityCovenantTerms // a Simplicity order's terms, or nil
+	Round    *seqobv1.RoundOrderTerms         // a round order's terms, or nil
 	Active   uint64                           // book's current active size (advisory; reconciled to chain)
 	ReRested bool                             // F3: current outpoint is a remainder from a prior partial fill, not the original funding
 }
 
 // outpoint is where the order rests.
 func (c CovEntry) outpoint() (string, uint32) {
+	if c.Round != nil {
+		return c.Round.GetCovenantTxid(), c.Round.GetCovenantVout()
+	}
 	if c.Sim != nil {
 		return c.Sim.GetCovenantTxid(), c.Sim.GetCovenantVout()
 	}
@@ -122,6 +126,10 @@ type Watcher struct {
 	// A fill's block can leave the chain at any depth (an anchor reorg), so a
 	// fill stays tracked, final or not, while its record is held.
 	tracks map[offerstore.Key]*track
+
+	// poolTracks holds, per side of a pool, the moves the pool follower has
+	// recorded, oldest first (pools.go).
+	poolTracks map[offerstore.Key][]*poolStep
 }
 
 // step is one fill (or refund) of one order the watcher has seen in a block.
@@ -244,6 +252,10 @@ func (w *Watcher) ReconcileOnce() (Stats, error) {
 		}
 		v := Classify(state, exp)
 		w.apply(c, v, state, anchor, aerr == nil, &st)
+	}
+	// 3. The pools, when the book lists them.
+	if pb, ok := w.book.(PoolBook); ok {
+		w.reconcilePools(pb, anchor, aerr == nil, &st)
 	}
 	w.prune()
 	return st, nil
@@ -486,7 +498,12 @@ func (w *Watcher) recordSpend(c CovEntry, state CovState, a AnchorTip, anchorKno
 		if final {
 			rec.State = offerstore.FillFinal
 		}
-		if w.rounds != nil {
+		if r.Clearing != nil {
+			rec.Taker = offerstore.FillTaker{Via: offerstore.TakerClearingRound, RoundTxid: sp.Txid,
+				Clearer: hex.EncodeToString(c.Round.GetClearer()), Price: r.Clearing,
+				Note: "a clearing round: every round order in it is credited at the one price its last output publishes"}
+		}
+		if w.rounds != nil && r.Clearing == nil {
 			ri, ok, rerr := w.rounds.Round(sp.Txid, sp.Outputs)
 			if rerr != nil {
 				w.log.Printf("watcher: %s/%s fill %s: ask the operators whether it is a round: %v", k.MakerPubkey, k.OfferID, short(sp.Txid), rerr)

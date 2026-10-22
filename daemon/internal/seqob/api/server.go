@@ -133,6 +133,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/market/", s.handleOrderbook)
 	mux.HandleFunc("/v1/lift", s.handleLift)
 	mux.HandleFunc("/v1/ws", s.handleWS)
+	mux.HandleFunc("/v1/rounds", s.handleRounds)
+	mux.HandleFunc("/v1/pools/moves", s.handlePoolMoves)
 	return mux
 }
 
@@ -316,6 +318,35 @@ func (s *Server) handleFills(w http.ResponseWriter, r *http.Request, pair *seqob
 	writeJSON(w, map[string]interface{}{"base": pair.BaseAsset, "quote": pair.QuoteAsset, "fills": s.store.CovenantFills(pair, limit)})
 }
 
+// handleRounds serves the clearing rounds the relay has seen: GET
+// /v1/rounds?limit=N, newest first. Each names its transaction, the one price
+// its last output publishes, the clearer, the round orders it filled (their
+// fill records, credited at that price) and the pools it moved, and where it
+// stands: confirmed, final, or undone when its block left the chain.
+func (s *Server) handleRounds(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	limit := 50
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 && v <= 1000 {
+		limit = v
+	}
+	writeJSON(w, map[string]interface{}{"rounds": s.store.ClearingRounds(limit)})
+}
+
+// handlePoolMoves serves the moves of the pools the relay lists or listed: GET
+// /v1/pools/moves[?pool=KEY], newest first: each fill at the pool's quotes (in
+// or out of a clearing round) and each withdrawal, as the pool follower last
+// saw it.
+func (s *Server) handlePoolMoves(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, map[string]interface{}{"moves": s.store.PoolMoves(r.URL.Query().Get("pool"))})
+}
+
 // handleCandles serves OHLCV bucketed from the trades: GET
 // /v1/market/{base}/{quote}/candles?interval=<seconds>&limit=N. Buckets align to the epoch.
 func (s *Server) handleCandles(w http.ResponseWriter, r *http.Request, pair *seqobv1.AssetPair) {
@@ -460,6 +491,12 @@ func (s *Server) openLift(sl *seqobv1.StartLift) (*session.Session, error) {
 	if offer.IsResting(e.Offer) {
 		return nil, errString("this order rests in an operator's tree: fill it through its operator (" +
 			e.Offer.GetRestingLeaf().GetOperatorUrl() + "/v1/order_fill), not by a lift")
+	}
+	if offer.IsRoundOrder(e.Offer) {
+		return nil, errString("this order fills only in a clearing round its clearer signs (round_order.clearer), not by a lift")
+	}
+	if offer.IsPool(e.Offer) {
+		return nil, errString("this is a pool: fill it on the chain with the pool's own fill (seqdex/pool), not by a lift")
 	}
 	if sl.GetTakeAmount() > e.ActiveAmount {
 		return nil, errString("take_amount exceeds active_amount")
