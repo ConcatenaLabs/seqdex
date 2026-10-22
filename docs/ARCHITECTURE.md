@@ -179,6 +179,14 @@ Statuses (`seqob/v1/relay.proto`): `OPEN -> PARTIAL -> FILLED`, or `CANCELLED`,
 `EXPIRED`, `UTXO_INVALIDATED` (the maker could not co-sign because its coins
 moved; the order is dropped at zero on-chain cost).
 
+A same-chain `seqob-maker` posts a rung again, with a fresh window and signature,
+when the relay reports it `FILLED` or `UTXO_INVALIDATED`, so its quote stays on the
+book without a restart. Its wallet goes on listing a coin whose spend it has not yet
+seen, so the maker keeps every coin its own swaps spend locked in the wallet before
+each co-sign (10 minutes while a swap is in flight, 30 once it settled;
+`cmd/seqob-maker/spentguard.go`); a lift is co-signed only from coins no swap of its
+own has spent, and is refused when there are none.
+
 `FILLED` is anchor-aware: a fill is applied with its `settle_txid` and current
 anchor confirmation count, and the order only reaches `FILLED` when the
 settling transaction has at least `min_anchor_depth` Bitcoin-anchor
