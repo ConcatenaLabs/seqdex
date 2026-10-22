@@ -2,6 +2,7 @@ package watcher
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -107,6 +108,12 @@ func readCoin(chain ChainView, txid string, vout uint32, spk []byte, asset [32]b
 	return st, nil
 }
 
+// ErrPoolDrained is ProbePool's refusal of a side whose coin holds nothing
+// above its reserve. A post is refused for it; a side the relay already listed
+// (read back from its covenant book) is kept, held at 0, and the follower lists
+// it again once a fill refills its coin.
+var ErrPoolDrained = errors.New("holds nothing above its reserve")
+
 // ProbePool checks a side of a pool when it is posted: both coins unspent at
 // the pool's script, holding the pool's two assets explicitly, and something
 // above the side's reserve. It returns what the side lists (offer units,
@@ -145,7 +152,7 @@ func ProbePool(chain ChainView, o *seqobv1.Offer) (uint64, error) {
 		if s.ask {
 			side, reserve = "base coin", s.pool.ReserveBase
 		}
-		return 0, fmt.Errorf("the pool's %s holds nothing above its reserve %d: this side has nothing to fill", side, reserve)
+		return 0, fmt.Errorf("the pool's %s %w %d: this side has nothing to fill", side, ErrPoolDrained, reserve)
 	}
 	return d, nil
 }

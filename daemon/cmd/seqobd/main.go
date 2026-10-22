@@ -18,9 +18,10 @@
 // fundless; the watcher only READS the node and drives the covenant-aware book
 // ops.
 //
-// Covenant book: with -covenant-book, the relay keeps its covenant orders in a
-// file and lists them again when it starts, each checked again (signature,
-// terms, expiry, its outpoint on the chain). Interactive offers are never kept.
+// Covenant book: with -covenant-book, the relay keeps its covenant orders, its
+// pools' sides and the orders resting in operators' trees in a file and lists
+// them again when it starts, each checked again (signature, terms, expiry, its
+// coins on the chain or its operator's view). Interactive offers are never kept.
 package main
 
 import (
@@ -80,7 +81,7 @@ func main() {
 		offersPerMin   = flag.Int("offers-per-min", 60, "max offers/min per maker_pubkey")
 		offersPerMinI  = flag.Int("offers-per-min-ip", 120, "max offers/min per IP")
 		tradeLog       = flag.String("trade-log", env("SEQOB_TRADE_LOG", ""), "path to an append-only JSONL trade log so last_price/trades/candles survive a relay restart (env SEQOB_TRADE_LOG; empty = in-memory only)")
-		covenantBook   = flag.String("covenant-book", env("SEQOB_COVENANT_BOOK", ""), "path to a file keeping the covenant orders across a relay restart, each checked again against the chain when read back (env SEQOB_COVENANT_BOOK; empty = in memory only)")
+		covenantBook   = flag.String("covenant-book", env("SEQOB_COVENANT_BOOK", ""), "path to a file keeping the covenant orders and pools across a relay restart, each checked again against the chain when read back (env SEQOB_COVENANT_BOOK; empty = in memory only)")
 		finalDepth     = flag.Int64("fill-anchor-depth", watcher.DefaultFinalAnchorDepth, "Bitcoin blocks that must bury a covenant fill's anchor, its block certified, before the relay records it final (an offer's min_anchor_depth raises it)")
 		arcaOperators  = flag.String("arca-operator", env("SEQOB_ARCA_OPERATORS", ""), "comma-separated base URLs of Arca operators the relay follows: their rounds' fills of covenant orders are recorded as theirs, and orders resting in their trees are listed, followed and delisted from their state views (env SEQOB_ARCA_OPERATORS; needs -node-rpc)")
 		restingEvery   = flag.Duration("resting-interval", 3*time.Second, "how often the relay asks each operator how the orders resting in its tree stand")

@@ -40,10 +40,11 @@ seqobd [flags]
   -trade-log         append-only JSONL trade log so last_price, trades and
                      candles survive a restart (env SEQOB_TRADE_LOG; empty =
                      in-memory only)
-  -covenant-book     file keeping the covenant orders, and the orders resting
-                     in operators' trees, across a restart; each is checked
-                     again (against the chain, or its operator) when read
-                     back (env SEQOB_COVENANT_BOOK; empty = in memory only)
+  -covenant-book     file keeping the covenant orders, both sides of each
+                     maker's pool, and the orders resting in operators'
+                     trees, across a restart; each is checked again (against
+                     the chain, or its operator) when read back (env
+                     SEQOB_COVENANT_BOOK; empty = in memory only)
   -interactive-cap   soft per-maker committed-capital cap per offered asset
                      (atoms) for interactive offers; past it an offer is
                      flagged demoted (phantom depth); 0 disables
@@ -182,9 +183,9 @@ buried, `undone` when the round's block leaves the chain, and recorded again
 when it comes back. `seqob-covenant round` lays a round out from these
 listings.
 
-**The book across a restart.** The relay keeps its covenant orders and the
-orders resting in operators' trees, and only those, when given
-`-covenant-book`; a resting order is checked again against its operator's
+**The book across a restart.** The relay keeps its covenant orders, both sides
+of each maker's pool, and the orders resting in operators' trees, and only
+those, when given `-covenant-book`; a resting order is checked again against its operator's
 state view when read back, as a post is. A covenant order's maker is offline by
 design and its coin waits on the chain, so after a restart nobody may be there
 to post it again, and the order would sit unlisted until its refund. The file
@@ -194,7 +195,13 @@ order goes through the checks a posted offer does (signature, terms, expiry,
 the outpoint on the chain) and is listed at what its outpoint holds. An order
 whose outpoint was spent while the relay was down is held at 0, and the chain
 watcher follows the spend: to the remainder a part fill made, or out of the
-book. The file is rewritten, atomically, within two seconds of a change, and
+book. A pool's side is kept at the two coins the pool rests at; if a fill
+spent them while the relay was down, both sides are held at 0 and the pool
+follower moves them to the coins the fill re-created the pool at (or delists
+them once the maker's withdrawal is final), and a side sold down to its
+reserve comes back held at 0, as it was. The fill and pool-move records
+(`/v1/rounds`, `/v1/pools/moves`) are not in the file: after a restart they
+hold what the relay has seen since it started. The file is rewritten, atomically, within two seconds of a change, and
 as the relay stops. Interactive, cross-chain and Lightning offers are not
 kept: their makers or agents post them again when they reconnect, and keeping
 an interactive offer whose maker is gone would list an order nobody can fill.

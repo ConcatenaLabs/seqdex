@@ -3,10 +3,11 @@ package offerstore
 // The covenant book file keeps a relay's covenant orders across a restart.
 //
 // Only orders filled with their makers away are kept: covenant orders, each the
-// maker's signed offer (public text) pointing at a coin on the chain, and orders
-// resting in an Arca operator's tree, each pointing at the coin the operator
-// holds. Their makers are offline by design, so after a restart nobody may be
-// there to post them again. Everything in the file is checked again when it is
+// maker's signed offer (public text) pointing at a coin on the chain, both sides
+// of a maker's pool, each pointing at the two coins the pool rests at now, and
+// orders resting in an Arca operator's tree, each pointing at the coin the
+// operator holds. Their makers are offline by design, so after a restart nobody
+// may be there to post them again. Everything in the file is checked again when it is
 // read back (the signature, the terms, the expiry, and the outpoint on the chain
 // or the order in its operator's state view), so a stale line can only be
 // dropped, never listed.
@@ -52,6 +53,9 @@ func (s *Store) CovenantBookBytes() ([]byte, error) {
 	covs := s.SnapshotCovenants()
 	for _, r := range s.SnapshotResting() {
 		covs = append(covs, CovenantEntry{Key: r.Key, Offer: r.Offer, Active: r.Active})
+	}
+	for _, p := range s.SnapshotPools() {
+		covs = append(covs, CovenantEntry{Key: p.Key, Offer: p.Offer, Active: p.Active})
 	}
 	sort.Slice(covs, func(i, j int) bool {
 		if covs[i].Key.MakerPubkey != covs[j].Key.MakerPubkey {
@@ -157,7 +161,9 @@ func ReadCovenantBook(path string) (kept []KeptCovenant, bad []error, err error)
 // once the caller has checked it again: at listed atoms, its kept re-rested
 // mark, or, when its outpoint was spent while the relay was down (spent),
 // held at 0 for the chain watcher to follow the spend (to the remainder a part
-// fill made, or out of the book). listed is clamped to the signed size.
+// fill made, or out of the book; a pool's side to the coins a fill re-created
+// the pool at, or out of the book once its maker's withdrawal is final).
+// listed is clamped to the signed size.
 func (s *Store) RestoreCovenant(o *seqobv1.Offer, listed uint64, reRested, spent bool) (Key, error) {
 	if !offer.FilledWithoutMaker(o) {
 		return Key{}, fmt.Errorf("offer %s is not a covenant or resting order", o.GetOfferId())
@@ -175,6 +181,10 @@ func (s *Store) RestoreCovenant(o *seqobv1.Offer, listed uint64, reRested, spent
 	}
 	s.mu.Unlock()
 	if spent {
+		if offer.IsPool(o) {
+			s.ReconcilePool(k, 0)
+			return k, nil
+		}
 		return k, s.HoldCovenantForSpend(k, "")
 	}
 	return k, nil
