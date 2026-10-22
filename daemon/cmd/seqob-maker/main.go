@@ -393,6 +393,7 @@ func main() {
 	// Every co-sign goes through the spent-coin guard: coins our own swaps spend are
 	// locked again first, so the wallet never hands one back while it still lists it.
 	guard := newSpentGuard()
+	coinSpent := nodeCoinSpent(*nodeRPC)
 	rb.CompleteSwapFn = func(req *seqdexv1.SwapRequest, blind bool) (string, []swap.UnblindedInput, error) {
 		signedPSET, utxos, err := guardedCompleteSwap(guard,
 			func(ctx context.Context, us []ports.Utxo) error {
@@ -401,7 +402,7 @@ func main() {
 			func() (string, []ports.Utxo, error) {
 				signed, us, _, err := svc.CompleteSwap(*account, swapReqAdapter{req}, *msats, true, blind)
 				return signed, us, err
-			})
+			}, coinSpent)
 		if err != nil {
 			return "", nil, err
 		}

@@ -66,7 +66,7 @@ func TestTheLiftAfterAFillNeverTakesTheCoinItSpent(t *testing.T) {
 				return "", nil, err
 			}
 			return "signed", []ports.Utxo{u}, nil
-		})
+		}, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -116,7 +116,7 @@ func TestALiftIsRefusedWhenTheSpentCoinsCannotBeLocked(t *testing.T) {
 	called := false
 	_, _, err := guardedCompleteSwap(g,
 		func(context.Context, []ports.Utxo) error { return errors.New("wallet unreachable") },
-		func() (string, []ports.Utxo, error) { called = true; return "signed", nil, nil })
+		func() (string, []ports.Utxo, error) { called = true; return "signed", nil, nil }, nil)
 	if err == nil || called {
 		t.Fatalf("co-signed without locking our spent coins (err=%v, called=%v)", err, called)
 	}
@@ -134,5 +134,64 @@ func TestARungThatLeftTheBookIsPostedAgain(t *testing.T) {
 		if offerLeftBook(st) != want {
 			t.Fatalf("offerLeftBook(%s) = %v, want %v", st, !want, want)
 		}
+	}
+}
+
+// The testnet after the maker's restart: its wallet still listed a coin spent hours
+// earlier, so the guard's memory had nothing to lock and the lift was co-signed with it
+// (bad-txns-inputs-missingorspent). With the node asked, that coin is held and the
+// selection made again.
+func TestACoinTheWalletStillListsAfterItsSpendIsNotCoSigned(t *testing.T) {
+	clock := time.Unix(1_700_000_000, 0)
+	now := func() time.Time { return clock }
+	w := &oceanLike{now: now, window: 2 * time.Minute, locked: map[string]time.Time{}, seen: map[string]bool{},
+		coins: []coin{{txid: "old", vout: 0}, {txid: "c2", vout: 1}}}
+	onChainSpent := map[string]bool{"old:0": true} // spent before this process started
+	spent := func(u ports.Utxo) (bool, error) { return onChainSpent[coinKey(u)], nil }
+	lock := func(_ context.Context, us []ports.Utxo) error { w.lock(us); return nil }
+	sel := func() (string, []ports.Utxo, error) {
+		u, err := w.selectOne()
+		if err != nil {
+			return "", nil, err
+		}
+		return "signed", []ports.Utxo{u}, nil
+	}
+
+	// Control: without the node's answer the fresh guard co-signs with the spent coin.
+	if _, us, _ := guardedCompleteSwap(newSpentGuard(), lock, sel, nil); coinKey(us[0]) != "old:0" {
+		t.Fatalf("the scenario does not reproduce the testnet failure (took %s)", coinKey(us[0]))
+	}
+	clock = clock.Add(3 * time.Minute) // the wallet's own lock expires
+
+	g := newSpentGuard()
+	g.now = now
+	_, us, err := guardedCompleteSwap(g, lock, sel, spent)
+	if err != nil || coinKey(us[0]) != "c2:1" {
+		t.Fatalf("co-signed %v (err %v), want the unspent c2:1", us, err)
+	}
+	// The spent coin stays held, so later lifts do not try it again.
+	held := map[string]bool{}
+	for _, u := range g.held() {
+		held[coinKey(u)] = true
+	}
+	if !held["old:0"] {
+		t.Fatal("the spent coin is not held")
+	}
+
+	// Every coin the wallet offers is spent: refused after a few tries, never co-signed.
+	onChainSpent["c2:1"] = true
+	clock = clock.Add(settledHold + time.Minute)
+	if _, _, err := guardedCompleteSwap(newSpentGuard(), lock, sel, spent); err == nil {
+		t.Fatal("co-signed although the node says every selected coin is spent")
+	}
+}
+
+func TestANodeThatCannotBeAskedDoesNotStopTheCoSign(t *testing.T) {
+	_, us, err := guardedCompleteSwap(newSpentGuard(),
+		func(context.Context, []ports.Utxo) error { return nil },
+		func() (string, []ports.Utxo, error) { return "signed", []ports.Utxo{coin{txid: "c1"}}, nil },
+		func(ports.Utxo) (bool, error) { return false, errors.New("node down") })
+	if err != nil || len(us) != 1 {
+		t.Fatalf("a node error stopped the co-sign: %v", err)
 	}
 }

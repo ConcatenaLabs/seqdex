@@ -184,8 +184,11 @@ when the relay reports it `FILLED` or `UTXO_INVALIDATED`, so its quote stays on 
 book without a restart. Its wallet goes on listing a coin whose spend it has not yet
 seen, so the maker keeps every coin its own swaps spend locked in the wallet before
 each co-sign (10 minutes while a swap is in flight, 30 once it settled;
-`cmd/seqob-maker/spentguard.go`); a lift is co-signed only from coins no swap of its
-own has spent, and is refused when there are none.
+`cmd/seqob-maker/spentguard.go`). With `-node-rpc` it also asks the node (`gettxout`,
+mempool included) about every coin the wallet selects, since the wallet can list a coin
+long after it was spent and across a restart: a spent one is held and the selection made
+again, up to three times. A lift is co-signed only from coins the node says are unspent and
+no swap of its own has spent, and is refused when there are none.
 
 `FILLED` is anchor-aware: a fill is applied with its `settle_txid` and current
 anchor confirmation count, and the order only reaches `FILLED` when the
