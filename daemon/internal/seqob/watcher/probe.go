@@ -50,10 +50,13 @@ func (p SubmitProbe) CheckOffer(_ context.Context, o *seqobv1.Offer) (uint64, er
 // evidence: list at the signed size) for a non-covenant offer or when the chain
 // could not be asked; and an error when the chain contradicts the offer.
 func ProbeCovenant(chain ChainView, o *seqobv1.Offer) (uint64, error) {
+	if offer.IsPool(o) {
+		return ProbePool(chain, o)
+	}
 	if !offer.IsCovenant(o) || chain == nil {
 		return 0, nil
 	}
-	c := CovEntry{Offer: o, Terms: o.GetCovenant(), Sim: o.GetSimplicityCovenant()}
+	c := CovEntry{Offer: o, Terms: o.GetCovenant(), Sim: o.GetSimplicityCovenant(), Round: o.GetRoundOrder()}
 	exp, err := c.expect()
 	if err != nil {
 		return 0, fmt.Errorf("covenant terms: %w", err)

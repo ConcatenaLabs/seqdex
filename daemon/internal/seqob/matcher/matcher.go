@@ -99,6 +99,12 @@ func hasSettlementOwner(incoming, resting *seqobv1.Offer) bool {
 	if offer.IsResting(incoming) || offer.IsResting(resting) {
 		return false
 	}
+	// A round order fills only in a round its clearer signs, and a pool is
+	// filled by a taker that builds the pool's own fill: no owner here
+	// settles a cross with either.
+	if offer.IsRoundOrder(incoming) || offer.IsRoundOrder(resting) || offer.IsPool(incoming) || offer.IsPool(resting) {
+		return false
+	}
 	return resting.GetCovenant() != nil
 }
 

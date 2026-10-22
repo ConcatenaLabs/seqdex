@@ -306,6 +306,12 @@ func (v *Validator) checkTerms(o *seqobv1.Offer) error {
 	if o.GetSimplicityCovenant() != nil {
 		return checkSimplicityCovenant(o)
 	}
+	if o.GetRoundOrder() != nil {
+		return checkRoundOrder(o)
+	}
+	if o.GetPool() != nil {
+		return checkPool(o)
+	}
 	if offer.IsResting(o) {
 		if err := offer.CheckRestingTerms(o); err != nil {
 			return err
@@ -354,6 +360,85 @@ func checkSimplicityCovenant(o *seqobv1.Offer) error {
 		return fmt.Errorf("covenant asset_b %s is not the want_asset %s", b, o.GetWantAsset())
 	}
 	return nil
+}
+
+// checkRoundOrder is checkSimplicityCovenant for an order under the template
+// seqdex/round-order: the terms well formed and of the template this relay
+// pins (offer.RoundOrderOf), tied to the assets the offer advertises, and the
+// offer's price its limit. It fills only in a round its clearer signs, at the
+// round's price, never below that limit; the chain probe then checks the
+// outpoint pays the program the terms make and holds between min_lot and
+// offer_amount.
+func checkRoundOrder(o *seqobv1.Offer) error {
+	rt := o.GetRoundOrder()
+	if b, err := hex.DecodeString(rt.GetCovenantTxid()); err != nil || len(b) != 32 {
+		return fmt.Errorf("covenant_txid must be 32-byte hex")
+	}
+	ro, err := offer.RoundOrderOf(rt)
+	if err != nil {
+		return fmt.Errorf("round order: %w", err)
+	}
+	if o.GetTradeDir() != seqobv1.TradeDir_TRADE_DIR_SELL {
+		return fmt.Errorf("round orders must be TRADE_DIR_SELL (asset A is the offered base)")
+	}
+	if ro.MinLot > o.GetOfferAmount() {
+		return fmt.Errorf("round order min_lot %d exceeds the locked amount %d", ro.MinLot, o.GetOfferAmount())
+	}
+	if !ratioEqual(ro.LimitNum, ro.LimitDen, o.GetWantAmount(), o.GetOfferAmount()) {
+		return fmt.Errorf("round order limit %d/%d does not equal the offer's want/offer %d/%d", ro.LimitNum, ro.LimitDen, o.GetWantAmount(), o.GetOfferAmount())
+	}
+	if a, _ := internalToDisplay(rt.GetAssetA()); a != strings.ToLower(o.GetOfferAsset()) {
+		return fmt.Errorf("round order asset_a %s is not the offer_asset %s", a, o.GetOfferAsset())
+	}
+	if b, _ := internalToDisplay(rt.GetAssetB()); b != strings.ToLower(o.GetWantAsset()) {
+		return fmt.Errorf("round order asset_b %s is not the want_asset %s", b, o.GetWantAsset())
+	}
+	return nil
+}
+
+// checkPool checks one side of a pool: the terms well formed and of the
+// template this relay pins (offer.PoolOf), both coins named, and the offer
+// either the pool's ask (base for quote at ask_num/ask_den) or its bid (quote
+// for base at bid_den/bid_num base per quote), each a SELL of the asset it
+// pays out. The chain probe then finds both coins at the pool's script and
+// lists the side at what its coin holds above its reserve.
+func checkPool(o *seqobv1.Offer) error {
+	pt := o.GetPool()
+	for name, t := range map[string]string{"base_txid": pt.GetBaseTxid(), "quote_txid": pt.GetQuoteTxid()} {
+		if b, err := hex.DecodeString(t); err != nil || len(b) != 32 {
+			return fmt.Errorf("pool %s must be 32-byte hex", name)
+		}
+	}
+	p, err := offer.PoolOf(pt)
+	if err != nil {
+		return fmt.Errorf("pool: %w", err)
+	}
+	if o.GetTradeDir() != seqobv1.TradeDir_TRADE_DIR_SELL {
+		return fmt.Errorf("a pool's offers are TRADE_DIR_SELL: its ask sells base, its bid sells quote")
+	}
+	base, _ := internalToDisplay(pt.GetBase())
+	quote, _ := internalToDisplay(pt.GetQuote())
+	sells, wants := strings.ToLower(o.GetOfferAsset()), strings.ToLower(o.GetWantAsset())
+	switch {
+	case sells == base && wants == quote:
+		if !ratioEqual(p.AskNum, p.AskDen, o.GetWantAmount(), o.GetOfferAmount()) {
+			return fmt.Errorf("the pool's ask %d/%d does not equal the offer's want/offer %d/%d", p.AskNum, p.AskDen, o.GetWantAmount(), o.GetOfferAmount())
+		}
+	case sells == quote && wants == base:
+		if !ratioEqual(p.BidDen, p.BidNum, o.GetWantAmount(), o.GetOfferAmount()) {
+			return fmt.Errorf("the pool's bid %d/%d (quote per base) does not equal the offer's offer/want %d/%d", p.BidNum, p.BidDen, o.GetOfferAmount(), o.GetWantAmount())
+		}
+	default:
+		return fmt.Errorf("a pool offer sells one of the pool's assets for the other: pool %s/%s, offer %s for %s", base, quote, sells, wants)
+	}
+	return nil
+}
+
+// ratioEqual reports a/b == c/d exactly.
+func ratioEqual(a, b, c, d uint64) bool {
+	l := new(big.Int).Mul(new(big.Int).SetUint64(a), new(big.Int).SetUint64(d))
+	r := new(big.Int).Mul(new(big.Int).SetUint64(b), new(big.Int).SetUint64(c))
+	return l.Cmp(r) == 0
 }
 
 // checkCovenant ties the covenant's baked-in terms to the price the offer

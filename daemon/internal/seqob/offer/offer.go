@@ -68,6 +68,15 @@ func CanonicalOfferBytes(o *seqobv1.Offer) ([]byte, error) {
 		rt.Coin = ""
 		rt.Value = 0
 	}
+	// A round order's outpoint moves at every part fill, and a pool's two coins
+	// at every fill: chain state, outside the signed bytes (pool.go).
+	if ro := c.GetRoundOrder(); ro != nil {
+		ro.CovenantTxid = ""
+		ro.CovenantVout = 0
+	}
+	if pt := c.GetPool(); pt != nil {
+		pt.BaseTxid, pt.BaseVout, pt.QuoteTxid, pt.QuoteVout = "", 0, "", 0
+	}
 	return deterministic(c)
 }
 

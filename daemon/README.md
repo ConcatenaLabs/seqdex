@@ -73,6 +73,11 @@ GET  /v1/market/{base}/{quote}/trades       recent trades
 GET  /v1/market/{base}/{quote}/candles      OHLCV from the trades
 GET  /v1/market/{base}/{quote}/fills        fill records of covenant and resting
                                             orders (JSON)
+GET  /v1/rounds                             clearing rounds: each round's one
+                                            price, its round orders' fills, the
+                                            pools it moved, and its state (JSON)
+GET  /v1/pools/moves[?pool=KEY]             each pool's fills and withdrawal
+                                            (JSON)
 POST /v1/lift                               open a lift session
 GET  /v1/ws                                 WebSocket (To/From envelope): book
                                             subscriptions, offer submission,
@@ -146,6 +151,37 @@ it lists one per covenant outpoint: the same maker's later offer replaces the
 listed one, and any other is refused (409 `resting order already listed`). A
 lift of a resting order is refused: it is filled through its operator.
 
+**Pools and round orders.** A maker's pool (`PoolTerms`, the template
+`seqdex/pool`) posts two offers, both `TRADE_DIR_SELL` and both carrying the
+pool's terms and its two coins: its ask, offering the base for the quote at
+the pool's ask, and its bid, offering the quote for the base at its bid
+(listed on the reversed market). The relay derives the pool's script from the
+terms, requires both coins unspent at it holding the pool's assets explicitly,
+and lists the ask at what the base coin holds above `reserve_base` and the bid
+at what the quote coin holds above `reserve_quote`, never above the
+`offer_amount` its maker signed: a pool lists only what it holds. Refused at a
+post: another template, a price that is not the side's quote, a coin not at
+the pool's script or spent, a side with nothing above its reserve. The chain
+watcher follows the pool every pass: a fill re-creates it at the spender's
+outputs `2j` and `2j+1` and both offers move there; while a spend of the pool
+is unconfirmed both are held at 0; the maker's withdrawal holds them at 0 and
+delists them once it is final; a move whose block leaves the chain is undone
+and the pool listed again at the coins it rested at before. A pool is filled
+on the chain by the pool's own fill, in or out of a clearing round, never by a
+lift (refused).
+
+A round order (`RoundOrderTerms`, `seqdex/round-order`) is listed like a
+Simplicity covenant order, at what its coin holds and at its limit, and
+followed the same way to its remainder at `2k+1`; it fills only in a clearing
+round its clearer signs, so a lift of it is refused and the matcher crosses
+neither it nor a pool. Each fill of one is recorded with the taker
+`clearing_round`, the clearer's key and the price the round's last output
+publishes, and `/v1/rounds` groups those records by round with the pool moves
+of the same transaction: `confirmed`, `final` once certified with its anchor
+buried, `undone` when the round's block leaves the chain, and recorded again
+when it comes back. `seqob-covenant round` lays a round out from these
+listings.
+
 **The book across a restart.** The relay keeps its covenant orders and the
 orders resting in operators' trees, and only those, when given
 `-covenant-book`; a resting order is checked again against its operator's
@@ -168,7 +204,8 @@ WebSocket snapshot) is a `PublicBook`: the makers' signed offers byte for
 byte, and beside each one, at the same index in `statuses`, its
 `OrderStatus`, whose `active_amount` is what the order can be filled for now.
 That is the size to show: after a part fill a covenant order holds less than
-its signed `offer_amount`, and while a fill of it is unconfirmed it is 0.
+its signed `offer_amount`, a pool's side holds what its coin does above its
+reserve, and while a fill of either is unconfirmed it is 0.
 
 Live instances: `https://sequentiatestnet.com/seqob/v1/...` (on-chain rails),
 `/seqob-pln/v1/...` (Lightning rails), `/seqob-conf/v1/...` (confidential

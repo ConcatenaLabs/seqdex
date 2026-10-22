@@ -134,6 +134,7 @@ type Store struct {
 	trades         map[string][]Trade         // pairKey -> recent trades ring (newest last), lazy
 	fills          map[string][]*CovenantFill // pairKey -> recent covenant fill records (newest last), lazy
 	interactive    []*InteractiveWatch        // interactive fills the chain watcher follows to finality, oldest first, lazy
+	poolMoves      map[string]PoolMove        // pool key/txid -> the move the pool follower recorded (pool.go), lazy
 	tradeLog       *os.File                   // B1: append-only JSONL sink so trade history survives a relay restart (nil = disabled)
 	interactiveCap uint64                     // P3.10: per-maker soft cap on committed capital per offer_asset (0 = disabled). An interactive offer that pushes the maker's cumulative offer_amount in an asset past this is demoted.
 }
@@ -1133,6 +1134,7 @@ type CovenantEntry struct {
 	Offer    *seqobv1.Offer
 	Terms    *seqobv1.CovenantTerms           // the tapscript order's terms, or nil
 	Sim      *seqobv1.SimplicityCovenantTerms // the Simplicity order's terms, or nil
+	Round    *seqobv1.RoundOrderTerms         // a round order's terms, or nil
 	Active   uint64
 	ReRested bool // F3: the current outpoint is a remainder from a prior partial fill, not the original funding
 }
@@ -1145,7 +1147,7 @@ func (s *Store) SnapshotCovenants() []CovenantEntry {
 	for k, e := range s.entries {
 		if offer.IsCovenant(e.Offer) {
 			out = append(out, CovenantEntry{Key: k, Offer: e.Offer, Terms: e.Offer.GetCovenant(),
-				Sim: e.Offer.GetSimplicityCovenant(), Active: e.ActiveAmount, ReRested: e.reRested})
+				Sim: e.Offer.GetSimplicityCovenant(), Round: e.Offer.GetRoundOrder(), Active: e.ActiveAmount, ReRested: e.reRested})
 		}
 	}
 	return out
