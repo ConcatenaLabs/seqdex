@@ -126,11 +126,26 @@ func txidFromSignedPset(psetB64 string) (txid string) {
 	if err := psetv2.FinalizeAll(ptx); err != nil {
 		return ""
 	}
+	absentSequenceIsFinal(ptx)
 	tx, err := psetv2.Extract(ptx)
 	if err != nil {
 		return ""
 	}
 	return tx.TxHash().String()
+}
+
+// absentSequenceIsFinal gives every input that carries no sequence the one BIP 370
+// defines for it, 0xffffffff, as the taker's own wallet does when it extracts and
+// broadcasts the transaction. go-elements reads an absent PSBT_IN_SEQUENCE as 0
+// (and never writes a 0), so without this the txid a maker acknowledged for a
+// taker whose PSET leaves the sequence out (SWK's) named a transaction that does
+// not exist, and the relay could follow neither its finality nor a reorg of it.
+func absentSequenceIsFinal(ptx *psetv2.Pset) {
+	for i := range ptx.Inputs {
+		if ptx.Inputs[i].Sequence == 0 {
+			ptx.Inputs[i].Sequence = 0xffffffff
+		}
+	}
 }
 
 // allOutputsBlinded is the fail-closed check for the CONFIDENTIAL book: every
