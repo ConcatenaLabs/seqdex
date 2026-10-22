@@ -188,7 +188,10 @@ each co-sign (10 minutes while a swap is in flight, 30 once it settled;
 mempool included) about every coin the wallet selects, since the wallet can list a coin
 long after it was spent and across a restart: a spent one is held and the selection made
 again, up to three times. A lift is co-signed only from coins the node says are unspent and
-no swap of its own has spent, and is refused when there are none.
+no swap of its own has spent, and is refused when there are none. A refused co-sign is
+answered at once with a sealed `seqdex.v1.SwapFail` (`client.SealSwapFail`: cannot fund,
+not the offer, or could not co-sign; it names no coin), except for a request that did not
+open under the session key; a taker reads it as `client.ErrMakerRefused` and signs nothing.
 
 `FILLED` is anchor-aware: a fill is applied with its `settle_txid` and current
 anchor confirmation count, and the order only reaches `FILLED` when the
