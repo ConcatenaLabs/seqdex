@@ -8,6 +8,7 @@ import (
 
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
 	"github.com/aejkcs50/seqdex/daemon/internal/core/ports"
+	"github.com/aejkcs50/seqdex/daemon/internal/seqob/client"
 )
 
 type coin struct {
@@ -193,5 +194,20 @@ func TestANodeThatCannotBeAskedDoesNotStopTheCoSign(t *testing.T) {
 		func(ports.Utxo) (bool, error) { return false, errors.New("node down") })
 	if err != nil || len(us) != 1 {
 		t.Fatalf("a node error stopped the co-sign: %v", err)
+	}
+}
+
+// The refusal a taker is told, from the errors the testnet maker logged.
+func TestARefusalSaysWhy(t *testing.T) {
+	for msg, want := range map[string]uint32{
+		"responder complete: the wallet keeps selecting spent coins (3 tries); not co-signing": client.FailCannotFund,
+		"responder complete: rpc error: not found enough utxos to cover target amount":         client.FailCannotFund,
+		"responder complete: cannot lock 2 coin(s) our own swaps spend: unavailable":           client.FailCannotFund,
+		"request does not match offer: price below the offer's":                                client.FailNotTheOffer,
+		"responder complete: fee rate unavailable":                                             client.FailCannotCoSign,
+	} {
+		if got := refusalCode(errors.New(msg)); got != want {
+			t.Fatalf("%q: code %d, want %d", msg, got, want)
+		}
 	}
 }

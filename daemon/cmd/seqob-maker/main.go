@@ -11,6 +11,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -622,6 +623,19 @@ func serve(conn *websocket.Conn, makers map[string]*client.Maker, ladder []*seqo
 			sealedAccept, err := sm2.HandleRequest(sm.GetCiphertext(), cr)
 			if err != nil {
 				fmt.Printf("session %s: complete swap failed: %v\n", sid, err)
+				// Tell the taker at once, sealed to it, instead of leaving it to wait out its
+				// co-sign deadline (a minute on the web wallet). Not for a request that did not
+				// open: a refusal under that key could be read by whoever substituted it.
+				if !errors.Is(err, client.ErrOpenRequest) {
+					if sf, se := client.SealSwapFail(cr, randstr.Hex(8), refusalCode(err)); se == nil {
+						if we := writeWS(conn, &seqobv1.To{Msg: &seqobv1.To_SwapMsg{SwapMsg: &seqobv1.SwapMsg{SessionId: sid, Ciphertext: sf}}}); we == nil {
+							fmt.Printf("session %s: told the taker the co-sign is refused\n", sid)
+						}
+					}
+				}
+				delete(crypters, sid)
+				delete(takes, sid)
+				delete(sessionMaker, sid)
 				continue
 			}
 			if we := writeWS(conn, &seqobv1.To{Msg: &seqobv1.To_SwapMsg{SwapMsg: &seqobv1.SwapMsg{SessionId: sid, Ciphertext: sealedAccept}}}); we != nil {
@@ -662,6 +676,19 @@ func serve(conn *websocket.Conn, makers map[string]*client.Maker, ladder []*seqo
 			}
 		}
 	}
+}
+
+// refusalCode: what a refused co-sign tells the taker, from the reason it failed.
+func refusalCode(err error) uint32 {
+	m := err.Error()
+	switch {
+	case strings.Contains(m, "does not match offer"):
+		return client.FailNotTheOffer
+	case strings.Contains(m, "keeps selecting spent coins"), strings.Contains(m, "not found enough utxos"),
+		strings.Contains(m, "insufficient"), strings.Contains(m, "cannot lock"):
+		return client.FailCannotFund
+	}
+	return client.FailCannotCoSign
 }
 
 // offerLeftBook: statuses after which the relay no longer rests the offer and this
