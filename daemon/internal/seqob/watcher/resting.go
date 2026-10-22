@@ -440,6 +440,13 @@ func (r *Resting) follow(op *arcaOperator, e offerstore.RestingEntry, states map
 		return
 	}
 	r.noteFills(op, e, st)
+	// A fill the operator has recorded and not signed yet: the order is held at 0
+	// until it is signed, so the fill is recorded before the order leaves the book
+	// (the relay stops asking about an order once it is delisted).
+	if st.State != "resting" && unsignedFill(st) {
+		r.book.HoldResting(e.Key)
+		return
+	}
 	switch st.State {
 	case "resting":
 	case "pending":
@@ -485,6 +492,17 @@ func (r *Resting) follow(op *arcaOperator, e offerstore.RestingEntry, states map
 		r.log.Printf("resting %s/%s: order %s rests at coin %s holding %d", e.Key.MakerPubkey, e.Key.OfferID, id, st.Coin, v)
 		r.book.RepointResting(e.Key, strings.ToLower(st.Coin), v)
 	}
+}
+
+// unsignedFill reports whether the operator holds a fill of the order it has not
+// signed yet.
+func unsignedFill(st RestingState) bool {
+	for _, f := range st.Fills {
+		if !f.Signed {
+			return true
+		}
+	}
+	return false
 }
 
 // partFillOf reports whether a fill of coin recorded at the operator is a part fill:

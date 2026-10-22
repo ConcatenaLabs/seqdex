@@ -128,7 +128,9 @@ state view (`POST /v1/order_state`), so:
   cannot be asked, its orders are listed at 0, and so is an order whose coin is
   not live yet (`pending`) or that the operator shows `filled` by a part fill
   whose remainder it does not hold yet: neither can be filled until the operator
-  names the coin it rests at;
+  names the coin it rests at. An order that is filled, cancelled or otherwise done
+  while a fill of it is recorded at the operator and not signed is listed at 0 until
+  it is signed, so that fill is recorded before the order leaves the book;
 - it records each signed fill the view reports, keyed by the operator's
   transfer id (an in-tree fill has no txid): the coin spent, what it held,
   what was filled, the maker's credit, the remainder, and as taker

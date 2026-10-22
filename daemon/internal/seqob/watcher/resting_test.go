@@ -286,10 +286,17 @@ func TestRestingFollowerMovesRecordsAndDelists(t *testing.T) {
 		t.Fatalf("after the part fill: active %d at %s, listed %v", a, c, ok)
 	}
 	// The rest filled whole: delisted FILLED, the last fill recorded.
+	// First recorded and not yet signed: held at 0, not delisted, so its record is not
+	// lost; then signed: recorded, and delisted.
 	op.set(restOrderID, func(s *RestingState) {
 		s.State, s.Coin, s.Value = "filled", restCoin3, "300000"
-		s.Fills = append(s.Fills, RestingStateFill{TransferID: strings.Repeat("bb", 32), Coin: restCoin3, Filled: "300000", Credited: "600000", Signed: true})
+		s.Fills = append(s.Fills, RestingStateFill{TransferID: strings.Repeat("bb", 32), Coin: restCoin3, Filled: "300000", Credited: "600000", Signed: false})
 	})
+	r.Once()
+	if a, _, ok := active(); !ok || a != 0 {
+		t.Fatalf("a whole fill not signed yet: active %d, listed %v", a, ok)
+	}
+	op.set(restOrderID, func(s *RestingState) { s.Fills[len(s.Fills)-1].Signed = true })
 	r.Once()
 	if _, _, ok := active(); ok {
 		t.Fatal("a whole fill left the order listed")
