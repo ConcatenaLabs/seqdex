@@ -390,8 +390,18 @@ func main() {
 	// CompleteSwapFn. Wire it to the blind-aware CompleteSwap; the taker-side seams
 	// are unused here (dummy key, never exercised).
 	rb := client.NewRealBackend(&net, makerKey.Serialize(), makerKey.Serialize())
+	// Every co-sign goes through the spent-coin guard: coins our own swaps spend are
+	// locked again first, so the wallet never hands one back while it still lists it.
+	guard := newSpentGuard()
 	rb.CompleteSwapFn = func(req *seqdexv1.SwapRequest, blind bool) (string, []swap.UnblindedInput, error) {
-		signedPSET, utxos, _, err := svc.CompleteSwap(*account, swapReqAdapter{req}, *msats, true, blind)
+		signedPSET, utxos, err := guardedCompleteSwap(guard,
+			func(ctx context.Context, us []ports.Utxo) error {
+				return svc.Transaction().LockUtxos(ctx, *account, us)
+			},
+			func() (string, []ports.Utxo, error) {
+				signed, us, _, err := svc.CompleteSwap(*account, swapReqAdapter{req}, *msats, true, blind)
+				return signed, us, err
+			})
 		if err != nil {
 			return "", nil, err
 		}
@@ -429,15 +439,16 @@ func main() {
 		o.GetPair().GetBaseAsset(), o.GetPair().GetQuoteAsset(), o.GetOfferAmount(), o.GetOfferAsset(), o.GetWantAmount(), o.GetWantAsset(), *confidential, *msats)
 	fmt.Printf("  taker lifts with: -offer-id %s -maker-pubkey %s\n", o.GetOfferId(), makerPubHex)
 
-	serve(conn, makers, ladder, makerKey, wsURL, *expiry)
+	serve(conn, makers, ladder, makerKey, wsURL, *expiry, guard)
 }
 
 // serve is the maker's single-goroutine event loop: derive a per-lift E2E key on
 // lift_requested, then on the taker's couriered SwapRequest run the responder and
 // courier back the SwapAccept. A later swap_msg for the same session is the
 // taker's SwapComplete (the swap settled).
-func serve(conn *websocket.Conn, makers map[string]*client.Maker, ladder []*seqobv1.Offer, makerKey *btcec.PrivateKey, wsURL string, expiry time.Duration) {
+func serve(conn *websocket.Conn, makers map[string]*client.Maker, ladder []*seqobv1.Offer, makerKey *btcec.PrivateKey, wsURL string, expiry time.Duration, guard *spentGuard) {
 	crypters := make(map[string]*client.Crypter)
+	sessionCoins := make(map[string][]ports.Utxo) // session -> the coins its co-sign spends
 	accepted := make(map[string]bool)
 	// What "busy" means for this loop: a lift we have accepted and not yet settled.
 	// The shutdown drain reads this rather than guessing from log silence — a maker
@@ -591,6 +602,9 @@ func serve(conn *websocket.Conn, makers map[string]*client.Maker, ladder []*seqo
 					conn = redial(conn)
 				}
 				fmt.Printf("session %s: SWAP SETTLED (acked relay; txid=%s)\n", sid, txid)
+				// Its coins are spent now: held until the wallet has long seen the spend.
+				guard.hold(sessionCoins[sid], settledHold)
+				delete(sessionCoins, sid)
 				delete(accepted, sid) // B3: prune per-session state now the swap is done (serve() runs forever)
 				delete(crypters, sid)
 				delete(takes, sid)
@@ -615,6 +629,7 @@ func serve(conn *websocket.Conn, makers map[string]*client.Maker, ladder []*seqo
 				continue
 			}
 			accepted[sid] = true
+			sessionCoins[sid] = guard.takeLast()
 			liveSessions.Add(1)
 			lastAccept.Store(time.Now().Unix())
 			fmt.Printf("session %s: couriered SwapAccept (%d bytes); awaiting taker broadcast\n", sid, len(sealedAccept))
@@ -623,6 +638,12 @@ func serve(conn *websocket.Conn, makers map[string]*client.Maker, ladder []*seqo
 			st := from.GetOrderStatus()
 			fmt.Printf("order %s status=%s active=%d txid=%s\n",
 				st.GetOfferId(), st.GetStatus(), st.GetActiveAmount(), st.GetSettleTxid())
+			// One of our rungs left the book: filled whole, or dropped because a co-sign
+			// failed. Post it again, fresh, so the book keeps this maker's quote instead of
+			// waiting for a restart; a lift is co-signed only from coins still spendable.
+			if lm := makers[st.GetOfferId()]; lm != nil && offerLeftBook(st.GetStatus()) {
+				repostOne(conn, lm.Offer, expiry, makerKey, "after "+st.GetStatus().String())
+			}
 
 		case from.GetError() != nil:
 			e := from.GetError()
@@ -640,6 +661,25 @@ func serve(conn *websocket.Conn, makers map[string]*client.Maker, ladder []*seqo
 			}
 		}
 	}
+}
+
+// offerLeftBook: statuses after which the relay no longer rests the offer and this
+// maker should post it again.
+func offerLeftBook(st seqobv1.OfferStatus) bool {
+	return st == seqobv1.OfferStatus_OFFER_STATUS_FILLED || st == seqobv1.OfferStatus_OFFER_STATUS_UTXO_INVALIDATED
+}
+
+// repostOne posts one offer again with a fresh window and signature.
+func repostOne(c *websocket.Conn, lo *seqobv1.Offer, expiry time.Duration, key *btcec.PrivateKey, reason string) {
+	if err := refreshOfferForRequote(lo, expiry, key); err != nil {
+		fmt.Printf("re-post %s (%s): re-sign failed: %v\n", lo.GetOfferId(), reason, err)
+		return
+	}
+	if err := writeWS(c, &seqobv1.To{Msg: &seqobv1.To_OfferSubmit{OfferSubmit: lo}}); err != nil {
+		fmt.Printf("re-post %s (%s): write failed: %v\n", lo.GetOfferId(), reason, err)
+		return
+	}
+	fmt.Printf("re-posted offer %s (%s)\n", lo.GetOfferId(), reason)
 }
 
 func buildOffer(base, quote, side string, baseAmt, quoteAmt uint64, feeAsset string,

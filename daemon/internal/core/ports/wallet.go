@@ -68,6 +68,9 @@ type Transaction interface {
 		accountName string, outs []TxOutput, msatsPerByte uint64,
 	) (string, error)
 	BroadcastTransaction(ctx context.Context, txHex string) (string, error)
+	// LockUtxos keeps the account's wallet from selecting these coins for the
+	// wallet's own lock window (Ocean's UTXO_EXPIRY_DURATION_IN_SECONDS).
+	LockUtxos(ctx context.Context, accountName string, utxos []Utxo) error
 }
 
 type Notification interface {
