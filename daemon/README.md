@@ -97,8 +97,8 @@ maker's offer for a listed outpoint (409 `covenant outpoint already listed`).
 The rule holds wherever an order enters the book or moves: a post, an edit, a
 re-rest after a part fill, a reorg's undo and a read-back of the covenant book.
 
-**Orders resting in an operator's tree.** An order can rest as an `order-2`
-leaf in the tree of an Arca operator the relay follows (`-arca-operator`),
+**Orders resting in an operator's tree.** An order can rest as an `order-3`
+leaf (or an `order-2` leaf from before it) in the tree of an Arca operator the relay follows (`-arca-operator`),
 under the offer member `RestingLeafTerms`. Its maker rests it and leaves;
 takers fill it through the operator (`POST <operator>/v1/order_fill`), never
 through the relay, and each fill is co-signed by the operator and held to the
@@ -294,7 +294,9 @@ record of every covenant fill. In production the same core runs inside
   in the round's batch, so no output of the round pays the taker, and the
   record names the operator's key, the round and its batch outputs instead.
 - A Simplicity order (`SimplicityCovenantTerms`) is reconciled the same way:
-  its outpoint must pay the script its terms derive, and a spend's witness
+  its outpoint must pay the script its terms derive under the version of
+  `seqdex/order` its template hash names (2, or 1 for an order from before
+  version 2; `seqob-cli book` prints which), and a spend's witness
   says whether it was a partial fill, a whole fill or the refund key's spend
   (no fill, no trade). A whole fill's `2k+1` is whatever the taker put there.
 - After a partial fill the order rests again at `(txid, 2k+1)` with its terms,
@@ -349,14 +351,16 @@ are byte-identical to the Python builder in `../test/regtest`, pinned by
 
 `simderive`, `simwitness` and `simcheck` do the same for a Simplicity order of
 the template `seqdex/order` (`pkg/covenant` `SimOrder`): its address from the
-terms and the pinned commitment root; the witness stack of a partial fill, a
+terms and the pinned commitment root of version 2, or of version 1 with
+`-template-version 1`; the witness stack of a partial fill, a
 whole fill or (given the refund key's signature over the transaction's
 `sig_all_hash`) the refund, from the template's pinned programs; and a
 judgement of a fill at input `k` as the program makes it. `-maker` is the
 maker's whole payout scriptPubKey, which the order commits to by its hash.
-`pkg/covenant/simorder_test.go` checks the address against every vector of the
-template copy in `pkg/covenant/seqdex_order/`, which `PIN.json` ties to a
-commit of sequentia-contracts.
+`pkg/covenant/simorder_test.go` checks the address against every vector of
+both template copies, `pkg/covenant/seqdex_order_2/` and
+`pkg/covenant/seqdex_order/`, each of which its `PIN.json` ties to a commit of
+sequentia-contracts.
 
 ### `cmd/seqob-relaycli`: relay scripting client
 

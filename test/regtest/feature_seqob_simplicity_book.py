@@ -18,6 +18,14 @@ Simplicity active from genesis, and asserts over the relay's REST API:
           at (fill txid, 1), and marks the fill final two blocks later
   WHOLE   covfill takes the rest: the watcher holds the order until that fill
           is final, then removes it; both trades are in the feed
+  V1      an order under seqdex/order version 1, as orders resting from before
+          version 2 are, is listed and covfill fills it whole; seqob-cli book
+          names each order's version; an offer signing version 2's template
+          hash for the version 1 coin is refused, the coin not paying the
+          program its signed version derives
+
+The orders are derived with seqob-covenant simderive, version 2 unless asked
+for version 1 (-template-version 1).
 
 Every fill pays its fee in an issued asset; none touches the policy asset.
 Requires the Go toolchain and a configured, built Sequentia node checkout; see
@@ -286,6 +294,37 @@ class SeqObSimplicityBookTest(BitcoinTestFramework):
             for t in (ftx, wtx):
                 self.log.info("SIZE fill %s: %d vB", t, node.getrawtransaction(t, True)["vsize"])
             self.log.info("WHOLE fill %s: the order removed once final; trades %s", wtx, [t["size"] for t in trades])
+
+            # ---- an order under version 1 still lists and fills -------------------
+            d1 = json.loads(subprocess.run(
+                [self.bins["seqob-covenant"], "simderive", "-a", self.internal(self.X), "-b", self.internal(self.Y),
+                 "-num", str(RATE_NUM), "-den", str(RATE_DEN), "-minlot", str(MIN_LOT), "-maker", self.maker_spk.hex(),
+                 "-expiry", str(self.expiry), "-refund", self.refund_x.hex(), "-template-version", "1"],
+                capture_output=True, text=True, check=True).stdout)
+            assert d1["template_hash"] != self.template and d1["scriptpubkey"] != d["scriptpubkey"], d1
+            assert "version 1" in d1["template"], d1
+            n1 = 10_000_000_000_000  # want/offer is the rate exactly
+            txid1 = node.sendtoaddress(address=program_to_witness(1, bytes.fromhex(d1["scriptpubkey"])[2:]),
+                                       amount=Decimal(n1) / COIN, assetlabel=self.X, fee_asset_label=BITCOIN_ASSET)
+            self.generate(self.nodes[0], 1)
+            vout1 = [o["n"] for o in node.getrawtransaction(txid1, True)["vout"] if o["scriptPubKey"]["hex"] == d1["scriptpubkey"]][0]
+            self.post(self.offer("V1-as-v2", txid1, vout1, n1), "does not pay the program derived from its terms")
+            self.post(self.offer("V1", txid1, vout1, n1, template=d1["template_hash"]))
+            self.wait(lambda: self.book_offer("V1"), "the version 1 order in the book")
+            book = subprocess.run([self.bins["seqob-cli"], "book", "-relay", self.relay_http, "-base", self.X, "-quote", self.Y],
+                                  capture_output=True, text=True)
+            line = [l for l in book.stdout.splitlines() if l.strip().startswith("V1 ")]
+            assert line and "program=seqdex/order version 1" in line[0], book.stdout + book.stderr
+            self.log.info("V1 listed: %s", line[0].strip())
+            vtx = self.covfill("V1", 0)
+            self.generate(self.nodes[0], 1)
+            v = self.wait(lambda: [x for x in self.market("fills")["fills"] if x["txid"] == vtx], "the version 1 fill's record")[0]
+            assert_equal((v["input"], v["filled"], v["remainder"]), (0, n1, 0))
+            assert_equal(node.getrawtransaction(vtx, True)["vin"][0]["txinwitness"][2], d1["cmr"])
+            self.generate(self.nodes[0], 2)
+            self.wait(lambda: self.book_offer("V1") is None, "the version 1 order removed once its fill is final")
+            self.log.info("V1 the version 1 order filled whole by covfill (%s, %d vB) and removed once final",
+                          vtx, node.getrawtransaction(vtx, True)["vsize"])
         finally:
             self.stop_relay()
 

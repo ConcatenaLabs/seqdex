@@ -129,6 +129,8 @@ func simFlags(fs *flag.FlagSet) func() covenant.SimOrder {
 	maker := fs.String("maker", "", "the maker's payout scriptPubKey (hex): a plain key's script, never an Arca leaf or board script")
 	expiry := fs.Uint("expiry", 0, "refund lock time: a height below 500000000, a median time (unix seconds) from it")
 	refund := fs.String("refund", "", "the refund key (32-byte x-only hex)")
+	version := fs.Int("template-version", 2, "seqdex/order version: 2, which every new order uses, or 1 for an order resting under "+
+		"version 1 (its fills take an annex no one signs)")
 	return func() covenant.SimOrder {
 		m, err := hex.DecodeString(*maker)
 		if err != nil || len(m) == 0 {
@@ -137,9 +139,18 @@ func simFlags(fs *flag.FlagSet) func() covenant.SimOrder {
 		if *expiry > 0xffffffff {
 			die("-expiry must fit 32 bits")
 		}
+		var tmpl *covenant.SimTemplate
+		switch *version {
+		case 2:
+			tmpl = covenant.SimOrderV2
+		case 1:
+			tmpl = covenant.SimOrderV1
+		default:
+			die("-template-version must be 2 or 1")
+		}
 		o := covenant.SimOrder{
 			AssetA: hex32(*a, "-a"), AssetB: hex32(*b, "-b"), RateNum: *num, RateDen: *den, MinLot: *minlot,
-			MakerScript: m, Expiry: uint32(*expiry), RefundKey: hex32(*refund, "-refund"),
+			MakerScript: m, Expiry: uint32(*expiry), RefundKey: hex32(*refund, "-refund"), Template: tmpl,
 		}
 		if err := o.Validate(); err != nil {
 			die("terms: %v", err)
@@ -165,14 +176,15 @@ func main() {
 		fs := flag.NewFlagSet("simderive", flag.ExitOnError)
 		get := simFlags(fs)
 		fs.Parse(os.Args[2:])
-		t, err := get().Derive()
+		o := get()
+		t, err := o.Derive()
 		if err != nil {
 			die("derive: %v", err)
 		}
 		tb, _ := t.Address("tb")
 		ert, _ := t.Address("ert")
 		emit(map[string]interface{}{
-			"template_hash": covenant.SimOrderTemplateHash, "cmr": hex.EncodeToString(covenant.SimOrderCMR[:]),
+			"template_hash": o.Template.TemplateHash, "cmr": hex.EncodeToString(o.Template.CMR[:]), "template": o.Template.Name(),
 			"terms": hex.EncodeToString(t.Terms), "program_leaf_hash": hex.EncodeToString(t.ProgramLeafHash[:]),
 			"terms_leaf_hash": hex.EncodeToString(t.TermsLeafHash[:]), "merkle_root": hex.EncodeToString(t.MerkleRoot[:]),
 			"output_key": hex.EncodeToString(t.OutputKey[:]), "parity": t.Parity,

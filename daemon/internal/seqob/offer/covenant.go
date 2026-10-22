@@ -3,7 +3,6 @@ package offer
 import (
 	"encoding/hex"
 	"fmt"
-	"strings"
 
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
 	"github.com/aejkcs50/seqdex/daemon/pkg/covenant"
@@ -56,15 +55,19 @@ func CovenantMinLot(o *seqobv1.Offer) uint64 {
 }
 
 // SimOrderOf is the Simplicity order a SimplicityCovenantTerms describes, its
-// terms checked (covenant.SimOrder.Validate) and its template the one this
-// build pins. Asset ids are internal-order hex.
+// terms checked (covenant.SimOrder.Validate) and its template one of the
+// versions this build pins: seqdex/order version 2, which every new order
+// uses, or version 1, for an order resting from before it. The template hash
+// is signed, so the maker's offer names the version. Asset ids are
+// internal-order hex.
 func SimOrderOf(t *seqobv1.SimplicityCovenantTerms) (covenant.SimOrder, error) {
 	var o covenant.SimOrder
 	if t == nil {
 		return o, fmt.Errorf("no simplicity terms")
 	}
-	if !strings.EqualFold(t.GetTemplateHash(), covenant.SimOrderTemplateHash) {
-		return o, fmt.Errorf("template %q is not seqdex/order %s, the one this build fills", t.GetTemplateHash(), covenant.SimOrderTemplateHash)
+	tmpl, err := covenant.SimTemplateOf(t.GetTemplateHash())
+	if err != nil {
+		return o, err
 	}
 	a, err := hex32(t.GetAssetA())
 	if err != nil {
@@ -79,7 +82,7 @@ func SimOrderOf(t *seqobv1.SimplicityCovenantTerms) (covenant.SimOrder, error) {
 	}
 	o = covenant.SimOrder{
 		AssetA: a, AssetB: b, RateNum: t.GetRateNum(), RateDen: t.GetRateDen(), MinLot: t.GetMinLot(),
-		MakerScript: append([]byte{}, t.GetMakerScript()...), Expiry: t.GetExpiryLocktime(),
+		MakerScript: append([]byte{}, t.GetMakerScript()...), Expiry: t.GetExpiryLocktime(), Template: tmpl,
 	}
 	copy(o.RefundKey[:], t.GetRefundKey())
 	if err := o.Validate(); err != nil {

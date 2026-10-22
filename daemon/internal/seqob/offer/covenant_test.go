@@ -50,7 +50,9 @@ func simVectorOffer() *seqobv1.Offer {
 			AssetA: rev(a), AssetB: rev(b), RateNum: 9_000_000_000_007, RateDen: 10_000_000_000_000, MinLot: 1000000,
 			MakerScript:    append([]byte{0x00, 0x14}, bytes.Repeat([]byte{0x31}, 20)...),
 			ExpiryLocktime: 1792611631, RefundKey: schnorr.SerializePubKey(pub),
-			TemplateHash: covenant.SimOrderTemplateHash,
+			// The vector is a version 1 offer, as live orders from before
+			// version 2 are; its signed bytes do not change.
+			TemplateHash: covenant.SimOrderV1.TemplateHash,
 		}},
 	}
 }
@@ -117,9 +119,28 @@ func TestSimplicityOfferVerifiesAfterTheRelayMovesIt(t *testing.T) {
 	if err := VerifyOffer(tampered); err == nil {
 		t.Fatal("a changed rate verified")
 	}
-	// The terms make an order this build fills.
-	if _, err := SimOrderOf(funded.GetSimplicityCovenant()); err != nil {
-		t.Fatal(err)
+	// The terms make an order this build fills, under the version they sign.
+	o1, err := SimOrderOf(funded.GetSimplicityCovenant())
+	if err != nil || o1.Template != covenant.SimOrderV1 {
+		t.Fatalf("version 1 offer: %v %v", o1.Template, err)
+	}
+}
+
+// An offer names its version by the template hash it signs: version 2's
+// derives version 2's address, version 1's its own, and they differ.
+func TestSimOrderOfTakesEitherVersion(t *testing.T) {
+	v1 := simVectorOffer()
+	v2 := simVectorOffer()
+	v2.GetSimplicityCovenant().TemplateHash = strings.ToUpper(covenant.SimOrderV2.TemplateHash)
+	o1, err1 := SimOrderOf(v1.GetSimplicityCovenant())
+	o2, err2 := SimOrderOf(v2.GetSimplicityCovenant())
+	if err1 != nil || err2 != nil || o1.Template != covenant.SimOrderV1 || o2.Template != covenant.SimOrderV2 {
+		t.Fatalf("%v %v / %v %v", o1.Template, err1, o2.Template, err2)
+	}
+	x1, _ := o1.Derive()
+	x2, _ := o2.Derive()
+	if bytes.Equal(x1.ScriptPubKey, x2.ScriptPubKey) {
+		t.Fatal("one address for both versions")
 	}
 }
 

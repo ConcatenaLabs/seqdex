@@ -1,0 +1,231 @@
+{
+  "descriptor": 2,
+  "template": {
+    "budget": {
+      "max": 4000050,
+      "offset": 50,
+      "per_witness_byte": 4
+    },
+    "internal_key": "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0",
+    "name": "seqdex/order",
+    "params": [
+      {
+        "label": "The asset the order sells, which the coin holds",
+        "name": "ASSET_A",
+        "role": "asset",
+        "type": "u256"
+      },
+      {
+        "label": "The asset a fill pays in",
+        "name": "ASSET_B",
+        "role": "asset",
+        "type": "u256"
+      },
+      {
+        "label": "Price numerator: RATE_NUM atoms of ASSET_B for every RATE_DEN atoms of ASSET_A",
+        "name": "RATE_NUM",
+        "role": "number",
+        "type": "u64"
+      },
+      {
+        "label": "Price denominator: RATE_NUM atoms of ASSET_B for every RATE_DEN atoms of ASSET_A",
+        "name": "RATE_DEN",
+        "role": "number",
+        "type": "u64"
+      },
+      {
+        "label": "Least a fill takes, and least a remainder holds, in ASSET_A",
+        "name": "MIN_LOT",
+        "role": "amount",
+        "type": "u64"
+      },
+      {
+        "label": "The maker's payout script, which every fill pays",
+        "name": "MAKER",
+        "role": "script_hash",
+        "type": "u256"
+      },
+      {
+        "label": "From this lock time the refund key may take the coin back: below 500,000,000 a block height, else a Unix time compared with the median time past",
+        "name": "EXPIRY",
+        "role": "number",
+        "type": "u32"
+      },
+      {
+        "label": "The key that takes the coin back after EXPIRY",
+        "name": "REFUND_KEY",
+        "role": "pubkey",
+        "type": "Pubkey"
+      }
+    ],
+    "paths": [
+      {
+        "effect": "Fills the order in part: output 2k pays MAKER at least ceil(fill x RATE_NUM / RATE_DEN) of ASSET_B, and output 2k+1 holds the remainder of ASSET_A, at least MIN_LOT, at this same script. The fill is at least MIN_LOT. This coin is input k. PATH is Left(true).",
+        "leaf": "order",
+        "name": "fill",
+        "who": "anyone"
+      },
+      {
+        "effect": "Fills the whole order: output 2k pays MAKER at least ceil(coin x RATE_NUM / RATE_DEN) of ASSET_B, and the coin is at least MIN_LOT. Output 2k+1 is the taker's. This coin is input k. PATH is Left(false).",
+        "leaf": "order",
+        "name": "fill_whole",
+        "who": "anyone"
+      },
+      {
+        "effect": "Once the transaction's lock time reaches EXPIRY, the refund key takes the coin, signing the whole transaction. PATH is Right(()).",
+        "leaf": "order",
+        "name": "refund",
+        "who": "REFUND_KEY"
+      }
+    ],
+    "slots": [],
+    "summary": "A SeqDEX resting order: anyone fills it in part or in whole by paying the maker at the order's price, the rest resting again at the same script; after expiry the refund key takes it back. No spend carries an annex.",
+    "tree": {
+      "branch": [
+        {
+          "leaf": "order",
+          "simplicity": {
+            "cmr": "5f0819996f39cf22adfaa0da711a99dd0e06379e901c585c0db56ecd3d1f1cca",
+            "compiler": {
+              "name": "simplicityhl",
+              "version": "0.7.2"
+            },
+            "max_cost_wu": 359,
+            "source": "seqdex_order_2.simf",
+            "source_sha256": "1a5aac62b5181ddb24fd66032aad29ab5f9bb3ddef8cf120dd3a9d7848f425e1",
+            "witness": [
+              {
+                "name": "ASSET_A",
+                "source": "param:ASSET_A",
+                "type": "u256"
+              },
+              {
+                "name": "ASSET_B",
+                "source": "param:ASSET_B",
+                "type": "u256"
+              },
+              {
+                "name": "RATE_NUM",
+                "source": "param:RATE_NUM",
+                "type": "u64"
+              },
+              {
+                "name": "RATE_DEN",
+                "source": "param:RATE_DEN",
+                "type": "u64"
+              },
+              {
+                "name": "MIN_LOT",
+                "source": "param:MIN_LOT",
+                "type": "u64"
+              },
+              {
+                "name": "MAKER",
+                "source": "param:MAKER",
+                "type": "u256"
+              },
+              {
+                "name": "EXPIRY",
+                "source": "param:EXPIRY",
+                "type": "u32"
+              },
+              {
+                "name": "REFUND_KEY",
+                "source": "param:REFUND_KEY",
+                "type": "Pubkey"
+              },
+              {
+                "name": "PATH",
+                "source": "spender",
+                "type": "Either<bool, ()>"
+              },
+              {
+                "name": "REFUND_SIG",
+                "source": "signature:sig_all_hash:REFUND_KEY",
+                "type": "Signature"
+              }
+            ]
+          }
+        },
+        {
+          "data": [
+            "ASSET_A",
+            "ASSET_B",
+            "RATE_NUM",
+            "RATE_DEN",
+            "MIN_LOT",
+            "MAKER",
+            "EXPIRY",
+            "REFUND_KEY"
+          ],
+          "leaf": "terms"
+        }
+      ]
+    },
+    "version": 2
+  },
+  "template_hash": "5e5a45fe64b85134c8f3706f0f21abfacb871c40cae4f449406ba6f86fa03cdd",
+  "chains": [
+    {
+      "name": "sequentia-testnet",
+      "genesis": "ddd11d54c87a2bd94400fd31ce05d8e1110bb4b78e7103f738342086fc4ea92e",
+      "bech32_hrp": "tb"
+    },
+    {
+      "name": "elementsregtest",
+      "genesis": null,
+      "bech32_hrp": "ert"
+    }
+  ],
+  "measured": {
+    "fill": {
+      "budget_wu": 5514,
+      "cost_bound_wu": 359,
+      "program_bytes": 1105,
+      "vsize": 921,
+      "weight": 3681,
+      "witness_bytes": 157,
+      "transaction": "the order, a payment coin and a fee coin in a third asset; the credit, the rest, the taker's asset, the payment change, the fee change and the fee"
+    },
+    "fill_whole": {
+      "budget_wu": 5070,
+      "cost_bound_wu": 316,
+      "program_bytes": 994,
+      "vsize": 814,
+      "weight": 3256,
+      "witness_bytes": 157,
+      "transaction": "the order, a payment coin and a fee coin; the credit, the taker's asset, the payment change, the fee change and the fee"
+    },
+    "refund": {
+      "budget_wu": 3414,
+      "cost_bound_wu": 257,
+      "program_bytes": 516,
+      "vsize": 509,
+      "weight": 2036,
+      "witness_bytes": 221,
+      "transaction": "the order and a fee coin; the whole coin to the refund key's wallet, by height or by time alike"
+    },
+    "source": "harness/records/x3.json",
+    "two_orders": {
+      "budget_wu": [
+        5514,
+        5070
+      ],
+      "cost_bound_wu": [
+        359,
+        316
+      ],
+      "program_bytes": [
+        1105,
+        994
+      ],
+      "transaction": "a partial fill at input 0 and a whole fill at input 1, one payment coin and one fee coin",
+      "vsize": 1409,
+      "weight": 5634,
+      "witness_bytes": [
+        157,
+        157
+      ]
+    }
+  }
+}

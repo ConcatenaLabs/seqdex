@@ -15,12 +15,19 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 )
 
-// The vendored template: its descriptor, its golden vectors and its pruned
-// programs, copied byte for byte from sequentia-contracts at the commit
-// seqdex_order/PIN.json names.
+// The vendored templates, version 2 in seqdex_order_2/ and version 1 in
+// seqdex_order/: each one's descriptor, golden vectors and pruned programs,
+// copied byte for byte from sequentia-contracts at the commit its PIN.json
+// names.
+var simDirs = map[*SimTemplate]string{SimOrderV2: "seqdex_order_2", SimOrderV1: "seqdex_order"}
+
 func readJSON(t *testing.T, name string, v interface{}) []byte {
+	return readJSONIn(t, "seqdex_order_2", name, v)
+}
+
+func readJSONIn(t *testing.T, dir, name string, v interface{}) []byte {
 	t.Helper()
-	b, err := os.ReadFile("seqdex_order/" + name)
+	b, err := os.ReadFile(dir + "/" + name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,11 +52,20 @@ func canonical(t *testing.T, v interface{}) []byte {
 }
 
 func TestSimOrderTemplateIsPinned(t *testing.T) {
+	if SimOrderTemplateHash != SimOrderV2.TemplateHash || SimOrderCMR != SimOrderV2.CMR || SimOrderV1.CMR == SimOrderV2.CMR {
+		t.Fatal("new orders are not version 2's, or the versions share a root")
+	}
+	for tm, dir := range simDirs {
+		templateIsPinned(t, tm, dir)
+	}
+}
+
+func templateIsPinned(t *testing.T, tm *SimTemplate, dir string) {
 	var d struct {
 		Template     map[string]interface{} `json:"template"`
 		TemplateHash string                 `json:"template_hash"`
 	}
-	dec := json.NewDecoder(bytes.NewReader(readJSON(t, "descriptor.json", nil)))
+	dec := json.NewDecoder(bytes.NewReader(readJSONIn(t, dir, "descriptor.json", nil)))
 	dec.UseNumber()
 	if err := dec.Decode(&d); err != nil {
 		t.Fatal(err)
@@ -58,13 +74,19 @@ func TestSimOrderTemplateIsPinned(t *testing.T) {
 	if hex.EncodeToString(h[:]) != d.TemplateHash {
 		t.Fatalf("descriptor.json's template hashes to %x, it says %s", h, d.TemplateHash)
 	}
-	if d.TemplateHash != SimOrderTemplateHash {
-		t.Fatalf("descriptor %s, fills.json %s", d.TemplateHash, SimOrderTemplateHash)
+	if d.TemplateHash != tm.TemplateHash {
+		t.Fatalf("%s: descriptor %s, fills.json %s", dir, d.TemplateHash, tm.TemplateHash)
+	}
+	if v, _ := d.Template["version"].(json.Number).Int64(); v != int64(tm.Version) || d.Template["name"] != "seqdex/order" {
+		t.Fatalf("%s: template %v version %v", dir, d.Template["name"], d.Template["version"])
+	}
+	if got, err := SimTemplateOf(strings.ToUpper(d.TemplateHash)); err != nil || got != tm {
+		t.Fatalf("%s: SimTemplateOf %v %v", dir, got, err)
 	}
 	tree := d.Template["tree"].(map[string]interface{})["branch"].([]interface{})
 	cmr := tree[0].(map[string]interface{})["simplicity"].(map[string]interface{})["cmr"].(string)
-	if cmr != hex.EncodeToString(SimOrderCMR[:]) {
-		t.Fatalf("descriptor root %s, fills.json %x", cmr, SimOrderCMR)
+	if cmr != hex.EncodeToString(tm.CMR[:]) {
+		t.Fatalf("%s: descriptor root %s, fills.json %x", dir, cmr, tm.CMR)
 	}
 	var data []string
 	for _, v := range tree[1].(map[string]interface{})["data"].([]interface{}) {
@@ -107,12 +129,21 @@ func vectorTerms(t *testing.T, p map[string]string) []byte {
 // and its parity, the script, the control block and both addresses, derived
 // with no compiler.
 func TestSimOrderVectors(t *testing.T) {
+	for tm, dir := range simDirs {
+		vectors(t, tm, dir)
+	}
+	if _, err := SimTemplateOf("322c0e59"); err == nil {
+		t.Fatal("a prefix of a template hash names a version")
+	}
+}
+
+func vectors(t *testing.T, tm *SimTemplate, dir string) {
 	var v struct {
 		TemplateHash string      `json:"template_hash"`
 		Addresses    []simVector `json:"addresses"`
 	}
-	readJSON(t, "vectors.json", &v)
-	if v.TemplateHash != SimOrderTemplateHash || len(v.Addresses) < 4 {
+	readJSONIn(t, dir, "vectors.json", &v)
+	if v.TemplateHash != tm.TemplateHash || len(v.Addresses) < 4 {
 		t.Fatalf("vectors for %s, %d of them", v.TemplateHash, len(v.Addresses))
 	}
 	for _, c := range v.Addresses {
@@ -120,7 +151,7 @@ func TestSimOrderVectors(t *testing.T) {
 		if hex.EncodeToString(terms) != c.Leaves["terms"].Data {
 			t.Fatalf("%s: data leaf bytes differ", c.Name)
 		}
-		x, err := deriveSimTerms(terms)
+		x, err := deriveSimTerms(terms, tm)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -179,10 +210,33 @@ func TestSimOrderTerms(t *testing.T) {
 
 // A fill's witness stack is the constant program of its path, the root, the
 // control block, and the terms followed by PATH; a refund's carries the
-// signature after one bit of PATH.
+// signature after one bit of PATH. Each version spends by its own programs
+// and root, and the same terms give each version its own address.
 func TestSimOrderWitnesses(t *testing.T) {
 	o := testSimOrder(t)
+	x2, _ := o.Derive()
+	o1 := o
+	o1.Template = SimOrderV1
+	x1, _ := o1.Derive()
+	if bytes.Equal(x1.ScriptPubKey, x2.ScriptPubKey) {
+		t.Fatal("version 1 and version 2 derive one address")
+	}
+	if o2 := o; true {
+		o2.Template = SimOrderV2
+		if x, _ := o2.Derive(); !bytes.Equal(x.ScriptPubKey, x2.ScriptPubKey) {
+			t.Fatal("an order naming no version is not version 2")
+		}
+	}
+	for tm, sizes := range map[*SimTemplate][3]int{SimOrderV2: {1105, 994, 516}, SimOrderV1: {1092, 981, 505}} {
+		o := o
+		o.Template = tm
+		witnesses(t, o, sizes)
+	}
+}
+
+func witnesses(t *testing.T, o SimOrder, sizes [3]int) {
 	x, _ := o.Derive()
+	simPrograms, cmr := o.tmpl().programs, o.tmpl().CMR
 	for _, partial := range []bool{true, false} {
 		w, err := o.FillWitness(partial)
 		if err != nil {
@@ -191,14 +245,14 @@ func TestSimOrderWitnesses(t *testing.T) {
 		want := append(append([]byte{}, o.Terms()...), map[bool]byte{true: 0x40, false: 0x00}[partial])
 		prog := simPrograms[map[bool]string{true: "fill", false: "fill_whole"}[partial]]
 		if len(w) != 4 || !bytes.Equal(w[0], want) || !bytes.Equal(w[1], prog) ||
-			!bytes.Equal(w[2], SimOrderCMR[:]) || !bytes.Equal(w[3], x.ControlBlock) {
+			!bytes.Equal(w[2], cmr[:]) || !bytes.Equal(w[3], x.ControlBlock) {
 			t.Fatalf("partial=%v: witness stack differs", partial)
 		}
 		if f, p := SimFillPath(w); !f || p != partial {
 			t.Fatalf("partial=%v: SimFillPath reads %v %v", partial, f, p)
 		}
 	}
-	if len(simPrograms["fill"]) != 1092 || len(simPrograms["fill_whole"]) != 981 {
+	if len(simPrograms["fill"]) != sizes[0] || len(simPrograms["fill_whole"]) != sizes[1] || len(simPrograms["refund_time"]) != sizes[2] {
 		t.Fatalf("program sizes %d %d", len(simPrograms["fill"]), len(simPrograms["fill_whole"]))
 	}
 	var sig [64]byte
@@ -339,19 +393,25 @@ func TestSimOrderPlanAndValidate(t *testing.T) {
 
 func btcecPriv(b []byte) (*btcec.PrivateKey, *btcec.PublicKey) { return btcec.PrivKeyFromBytes(b) }
 
-// The vendored files are the ones PIN.json names, byte for byte.
+// The vendored files are the ones each PIN.json names, byte for byte.
 func TestSimOrderPin(t *testing.T) {
+	for _, dir := range simDirs {
+		pinned(t, dir)
+	}
+}
+
+func pinned(t *testing.T, dir string) {
 	var pin struct {
 		Commit string            `json:"commit"`
 		Path   string            `json:"path"`
 		SHA256 map[string]string `json:"sha256"`
 	}
-	readJSON(t, "PIN.json", &pin)
-	if len(pin.Commit) != 40 || pin.Path != "templates/seqdex_order" || len(pin.SHA256) != 3 {
-		t.Fatalf("PIN.json: %+v", pin)
+	readJSONIn(t, dir, "PIN.json", &pin)
+	if len(pin.Commit) != 40 || pin.Path != "templates/"+dir || len(pin.SHA256) != 3 {
+		t.Fatalf("%s/PIN.json: %+v", dir, pin)
 	}
 	for name, want := range pin.SHA256 {
-		h := sha256.Sum256(readJSON(t, name, nil))
+		h := sha256.Sum256(readJSONIn(t, dir, name, nil))
 		if hex.EncodeToString(h[:]) != want {
 			t.Errorf("%s hashes to %x, PIN.json says %s", name, h, want)
 		}

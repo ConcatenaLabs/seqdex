@@ -9,7 +9,7 @@ import (
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
 )
 
-// A resting leaf order (RestingLeafTerms) is an order-2 leaf in an Arca
+// A resting leaf order (RestingLeafTerms) is an order-3 (or order-2) leaf in an Arca
 // operator's tree: its maker rests it and leaves, and takers fill it out of
 // round through the operator, each fill co-signed by the operator and held to
 // the order's terms by the leaf's program. It is not a coin on the chain, so
