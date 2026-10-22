@@ -9,18 +9,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/bits"
+	"strings"
 
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/vulpemventures/go-elements/address"
 )
 
 // SimOrder is a resting order under the Simplicity template seqdex/order
-// (sequentia-contracts, templates/seqdex_order): one program for every order,
-// the order's terms held as data in a leaf beside it.
+// (sequentia-contracts): one program for every order, the order's terms held
+// as data in a leaf beside it. Two versions of the template exist, each with
+// its own program and so its own addresses: version 2
+// (templates/seqdex_order_2), which every new order uses, and version 1
+// (templates/seqdex_order), the same program without the rule that a spend
+// carries no annex. A fill signs nothing, so an annex on a version 1 fill is
+// bound by nothing: whoever relays the fill can attach one and bring its fee
+// rate down to the relay floor. Orders already resting under version 1 are
+// still derived and filled here until they are gone.
 //
 //	P2TR(NUMS, TapBranch(TapLeaf_0xbe(program), H_TapData(terms)))
 //
-// The program's commitment root is one constant (SimOrderCMR), so an order's
+// The program's commitment root is one constant per version (SimTemplate.CMR), so an order's
 // address is that root plus its terms, and this file derives it with one hash
 // per leaf and one curve tweak. A fill pays the maker at output 2k at least
 // ceil(fill * RateNum / RateDen) of AssetB, checked on 128-bit products, so
@@ -29,8 +37,9 @@ import (
 // reaches Expiry, a block height below 500,000,000 or a median time.
 //
 // Every spend's pruned program is one of the constants of the template's
-// fills.json, vendored in seqdex_order/ beside its descriptor and vectors (see
-// seqdex_order/PIN.json), so a fill is built here with no compiler.
+// fills.json, vendored in seqdex_order_2/ and seqdex_order/ beside its
+// descriptor and vectors (see each PIN.json), so a fill is built here with no
+// compiler. A spend built here carries no annex.
 type SimOrder struct {
 	AssetA      [32]byte // the asset the order sells, internal byte order
 	AssetB      [32]byte // the asset a fill pays in, internal byte order
@@ -40,6 +49,26 @@ type SimOrder struct {
 	MakerScript []byte   // the scriptPubKey every fill pays; the MAKER term is its SHA256
 	Expiry      uint32   // lock time: below 500,000,000 a height, else a median time
 	RefundKey   [32]byte // x-only key that takes the coin back after Expiry
+	// Template is the version of seqdex/order the order is under: SimOrderV2,
+	// or SimOrderV1 for an order resting from before it. nil is SimOrderV2.
+	Template *SimTemplate
+}
+
+// SimTemplate is one version of seqdex/order: its template hash, which an
+// offer signs, its commitment root and its pruned programs.
+type SimTemplate struct {
+	Version      int
+	TemplateHash string
+	CMR          [32]byte
+	programs     map[string][]byte
+}
+
+// Name says which version it is, for a book or a log.
+func (t *SimTemplate) Name() string {
+	if t.Version == 1 {
+		return "seqdex/order version 1 (its fills take an annex no one signs)"
+	}
+	return fmt.Sprintf("seqdex/order version %d", t.Version)
 }
 
 // SimTree is a SimOrder's derived output.
@@ -57,7 +86,10 @@ type SimTree struct {
 const simLeafVersion = 0xbe
 
 //go:embed seqdex_order/fills.json
-var simFillsJSON []byte
+var simFillsV1JSON []byte
+
+//go:embed seqdex_order_2/fills.json
+var simFillsV2JSON []byte
 
 type simFillsFile struct {
 	Fills        int    `json:"fills"`
@@ -71,27 +103,51 @@ type simFillsFile struct {
 	} `json:"paths"`
 }
 
-// The template's constants, from the vendored fills.json.
+// The two versions, from the vendored fills.json files, and version 2's
+// template hash and root, which every new order is under.
 var (
-	SimOrderTemplateHash string
-	SimOrderCMR          [32]byte
-	simPrograms          = map[string][]byte{}
+	SimOrderV1           = loadSimTemplate(1, "seqdex_order", simFillsV1JSON)
+	SimOrderV2           = loadSimTemplate(2, "seqdex_order_2", simFillsV2JSON)
+	SimOrderTemplateHash = SimOrderV2.TemplateHash
+	SimOrderCMR          = SimOrderV2.CMR
 )
 
-func init() {
-	var f simFillsFile
-	if err := json.Unmarshal(simFillsJSON, &f); err != nil {
-		panic("seqdex_order/fills.json: " + err.Error())
+// SimTemplates are the versions this build derives and fills, newest first.
+func SimTemplates() []*SimTemplate { return []*SimTemplate{SimOrderV2, SimOrderV1} }
+
+// SimTemplateOf is the version whose template hash is hash.
+func SimTemplateOf(hash string) (*SimTemplate, error) {
+	for _, t := range SimTemplates() {
+		if strings.EqualFold(hash, t.TemplateHash) {
+			return t, nil
+		}
 	}
-	SimOrderTemplateHash = f.TemplateHash
-	SimOrderCMR = mustHex32(f.CMR)
+	return nil, fmt.Errorf("template %q is not seqdex/order version 2 (%s) or version 1 (%s), the ones this build fills",
+		hash, SimOrderV2.TemplateHash, SimOrderV1.TemplateHash)
+}
+
+func loadSimTemplate(version int, dir string, raw []byte) *SimTemplate {
+	var f simFillsFile
+	if err := json.Unmarshal(raw, &f); err != nil {
+		panic(dir + "/fills.json: " + err.Error())
+	}
+	t := &SimTemplate{Version: version, TemplateHash: f.TemplateHash, CMR: mustHex32(f.CMR), programs: map[string][]byte{}}
 	for _, p := range []string{"fill", "fill_whole", "refund_height", "refund_time"} {
 		b, err := hex.DecodeString(f.Paths[p].Program)
 		if err != nil || len(b) == 0 || len(b) != f.Paths[p].ProgramBytes {
-			panic("seqdex_order/fills.json: path " + p)
+			panic(dir + "/fills.json: path " + p)
 		}
-		simPrograms[p] = b
+		t.programs[p] = b
 	}
+	return t
+}
+
+// tmpl is the order's version, SimOrderV2 when it names none.
+func (o SimOrder) tmpl() *SimTemplate {
+	if o.Template == nil {
+		return SimOrderV2
+	}
+	return o.Template
 }
 
 // Terms is the data leaf: the terms in the template's order, big-endian.
@@ -136,15 +192,17 @@ func (o SimOrder) Validate() error {
 	return nil
 }
 
-// Derive computes the order's output from its terms and the pinned root.
-func (o SimOrder) Derive() (*SimTree, error) { return deriveSimTerms(o.Terms()) }
+// Derive computes the order's output from its terms and its version's pinned
+// root.
+func (o SimOrder) Derive() (*SimTree, error) { return deriveSimTerms(o.Terms(), o.tmpl()) }
 
-// deriveSimTerms computes the output of the order whose data leaf is terms.
-func deriveSimTerms(terms []byte) (*SimTree, error) {
+// deriveSimTerms computes the output of the order of version tmpl whose data
+// leaf is terms.
+func deriveSimTerms(terms []byte, tmpl *SimTemplate) (*SimTree, error) {
 	if len(terms) != 156 {
 		return nil, fmt.Errorf("terms of %d bytes, not 156", len(terms))
 	}
-	prog := taggedHash("TapLeaf/elements", []byte{simLeafVersion, 0x20}, SimOrderCMR[:])
+	prog := taggedHash("TapLeaf/elements", []byte{simLeafVersion, 0x20}, tmpl.CMR[:])
 	data := taggedHash("TapData", terms)
 	lo, hi := prog, data
 	if bytes.Compare(hi[:], lo[:]) < 0 {
@@ -178,12 +236,13 @@ func (o SimOrder) FillWitness(partial bool) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	path, prog := byte(0x00), simPrograms["fill_whole"]
+	tm := o.tmpl()
+	path, prog := byte(0x00), tm.programs["fill_whole"]
 	if partial {
-		path, prog = 0x40, simPrograms["fill"]
+		path, prog = 0x40, tm.programs["fill"]
 	}
 	w := append(append([]byte{}, t.Terms...), path)
-	return [][]byte{w, prog, SimOrderCMR[:], t.ControlBlock}, nil
+	return [][]byte{w, prog, tm.CMR[:], t.ControlBlock}, nil
 }
 
 // RefundWitness is the order input's witness stack for the refund, given the
@@ -196,9 +255,10 @@ func (o SimOrder) RefundWitness(sig [64]byte) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	prog := simPrograms["refund_height"]
+	tm := o.tmpl()
+	prog := tm.programs["refund_height"]
 	if o.Expiry >= 500_000_000 {
-		prog = simPrograms["refund_time"]
+		prog = tm.programs["refund_time"]
 	}
 	// terms || 1 || sig, padded with zero bits.
 	w := make([]byte, 0, len(t.Terms)+65)
@@ -209,21 +269,28 @@ func (o SimOrder) RefundWitness(sig [64]byte) ([][]byte, error) {
 		carry = b << 7
 	}
 	w = append(w, carry)
-	return [][]byte{w, prog, SimOrderCMR[:], t.ControlBlock}, nil
+	return [][]byte{w, prog, tm.CMR[:], t.ControlBlock}, nil
 }
 
 // SimFillPath reads the path of a spend from its witness stack: whether it is
-// a fill, and whether a partial one. A stack that is not this template's
-// program spending (the wrong root or program) is not a fill.
+// a fill of either version, and whether a partial one. A stack that is not
+// one of their programs spending (another root or program) is not a fill. A
+// version 1 fill may carry an annex after its four items; the items read are
+// the same.
 func SimFillPath(stack [][]byte) (fill, partial bool) {
-	if len(stack) < 4 || !bytes.Equal(stack[2], SimOrderCMR[:]) || len(stack[0]) != 157 {
+	if len(stack) < 4 || len(stack[0]) != 157 {
 		return false, false
 	}
-	switch {
-	case stack[0][156] == 0x40 && bytes.Equal(stack[1], simPrograms["fill"]):
-		return true, true
-	case stack[0][156] == 0x00 && bytes.Equal(stack[1], simPrograms["fill_whole"]):
-		return true, false
+	for _, t := range SimTemplates() {
+		if !bytes.Equal(stack[2], t.CMR[:]) {
+			continue
+		}
+		switch {
+		case stack[0][156] == 0x40 && bytes.Equal(stack[1], t.programs["fill"]):
+			return true, true
+		case stack[0][156] == 0x00 && bytes.Equal(stack[1], t.programs["fill_whole"]):
+			return true, false
+		}
 	}
 	return false, false
 }

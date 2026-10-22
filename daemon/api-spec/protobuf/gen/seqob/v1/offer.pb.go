@@ -961,7 +961,10 @@ func (x *CovenantTerms) GetMerklePath() [][]byte {
 }
 
 // SimplicityCovenantTerms is a FUNDED, self-enforcing resting order under the
-// Simplicity template seqdex/order (sequentia-contracts, templates/seqdex_order):
+// Simplicity template seqdex/order (sequentia-contracts, templates/seqdex_order_2
+// for version 2, which every new order uses; templates/seqdex_order for
+// version 1, whose fills take an annex no one signs, for orders resting from
+// before version 2; template_hash names which):
 // one program for every order, these terms held as data in a leaf beside it,
 //
 //	P2TR(NUMS, TapBranch(TapLeaf_0xbe(program), H_TapData(terms)))
@@ -1102,8 +1105,8 @@ func (x *SimplicityCovenantTerms) GetTemplateHash() string {
 	return ""
 }
 
-// RestingLeafTerms is an order resting in an operator's tree as an order-2
-// leaf: a coin of asset_a that takers fill out of round, with its maker
+// RestingLeafTerms is an order resting in an operator's tree as an order-3
+// leaf (or an order-2 leaf from before it): a coin of asset_a that takers fill out of round, with its maker
 // offline, each fill co-signed by the operator and held to these terms by the
 // leaf's own program (at least ceil(filled * rate_num / rate_den) of asset_b
 // to the maker, a part fill resting again under a new salt). The maker

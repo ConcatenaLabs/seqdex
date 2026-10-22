@@ -27,6 +27,7 @@ import (
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/client"
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offer"
+	"github.com/aejkcs50/seqdex/daemon/pkg/covenant"
 	"github.com/aejkcs50/seqdex/daemon/pkg/explorer/esplora"
 	"github.com/aejkcs50/seqdex/daemon/pkg/seqnet"
 )
@@ -240,10 +241,20 @@ func cmdBook(args []string) {
 		if sts := book.GetStatuses(); i < len(sts) && sts[i].GetOfferId() == o.GetOfferId() {
 			listed = sts[i].GetActiveAmount()
 		}
-		fmt.Printf("  %s  dir=%s base=%d listed=%d  give %d %s  want %d %s  maker=%s\n",
+		// A Simplicity covenant order names its program by the template hash it
+		// signs: say which version it is.
+		program := ""
+		if sc := o.GetSimplicityCovenant(); sc != nil {
+			if t, err := covenant.SimTemplateOf(sc.GetTemplateHash()); err == nil {
+				program = "  program=" + t.Name()
+			} else {
+				program = "  program=unknown template " + sc.GetTemplateHash()
+			}
+		}
+		fmt.Printf("  %s  dir=%s base=%d listed=%d  give %d %s  want %d %s  maker=%s%s\n",
 			o.GetOfferId(), shortDir(o.GetTradeDir()), o.GetBaseAmount(), listed,
 			o.GetOfferAmount(), o.GetOfferAsset(), o.GetWantAmount(), o.GetWantAsset(),
-			short(o.GetMakerPubkey()))
+			short(o.GetMakerPubkey()), program)
 	}
 }
 

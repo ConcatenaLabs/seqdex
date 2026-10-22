@@ -172,8 +172,14 @@ space is in [docs/simplicity-dex-covenant-offers-design.md](docs/simplicity-dex-
 the order book's leaf is tapscript (`daemon/pkg/covenant`).
 
 `daemon/pkg/covenant` also builds the Simplicity order of the template
-`seqdex/order` (sequentia-contracts, `templates/seqdex_order`; the copy in
-`daemon/pkg/covenant/seqdex_order/` is pinned to a commit by its `PIN.json`).
+`seqdex/order` (sequentia-contracts). Version 2 (`templates/seqdex_order_2`,
+copied in `daemon/pkg/covenant/seqdex_order_2/`) is what every new order uses.
+Version 1 (`templates/seqdex_order`, copied in `daemon/pkg/covenant/seqdex_order/`)
+is the same program without one rule, that a spend carries no annex: a fill
+signs nothing, so whoever relays a version 1 fill can attach an annex and bring
+its fee rate down to the relay floor. Version 1 orders already resting are still
+derived, listed and filled. Each copy is pinned to a commit by its `PIN.json`,
+and an offer names its version by the template hash it signs.
 It is one program for every order, the terms held as data in a leaf beside it,
 so an order's address is the pinned commitment root plus its terms and Go
 derives it with no compiler. Its fill compares the price on 128-bit products,
@@ -182,12 +188,12 @@ so any 64-bit amount and price fills, where the tapscript leaf must keep
 (the Go builder, the validator and the web wallet refuse such terms). Every spend's pruned program is a constant of
 the template, so Go builds each fill's witness with no compiler too; a refund
 needs the refund key's signature over the transaction's Simplicity
-`sig_all_hash`. A fill in the same layout costs more: 917 vB against 668 vB for
-a partial fill, 811 vB against 590 vB for a whole one.
+`sig_all_hash`. A fill in the same layout costs more: 921 vB against 668 vB for
+a partial fill, 814 vB against 590 vB for a whole one (version 1: 917 and 811).
 
 Such an order rests in the book under its own settlement member,
 `SimplicityCovenantTerms` (`offer.proto`), its outpoint outside the signed
-bytes as for `CovenantTerms`. The relay validates it (the template this build
+bytes as for `CovenantTerms`. The relay validates it (a version this build
 pins, the price and assets the offer advertises, an expiry), probes its
 outpoint on the chain, and its watcher records its fills and re-points it at
 `(txid, 2k+1)` after a partial one. `seqob-cli covfill` takes it, alone or
@@ -197,8 +203,8 @@ The matcher does not auto-cross it, because the owners it hands a match to
 and the crosser skips it for the same reason: it is filled by a taker who
 reads it from the book.
 
-An order can also rest as a leaf in an Arca operator's tree (the `order-2`
-template), under the member `RestingLeafTerms` (`offer.proto`). Its maker
+An order can also rest as a leaf in an Arca operator's tree (the `order-3`
+template, or `order-2` for one resting from before it), under the member `RestingLeafTerms` (`offer.proto`). Its maker
 rests it and leaves; takers fill it through the operator, each fill co-signed
 by the operator and held to the order's terms by the leaf's own program, and
 a part fill rests the remainder again at a new coin. The offer signs the
@@ -336,7 +342,8 @@ daemon/                The Go daemon module (fork of tdex-daemon).
   pkg/covenant/        The covenant leaf builders: the tapscript FILL/REFUND
                        leaf (golden-vector pinned against the Python in
                        test/regtest) and the Simplicity order (pinned to the
-                       template's vectors in seqdex_order/).
+                       template's vectors in seqdex_order_2/ and
+                       seqdex_order/).
   pkg/xchain/          Cross-chain HTLC engine + submarine, pure-LN and
                        sub-asset swaps + regtest harness
                        (testdata/start-regtest.sh).

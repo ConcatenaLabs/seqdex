@@ -53,6 +53,10 @@ func TestSimplicityCovenantOffer(t *testing.T) {
 	}
 	check("consistent, beyond the tapscript bound", nil, "")
 	check("a median-time and a height expiry", func(st *seqobv1.SimplicityCovenantTerms, _ *seqobv1.Offer) { st.ExpiryLocktime = 499_999_999 }, "")
+	// An order resting under version 1, from before version 2, is still taken.
+	check("an order under seqdex/order version 1", func(st *seqobv1.SimplicityCovenantTerms, _ *seqobv1.Offer) {
+		st.TemplateHash = covenant.SimOrderV1.TemplateHash
+	}, "")
 	check("another template", func(st *seqobv1.SimplicityCovenantTerms, _ *seqobv1.Offer) { st.TemplateHash = strings.Repeat("0", 64) }, "is not seqdex/order")
 	check("rate above the offer", func(st *seqobv1.SimplicityCovenantTerms, _ *seqobv1.Offer) { st.RateNum++ }, "does not equal the offer's want/offer")
 	check("no expiry", func(st *seqobv1.SimplicityCovenantTerms, _ *seqobv1.Offer) { st.ExpiryLocktime = 0 }, "expiry_locktime must be set")
