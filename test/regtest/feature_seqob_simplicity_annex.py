@@ -17,13 +17,20 @@ derived by it (simderive):
 
   ADDRESS for each version, simderive's address is the script the node reads,
           and the two versions give one order's terms two addresses
-  REJECT  version 2: a partial fill with an annex of 3 and of 1,000 bytes on
-          the order's input, refused by the mempool and FORCED INTO A BLOCK,
-          refused there for the program's failure (Assertion failed), beside
-          the same fill without the annex, which the mempool accepts
-  BEFORE  version 1: the same fill with an annex of 1,000 and of 10,000
-          bytes is accepted by the mempool (not broadcast)
-  PASS    both controls mined: an order under either version still fills
+  REJECT  version 2: a partial fill with an annex of 3 and of 1,000 bytes and
+          a zero annex of 1,000 bytes on the order's input, refused by the
+          mempool and FORCED INTO A BLOCK, refused there for the program's
+          failure (Assertion failed), beside the same fill without the annex,
+          which is mined. The mempool's reason is the program's on a node
+          before Sequentia 25.2.4, and the annex itself on one from it, which
+          relays an annex only when it is zeros and as large as the program's
+          cost needs
+  BEFORE  version 1: the same fill with a 1,000-byte annex is mined in a
+          block (forced, where relay refuses the annex): the program takes
+          an annex nobody signed. On a node before 25.2.4 the mempool also
+          takes it with a 1,000- and a 10,000-byte annex
+  PASS    the version 1 order's remainder filled whole, mined: an order under
+          version 1 still fills
 
 Every fill pays its fee in an issued asset; none touches the policy asset.
 Requires the Go toolchain and a configured, built Sequentia node checkout; see
@@ -43,6 +50,9 @@ from feature_seqob_simplicity_order import FEE, SeqObSimplicityOrderTest, ceil_p
 LOCKED = 20_000_000_000_000
 NUM, DEN = 9_000_000_000_007, 10_000_000_000_003
 ANNEX_REFUSED = "(Assertion failed)"
+# A node from Sequentia 25.2.4 refuses an annex the program's cost does not need
+# at relay, before the program runs.
+RELAY_ANNEX = "Simplicity annex"
 
 
 class SeqObSimplicityAnnexTest(SeqObSimplicityOrderTest):
@@ -100,20 +110,21 @@ class SeqObSimplicityAnnexTest(SeqObSimplicityOrderTest):
         raise AssertionError("no output to %s" % spk.hex())
 
     @staticmethod
-    def annexed(tx_hex, k, n):
-        """tx_hex with an annex of n bytes (0x50, then 0xab) on input k."""
+    def annexed(tx_hex, k, n, fill=b"\xab"):
+        """tx_hex with an annex of n bytes (0x50, then fill) on input k."""
         t = tx_from_hex(tx_hex)
-        t.wit.vtxinwit[k].scriptWitness.stack.append(b"\x50" + b"\xab" * (n - 1))
+        t.wit.vtxinwit[k].scriptWitness.stack.append(b"\x50" + fill * (n - 1))
         return t.serialize().hex()
 
-    def refuse_both(self, label, tx_hex, expect):
-        """Refused by the mempool and by a block forced with generateblock,
-        each naming `expect`."""
+    def refuse_both(self, label, tx_hex):
+        """Refused by the mempool (by the program, or for the annex itself by a
+        node from 25.2.4) and by a block forced with generateblock, for the
+        program's failure."""
         node = self.nodes[0]
         r = node.testmempoolaccept([tx_hex])[0]
-        assert not r["allowed"] and expect in r["reject-reason"], (label, r)
+        assert not r["allowed"] and (ANNEX_REFUSED in r["reject-reason"] or RELAY_ANNEX in r["reject-reason"]), (label, r)
         err = self.forced_block(tx_hex)
-        assert err is not None and expect in err, (label, err)
+        assert err is not None and ANNEX_REFUSED in err, (label, err)
         self.log.info("REJECT %-52s mempool: %s | block: %s", label, r["reject-reason"], err)
 
     def run_test(self):
@@ -170,14 +181,35 @@ class SeqObSimplicityAnnexTest(SeqObSimplicityOrderTest):
             self.log.info("CONTROL version %d partial fill without an annex: accepted, %d vB", version, r["vsize"])
             if version == 2:
                 for n in (3, 1_000):
-                    self.refuse_both("version 2 partial fill, %d-byte annex" % n, self.annexed(good, 0, n), ANNEX_REFUSED)
-            else:
-                for n in (1_000, 10_000):
-                    r = node.testmempoolaccept([self.annexed(good, 0, n)])[0]
-                    assert r["allowed"], (n, r)
-                    self.log.info("BEFORE version 1 partial fill, %d-byte annex: accepted by the mempool, %d vB, "
-                                  "fee %s (not broadcast)", n, r["vsize"], r["fees"])
-            self.mine("version %d partial fill (the control), k=0" % version, good)
+                    self.refuse_both("version 2 partial fill, %d-byte annex" % n, self.annexed(good, 0, n))
+                self.refuse_both("version 2 partial fill, 1000-byte zero annex", self.annexed(good, 0, 1_000, b"\x00"))
+                self.mine("version 2 partial fill (the control), k=0", good)
+                continue
+            for n in (1_000, 10_000):
+                r = node.testmempoolaccept([self.annexed(good, 0, n)])[0]
+                assert r["allowed"] or RELAY_ANNEX in r["reject-reason"], (n, r)
+                self.log.info("BEFORE version 1 partial fill, %d-byte annex: the mempool %s", n,
+                              "accepts it, %d vB (not broadcast)" % r["vsize"] if r["allowed"] else "refuses it: " + r["reject-reason"])
+            padded = self.annexed(good, 0, 1_000)
+            assert self.forced_block(padded) is None, "a block refused version 1's fill with an annex"
+            txid = node.decoderawtransaction(padded)["txid"]
+            assert_equal(len(node.getrawtransaction(txid, True)["vin"][0]["txinwitness"]), 5)
+            self.log.info("BEFORE version 1 partial fill with a 1,000-byte annex nobody signed: mined in a block, %s", txid)
+            # The remainder, still under version 1, fills whole as before.
+            rest = (txid, 1, LOCKED - F1)
+            change = (txid, 3, pay[2] - p1)
+            node.lockunspent(False, [{"txid": txid, "vout": 3}])
+            fee2 = self.coin(self.wallet_spk(), 1_000_000, Z)
+            p2 = ceil_price(rest[2], NUM, DEN)
+            stack_w = self.tool(["simwitness"] + self.sim_flags(S) + ["-path", "whole"])["stack"]
+            w = self.mktx([rest, change, fee2], [
+                self.out(p2, maker_spk, Y), self.out(rest[2], taker_spk, X), self.out(change[2] - p2, change_spk, Y),
+                self.out(fee2[2] - FEE, change_spk, Z),
+                CTxOut(CTxOutValue(FEE), b"", CTxOutAsset(b"\x01" + bytes.fromhex(Z)[::-1]))])
+            w = self.finish(w, {0: stack_w})
+            c = self.simcheck(S, w, 0, rest[2], False)
+            assert c["ok"], c
+            self.mine("version 1 whole fill of the remainder, k=0", w)
         assert derived[1]["scriptpubkey"] != derived[2]["scriptpubkey"], "one address for both versions"
         assert_equal(derived[1]["terms"], derived[2]["terms"])
         for k, v in self.sizes.items():
