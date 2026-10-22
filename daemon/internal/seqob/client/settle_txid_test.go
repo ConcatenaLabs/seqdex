@@ -1,0 +1,14 @@
+package client
+
+import "testing"
+
+// A SwapComplete from a taker whose PSET leaves the inputs' sequence out (BIP 370:
+// 0xffffffff), as SWK's wallets send it on a regtest lift: the maker's settle
+// txid must be the txid of the transaction the taker broadcast.
+func TestSettleTxidOfAPsetWithoutSequence(t *testing.T) {
+	const complete = "cHNldP8BAgQCAAAAAQQBAgEFAQUB+wQCAAAAB/wEcHNldAIgPhrtHkT49iIozcr0U2xOgj7ty/MEo7zOwDaYj2yr6DwAAQFCAd0KIhcutPAqV37+zAoy+1d9HakTIXzZuszoY0BGjg8PAQAAABdIdugAABYAFNDEo+8J6Ze26Z45flGP4+QaEYyhIgIC56slN7XUnpcDCargbp5J82zhyf671E7I4NHMoLT5wxlHMEQCIBG2WnD9XWgEwRZfgW2zJ7YtI/Uewq3QuVSwu7BYGHl+AiBZfu94Su5xCdWUbTvT344zI23KMCNslAHX2ulW/A49ZwEBDiBzhPuT6YMXcLwGhRxa5BunQomUloZwgZOFhny+qcXzGgEPBAAAAAAAAQFCASMPT11LfG+oRYBu5PZ3E0WeG2no5g/O4uSUDHoNXeGyAQAAAC6Q7dAAABYAFMequ/rE227O01Na1aIIUJ05ISnLIgICAo6d4//iI4ssv4pg8cmcB21uiXSQGJFfL1r4yNp5HIBIMEUCIQDNL0RXRX1pVKttveLZbSZ7HSB66nDGSuiG9Ikf384anAIgM2r11oKyKEqjmU3I89wbvFQb8DHrXH1QdEw8I6BtZ/UBAQMEAQAAAAEOIH/zXM3enHzwG+z58Lb1DKwprOxN1DvJzA66ysPLVO/PAQ8EAQAAAAEQBP////8AAQMIAOQLVAIAAAAH/ARwc2V0AiAjD09dS3xvqEWAbuT2dxNFnhtp6OYPzuLklAx6DV3hsgEEFgAUb6AWUAo8anN+uyYOLdyni6kjRVgH/ARwc2V0CAQAAAAAAAEDCEhX7WsWAAAAB/wEcHNldAIg3QoiFy608CpXfv7MCjL7V30dqRMhfNm6zOhjQEaODw8BBBYAFG+gFlAKPGpzfrsmDi3cp4upI0VYB/wEcHNldAgEAAAAAAABAwi4CwAAAAAAAAf8BHBzZXQCIN0KIhcutPAqV37+zAoy+1d9HakTIXzZuszoY0BGjg8PAQQAB/wEcHNldAgEAAAAAAABAwgAhYncAAAAAAf8BHBzZXQCIN0KIhcutPAqV37+zAoy+1d9HakTIXzZuszoY0BGjg8PAQQWABQhoERRuYa+sM82nHxsxcTYhXbJhwf8BHBzZXQIBAEAAAAAAQMIAOzhPCwAAAAH/ARwc2V0AiAjD09dS3xvqEWAbuT2dxNFnhtp6OYPzuLklAx6DV3hsgEEFgAUENg51yPZzvEco94zZfJ0HUOjy0UH/ARwc2V0CAQBAAAAAA=="
+	const broadcast = "de4b7893e215d0ab48e8ec9260d298c0276090d43525bca355a770d010337e58"
+	if got := txidFromSignedPset(complete); got != broadcast {
+		t.Fatalf("settle txid %s, the taker broadcast %s", got, broadcast)
+	}
+}
