@@ -52,6 +52,10 @@ type scannerService struct {
 	chTxs               chan *domain.Transaction
 	chUtxos             chan []*domain.Utxo
 	lock                *sync.RWMutex
+	// done ends the report loop; reports waits for it to have ended, so the channels it
+	// sends on are closed only once nothing can send on them.
+	done    chan struct{}
+	reports *sync.WaitGroup
 
 	log  func(format string, a ...interface{})
 	warn func(err error, format string, a ...interface{})
@@ -81,18 +85,48 @@ func newScannerSvc(
 		chTxs:               make(chan *domain.Transaction, 10),
 		chUtxos:             make(chan []*domain.Utxo, 10),
 		lock:                &sync.RWMutex{},
+		done:                make(chan struct{}),
+		reports:             &sync.WaitGroup{},
 		log:                 logFn,
 		warn:                warnFn,
 	}
 	chReports, _ := scannerSvc.svc.Start()
-	go scannerSvc.listenToReports(chReports)
+	scannerSvc.reports.Add(1)
+	go func() {
+		defer scannerSvc.reports.Done()
+		scannerSvc.listenToReports(chReports)
+	}()
 	return scannerSvc
 }
 
 func (s *scannerService) stop() {
+	close(s.done)
 	s.svc.Stop()
+	s.reports.Wait()
 	close(s.chTxs)
 	close(s.chUtxos)
+}
+
+// deliver hands the account's listener what a report found, waiting for it to take it.
+// A report must never be dropped: a dropped one is a coin the wallet never learns it
+// received, or a coin it keeps offering after it was spent. It gives up only when the
+// scanner stops.
+func (s *scannerService) deliverUtxos(utxos []*domain.Utxo) bool {
+	select {
+	case s.chUtxos <- utxos:
+		return true
+	case <-s.done:
+		return false
+	}
+}
+
+func (s *scannerService) deliverTx(tx *domain.Transaction) bool {
+	select {
+	case s.chTxs <- tx:
+		return true
+	case <-s.done:
+		return false
+	}
 }
 
 func (s *scannerService) watchAddresses(addressesInfo []domain.AddressInfo) {
@@ -166,7 +200,17 @@ func (s *scannerService) watchUtxos(utxos []domain.UtxoInfo) {
 
 func (s *scannerService) listenToReports(chReports <-chan scanner.Report) {
 	s.log("start listening to incoming reports from node")
-	for r := range chReports {
+	for {
+		var r scanner.Report
+		var ok bool
+		select {
+		case r, ok = <-chReports:
+			if !ok {
+				return
+			}
+		case <-s.done:
+			return
+		}
 		time.Sleep(time.Millisecond)
 
 		if r.Transaction == nil {
@@ -184,8 +228,7 @@ func (s *scannerService) listenToReports(chReports <-chan scanner.Report) {
 			blockHash = r.BlockHash.String()
 			blockHeight = uint64(r.BlockHeight)
 		}
-		select {
-		case s.chTxs <- &domain.Transaction{
+		if !s.deliverTx(&domain.Transaction{
 			TxID:  txid,
 			TxHex: txHex,
 			Accounts: map[string]struct{}{
@@ -193,8 +236,8 @@ func (s *scannerService) listenToReports(chReports <-chan scanner.Report) {
 			},
 			BlockHash:   blockHash,
 			BlockHeight: blockHeight,
-		}:
-		default:
+		}) {
+			return
 		}
 
 		spentUtxos := make([]*domain.Utxo, 0, len(tx.Inputs))
@@ -211,9 +254,8 @@ func (s *scannerService) listenToReports(chReports <-chan scanner.Report) {
 				},
 			})
 		}
-		select {
-		case s.chUtxos <- spentUtxos:
-		default:
+		if len(spentUtxos) > 0 && !s.deliverUtxos(spentUtxos) {
+			return
 		}
 
 		newUtxos := make([]*domain.Utxo, 0)
@@ -262,11 +304,8 @@ func (s *scannerService) listenToReports(chReports <-chan scanner.Report) {
 			})
 		}
 
-		if len(newUtxos) > 0 {
-			select {
-			case s.chUtxos <- newUtxos:
-			default:
-			}
+		if len(newUtxos) > 0 && !s.deliverUtxos(newUtxos) {
+			return
 		}
 	}
 }
