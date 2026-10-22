@@ -68,7 +68,13 @@ Each of these is exercised on the public testnet or in the committed test
 suites:
 
 - SeqOB relay + maker + taker CLI: same-chain asset-to-asset lifts, partial
-  fills, signed cancels, offer expiry, replay protection, rate limits.
+  fills, signed cancels, offer expiry, replay protection, rate limits. The
+  chain-watcher follows each lift's settling transaction, as its maker
+  acknowledges it, under the same finality rule as a covenant fill, and
+  serves its record beside them (`GET /v1/market/{base}/{quote}/fills`, taker
+  `interactive`): pending, confirmed, final once certified and anchor-buried,
+  undone with its trade when its block leaves the chain, and recorded again if
+  it is mined again.
 - Covenant-funded passive resting orders (tapscript introspection covenants):
   permissionless fills, partial fills with a re-rested remainder, joint
   settlement of two passive orders by `seqob-settler`, the continuous matcher
