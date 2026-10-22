@@ -22,6 +22,12 @@ relay (seqobd, its chain watcher every second) and the maker's posting tool
            is undone, the pool and the orders listed again where they rested
            before; mined again, it is recorded again
   FINAL    with two Bitcoin blocks over it the round is final
+  KEPT     the relay, given -covenant-book, restarts: both sides of the pool and
+           the round order resting at its remainder are listed again by
+           themselves where they rest, nobody posting them again, the ask (sold
+           down to its reserve) held at 0 as before; restarted again after a
+           fill of the pool mined while it was down, it holds both sides, then
+           follows them to the coins the fill re-created the pool at
   WITHDRAW the maker withdraws the pool: both sides are held, then delisted
            once the withdrawal is final
 
@@ -76,10 +82,12 @@ class SeqObPoolRoundBookTest(SeqObPoolRoundTest):
         self.relay_http = "http://127.0.0.1:%d" % self.relay_port
         user, password = get_auth_cookie(self.nodes[1].datadir, "elementsregtest")
         env = dict(os.environ, SEQOB_LISTEN=":%d" % self.relay_port)
-        self.relay_log = open(os.path.join(self.options.tmpdir, "seqobd.log"), "a")
+        self.relay_log_path = os.path.join(self.options.tmpdir, "seqobd.log")
+        self.relay_log = open(self.relay_log_path, "a")
         self.relay_proc = subprocess.Popen(
             [self.bins["seqobd"], "-min-expiry", "5s", "-node-rpc", "127.0.0.1:%d" % rpc_port(1),
-             "-node-rpc-user", user, "-node-rpc-pass", password, "-watch-interval", "1s"],
+             "-node-rpc-user", user, "-node-rpc-pass", password, "-watch-interval", "1s",
+             "-covenant-book", os.path.join(self.options.tmpdir, "covenant-book.jsonl")],
             env=env, stdout=self.relay_log, stderr=subprocess.STDOUT)
         for _ in range(100):
             try:
@@ -98,6 +106,24 @@ class SeqObPoolRoundBookTest(SeqObPoolRoundTest):
                 self.relay_proc.kill()
             self.relay_proc = None
             self.relay_log.close()
+
+    def restart_relay(self, while_down=lambda: None):
+        """Stops the relay (it writes its covenant book as it stops), runs
+        while_down, and starts it again; returns what it logged reading the book
+        back, and what while_down returned."""
+        self.stop_relay()
+        done = while_down()
+        start = os.path.getsize(self.relay_log_path)
+        self.start_relay()
+
+        def book_line():
+            with open(self.relay_log_path) as f:
+                f.seek(start)
+                for line in f:
+                    if "covenant orders listed again" in line:
+                        return line.strip()
+            return None
+        return self.wait(book_line, "the relay reads its covenant book back"), done
 
     # --- the relay ------------------------------------------------------------------
 
@@ -374,8 +400,55 @@ class SeqObPoolRoundBookTest(SeqObPoolRoundTest):
         r = self.wait(lambda: round_rec("final"), "the round final")
         self.log.info("FINAL the round is final at anchor depth %d", r["anchor_depth"])
 
+        # ---- KEPT ----------------------------------------------------------------------------
+        sides = ((X, Y, "PA"), (Y, X, "PB"), (Y, X, "RB2"))
+
+        def where(o):
+            t = o.get("pool") or o["round_order"]
+            if "pool" in o:
+                return (t["base_txid"], t["base_vout"], t["quote_txid"], t["quote_vout"])
+            return (t["covenant_txid"], t["covenant_vout"])
+        before = {oid: (self.size(m, q, oid)[0], where(self.size(m, q, oid)[1])) for m, q, oid in sides}
+        assert before["PA"][0] == 0 and before["PB"][0] > 0, before
+        line, _ = self.restart_relay()
+        assert "2 covenant orders listed again, 1 held for the watcher to follow a spend, 0 dropped" in line, line
+
+        def back_as_before():
+            now = {}
+            for m, q, oid in sides:
+                n, o = self.size(m, q, oid)
+                if o is None:
+                    return None
+                now[oid] = (n, where(o))
+            return now == before and now
+        self.wait(back_as_before, "the pool's sides and B2 listed again as they were, nobody posting them")
+        self.log.info("KEPT restarted with -covenant-book (%s): the pool's ask at %d and bid at %d at %s:8/9, B2 at %d at %s:7, as before",
+                      line.split("covenant book ", 1)[1].split(": ", 1)[1], before["PA"][0], before["PB"][0], rtx[:16],
+                      before["RB2"][0], rtx[:16])
+        # A taker sells the pool 50,000 X at its bid while the relay is down.
+        pay_x, fc = self.coins(1, X, 200_000)[0], fees.pop()
+        xc1, yc1 = self.coin(rtx, 8), self.coin(rtx, 9)
+
+        def buy():
+            f = self.go("poolfill", {"pool": pool, "base_coin": xc1, "quote_coin": yc1, "sell": False, "base": 50_000,
+                                     "inputs": [pay_x, fc],
+                                     "outputs": [self.out(Y, 45_000, self.fresh_spk()), self.out(X, pay_x["value"] - 50_000, change),
+                                                 self.out(Z, fc["value"] - FEE, change), self.out(Z, FEE, "")]})
+            assert f["quote"] == 45_000, f
+            return self.send(self.sign(f["hex"], [0, 1]), "pool/bought_at_its_bid_while_the_relay_was_down")
+        line, ftx = self.restart_relay(buy)
+        assert "1 covenant orders listed again, 2 held for the watcher to follow a spend, 0 dropped" in line, line
+        want = {"PA": (50_000, (ftx, 0, ftx, 1)), "PB": (before["PB"][0] - 45_000, (ftx, 0, ftx, 1)), "RB2": before["RB2"]}
+        self.wait(lambda: {oid: (self.size(m, q, oid)[0], where(self.size(m, q, oid)[1])) for m, q, oid in sides} == want,
+                  "both sides followed to the coins the fill re-created the pool at")
+        mv = next(m for m in self.get("/v1/pools/moves")["moves"] if m["txid"] == ftx)
+        assert not mv["sell"] and mv["base"] == 50_000 and mv["base_after"] == pool["reserve_base"] + 50_000, mv
+        self.log.info("KEPT the pool bought 50,000 X while the relay was down (%s); restarted (%s), "
+                      "both sides followed to %s:0/1: ask %d, bid %d; /v1/pools/moves records the fill",
+                      ftx[:16], line.split("covenant book ", 1)[1].split(": ", 1)[1], ftx[:16], want["PA"][0], want["PB"][0])
+
         # ---- WITHDRAW ------------------------------------------------------------------------
-        xc2, yc2 = self.coin(rtx, 8), self.coin(rtx, 9)
+        xc2, yc2 = self.coin(ftx, 0), self.coin(ftx, 1)
         fc = fees.pop()
         w = self.go("poolwithdraw", {"pool": pool, "genesis": self.genesis, "coins": [xc2, yc2], "inputs": [fc],
                                      "outputs": [self.out(X, xc2["value"], self.fresh_spk()),

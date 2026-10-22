@@ -17,8 +17,11 @@ import (
 // posted offer is (validator.Readmit: signature, terms, expiry, its outpoint
 // on the chain) and listed at what its outpoint holds. One whose outpoint was
 // spent while the relay was down is put back held at 0, for the chain watcher
-// to follow the spend: to the remainder a part fill made, or out of the book.
-// Anything else the chain or the clock now refuses is dropped and named.
+// to follow the spend: to the remainder a part fill made, or out of the book;
+// a pool's side to the coins the pool rests at now. A pool's side whose coin
+// holds nothing above its reserve is put back held at 0 too, as the follower
+// kept it. Anything else the chain or the clock now refuses is dropped and
+// named.
 func restoreCovenantBook(path string, store *offerstore.Store, v *validator.Validator, logger *log.Logger) (listed, followed, dropped int) {
 	kept, bad, err := offerstore.ReadCovenantBook(path)
 	if err != nil {
@@ -35,8 +38,13 @@ func restoreCovenantBook(path string, store *offerstore.Store, v *validator.Vali
 		if c, _, ok := offer.RestingLocator(o); ok {
 			txid, vout = "coin "+c, 0
 		}
+		if t, n, ok := offer.PoolOwnCoin(o); ok {
+			txid, vout = t, n
+		}
 		size, err := v.Readmit(context.Background(), o)
-		spent := errors.Is(err, watcher.ErrNotUnspent)
+		// A pool's side sold down to its reserve stays in the book as it did
+		// before the restart, held at 0, for the follower to list again.
+		spent := errors.Is(err, watcher.ErrNotUnspent) || (offer.IsPool(o) && errors.Is(err, watcher.ErrPoolDrained))
 		if err != nil && !spent {
 			logger.Printf("covenant book: %s/%s at %s:%d not listed again: %v", o.GetMakerPubkey(), o.GetOfferId(), txid, vout, err)
 			dropped++
@@ -89,6 +97,9 @@ func keepCovenantBook(w *offerstore.CovenantBookWriter, store *offerstore.Store,
 }
 
 func heldWhy(err error) string {
+	if errors.Is(err, watcher.ErrPoolDrained) {
+		return "its coin holds nothing above its reserve: " + err.Error()
+	}
 	if err != nil {
 		return "spent while the relay was down: " + err.Error()
 	}

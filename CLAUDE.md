@@ -79,7 +79,7 @@ sub-asset sell, plus the confidential relay on 9975). Publicly they are the `/se
 `/seqob-pln` and `/seqob-conf` mounts.
 
 The relay holds its book in memory; the trade log is durable with `-trade-log`, and the covenant
-orders with `-covenant-book`, which lists them again at start after checking each against the
+orders and the sides of makers' pools with `-covenant-book`, which lists them again at start after checking each against the
 chain. Without that flag, restarting a relay empties its book until every maker re-posts, which
 the Go makers do on reconnect; an offer posted by something that is not running at the time (a
 wallet's covenant order) comes back only when it is posted again. A covenant order's signed offer is public and its outpoint is
