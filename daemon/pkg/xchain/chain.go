@@ -199,6 +199,25 @@ func (c *Chain) locateFundedHTLC(p2sh, spkHex string) (*FundedHTLC, error) {
 	return c.findHTLCUTXOAt(p2sh)
 }
 
+// htlcSendArgs is sendtoaddress's named arguments for funding an HTLC: the amount
+// of the asset to the P2SH, and the fee paid in that same asset. Sequentia has an
+// open fee market, so a send whose fee asset nothing determines must name it, and
+// a node refuses one that does not ("Nothing in this transaction determines the
+// fee asset"). Every maker that funds the Sequentia leg holds the asset it locks,
+// which the node prices like any other, so that asset pays its own fee and none is
+// privileged. "" is the chain's pegged "bitcoin" asset, which then pays its fee.
+func htlcSendArgs(p2sh, amountCoins, assetLabel string) map[string]interface{} {
+	asset := assetLabel
+	if asset == "" {
+		asset = "bitcoin"
+	}
+	named := map[string]interface{}{"address": p2sh, "amount": amountCoins, "fee_asset_label": asset}
+	if assetLabel != "" {
+		named["assetlabel"] = assetLabel
+	}
+	return named
+}
+
 // LockHTLC pays `amountCoins` (a decimal string, e.g. "10") of the given asset
 // to the HTLC's P2SH address and returns the funded outpoint. assetLabel may be
 // "" to pay the chain's default (pegged "bitcoin") asset — that is how the BTC
@@ -224,12 +243,8 @@ func (c *Chain) LockHTLC(redeemScript []byte, amountCoins, assetLabel string) (*
 		return prior, nil
 	}
 
-	named := map[string]interface{}{"address": p2sh, "amount": amountCoins}
-	if assetLabel != "" {
-		named["assetlabel"] = assetLabel
-	}
 	var txid string
-	if err := c.rpc.CallNamed(&txid, "sendtoaddress", named); err != nil {
+	if err := c.rpc.CallNamed(&txid, "sendtoaddress", htlcSendArgs(p2sh, amountCoins, assetLabel)); err != nil {
 		return nil, err
 	}
 
