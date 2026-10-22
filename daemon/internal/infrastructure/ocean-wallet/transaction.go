@@ -61,6 +61,22 @@ func (m *tx) SelectUtxos(
 	return utxoList(res.GetUtxos()).toPortableList(), change, expiryTime, nil
 }
 
+func (m *tx) LockUtxos(
+	ctx context.Context, accountName string, utxos []ports.Utxo,
+) error {
+	if len(utxos) == 0 {
+		return nil
+	}
+	ins := make([]*pb.Input, 0, len(utxos))
+	for _, u := range utxos {
+		ins = append(ins, &pb.Input{Txid: u.GetTxid(), Index: u.GetIndex()})
+	}
+	_, err := m.client.LockUtxos(ctx, &pb.LockUtxosRequest{
+		AccountName: accountName, Utxos: ins,
+	})
+	return err
+}
+
 func (m *tx) CreatePset(
 	ctx context.Context, ins []ports.TxInput, outs []ports.TxOutput,
 ) (string, error) {
