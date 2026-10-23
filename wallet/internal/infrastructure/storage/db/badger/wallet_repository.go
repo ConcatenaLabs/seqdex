@@ -22,6 +22,9 @@ type walletRepository struct {
 	chEvents         chan domain.WalletEvent
 	externalChEvents chan domain.WalletEvent
 	lock             *sync.Mutex
+	// One write of the wallet at a time: each reads the stored wallet, changes it and stores
+	// it back, so two at once would each store their own change over the other's.
+	writeLock *sync.Mutex
 
 	log func(format string, a ...interface{})
 }
@@ -38,7 +41,10 @@ func newWalletRepository(store *badgerhold.Store) *walletRepository {
 		format = fmt.Sprintf("wallet repository: %s", format)
 		log.Debugf(format, a...)
 	}
-	return &walletRepository{store, chEvents, extrernalChEvents, lock, logFn}
+	return &walletRepository{
+		store: store, chEvents: chEvents, externalChEvents: extrernalChEvents, lock: lock,
+		writeLock: &sync.Mutex{}, log: logFn,
+	}
 }
 
 func (r *walletRepository) CreateWallet(
@@ -106,6 +112,9 @@ func (r *walletRepository) LockWallet(
 func (r *walletRepository) UpdateWallet(
 	ctx context.Context, updateFn func(v *domain.Wallet) (*domain.Wallet, error),
 ) error {
+	r.writeLock.Lock()
+	defer r.writeLock.Unlock()
+
 	wallet, err := r.getWallet(ctx)
 	if err != nil {
 		return err
