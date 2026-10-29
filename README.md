@@ -337,7 +337,11 @@ daemon/                The Go daemon module (fork of tdex-daemon).
                        run one. With -take it is a one-shot market taker
                        instead: the best offer on the side and rails named,
                        one leg of the same drivers, one JSON line out
-                       (take.go).
+                       (take.go). A crossing's second leg is checked before
+                       the first runs (a covenant's coin unspent, a Lightning
+                       leg's channel room), and one that fails after the
+                       first settled is completed with the next-best offers
+                       within -hedge-max-bps (hedge.go).
   cmd/seqob-relaycli/  Scripting client for the relay (post | take), used by
                        the regtest matcher proof.
   cmd/seqob-octl/      Helper for inspecting/preparing Ocean maker accounts.

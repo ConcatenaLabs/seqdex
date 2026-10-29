@@ -141,6 +141,11 @@ func RunTake(ex *Executor, relays []string, base, quote, side string, want uint6
 		return res
 	}
 	res.Family, res.Offer, res.Relay, res.BaseAtoms = n.Family.String(), n.ID(), n.Relay, take
+	if why := ex.Preflight(n, take); why != "" {
+		res.Err = "preflight: " + why
+		res.Ms = time.Since(t0).Milliseconds()
+		return res
+	}
 	if side == "buy" {
 		res.QuoteAtoms = n.CostFor(take)
 	} else {
