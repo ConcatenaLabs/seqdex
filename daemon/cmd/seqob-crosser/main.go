@@ -76,6 +76,8 @@ func main() {
 	takeAmount := flag.Uint64("take-amount", 0, "with -take: about this many base atoms (the one offer taken may make it up to twice that, or less)")
 	takeFamilies := flag.String("take-families", "", "with -take: the rails it may use, e.g. pureln,covenant,samechain (empty: any it can execute)")
 	takeAvoid := flag.String("take-avoid", "", "with -take: maker pubkeys never taken from, comma-separated")
+	hedgeMaxBps := flag.Uint64("hedge-max-bps", 300, "when leg 2 fails after leg 1 settled, complete it with other offers priced at most this far (bps) from it (hedge.go); 0: never")
+	lnCli := flag.String("lightning-cli", "lightning-cli", "lightning-cli, for the pure-Lightning preflight of a second leg")
 	flag.Parse()
 
 	out := os.Stderr
@@ -109,7 +111,7 @@ func main() {
 		BtcRPC: *btcRPC, BtcWallet: *btcWallet, BtcChain: *btcChain,
 		AssetLNSocket: *assetLN, BtcLNSocket: *btcLN,
 		Esplora: *esplora, TakerPriv: *takerPriv, TakerBlinding: *takerBlinding,
-		SeqobCli: *seqobCli, StateDir: *stateDir,
+		SeqobCli: *seqobCli, StateDir: *stateDir, LNCli: *lnCli,
 		SpendFee: *spendFee, BtcFeeRate: *btcFeeRate, MinBTCConf: *minBTCConf,
 		LegTimeout: *legTimeout,
 	}
@@ -206,8 +208,17 @@ func main() {
 			mu.Lock()
 			st.inFlight = true
 			mu.Unlock()
+			base0, quote0 := base, quote
+			complete := func(failed *NormOrder, take uint64) (uint64, []string) {
+				if *hedgeMaxBps == 0 {
+					return 0, nil
+				}
+				raw, statuses := FetchPairOffers(relays, base0, quote0, logf)
+				fresh := ApplyStatuses(BuildUnion(raw, base0, quote0, time.Now(), *minTTL, logf), statuses)
+				return exec.CompleteLeg(fresh, failed, take, *hedgeMaxBps, caps.Executable)
+			}
 			go func(pairKey string, plan *CrossPlan, st *pairState) {
-				ok := executeCrossing(pairKey, plan, exec, ledger, journal, logf)
+				ok := executeCrossing(pairKey, plan, exec, ledger, journal, logf, complete)
 				mu.Lock()
 				st.inFlight = false
 				if ok {
@@ -252,8 +263,15 @@ func logDetection(logf func(string, ...interface{}), pair string, d Detection) {
 
 // executeCrossing runs both legs in the planned order, journaling each phase.
 // Returns true when both legs settled.
-func executeCrossing(pair string, p *CrossPlan, ex *Executor, ledger *Ledger, journal *Journal, logf func(string, ...interface{})) (ok bool) {
+func executeCrossing(pair string, p *CrossPlan, ex *Executor, ledger *Ledger, journal *Journal, logf func(string, ...interface{}),
+	complete func(*NormOrder, uint64) (uint64, []string)) (ok bool) {
 	defer ledger.Release(p)
+	// Leg 2 is checked before leg 1 runs: a crossing whose second leg cannot run
+	// now is not started (hedge.go).
+	if why := ex.Preflight(p.Second, p.Take); why != "" {
+		logf("[%s] SKIP: leg 2 (%s %s) fails its preflight: %s; nothing executed", pair, p.Second.Family, short(p.Second.ID()), why)
+		return false
+	}
 	rec := &ExecRecord{
 		Pair: pair, StartedAt: time.Now(), Take: p.Take, Cost: p.Cost, Revenue: p.Revenue,
 		First:  legRecord(p.First, "pending"),
@@ -278,6 +296,28 @@ func executeCrossing(pair string, p *CrossPlan, ex *Executor, ledger *Ledger, jo
 	logf("[%s] leg 1 settled; leg 2/2: %s %s %d base against %s on %s", pair, p.Second.Side, p.Second.Family, p.Take, short(p.Second.ID()), p.Second.Relay)
 
 	r2 := ex.RunLeg(p.Second, p.Take)
+	if !r2.Settled && complete != nil {
+		// Completed with the next-best offers on the same side, within the bound.
+		logf("[%s] leg 2 failed after leg 1 settled (%s): completing it with other offers", pair, r2.Err)
+		done, lines := complete(p.Second, p.Take)
+		for _, l := range lines {
+			logf("[%s]   %s", pair, l)
+		}
+		if done >= p.Take {
+			_ = journal.SetLeg(pair, true, "settled", r2.StateFile, r2.Resume)
+			_ = journal.End(pair, nil)
+			logf("[%s] CROSSING SETTLED: leg 2 completed by other offers, %d base", pair, p.Take)
+			return true
+		}
+		if done > 0 {
+			left := *p
+			left.Take = p.Take - done
+			left.Cost = p.Cost * left.Take / p.Take
+			left.Revenue = p.Revenue * left.Take / p.Take
+			logf("[%s] leg 2 completed in part: %d of %d base", pair, done, p.Take)
+			p = &left
+		}
+	}
 	if !r2.Settled {
 		_ = journal.SetLeg(pair, true, "failed", r2.StateFile, r2.Resume)
 		ledger.RecordResidue(p)

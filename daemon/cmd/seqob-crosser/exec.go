@@ -54,6 +54,7 @@ type Caps struct {
 	Esplora, TakerPriv, TakerBlinding string
 
 	SeqobCli   string // path to the seqob-cli binary
+	LNCli      string // lightning-cli, for the pure-Lightning preflight (hedge.go)
 	StateDir   string // per-leg driver state files land here
 	SpendFee   uint64
 	BtcFeeRate float64
