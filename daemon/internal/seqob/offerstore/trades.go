@@ -495,3 +495,36 @@ func (s *Store) mergedLocked(pk string) []Trade {
 	}
 	return out
 }
+
+// TradeMarkets is every market with a trade held, this relay's own or a
+// followed relay's, each as its canonical key ("base/quote"), sorted.
+func (s *Store) TradeMarkets() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	seen := make(map[string]bool, len(s.trades))
+	for pk, ring := range s.trades {
+		if len(ring) > 0 {
+			seen[pk] = true
+		}
+	}
+	for _, m := range s.mirrors {
+		for pk, ring := range m {
+			if len(ring) > 0 {
+				seen[pk] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for pk := range seen {
+		out = append(out, pk)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// CanonicalPair is the direction the relay keeps a market's trades in: the
+// asset whose id sorts first is the base.
+func CanonicalPair(a, b string) (base, quote string) {
+	base, quote, _ = canonicalPair(a, b)
+	return base, quote
+}
