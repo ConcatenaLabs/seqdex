@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -59,6 +60,9 @@ type Service interface {
 }
 
 type scannerService struct {
+	// inFlight is the start height of the pass running now, +1 (0: none): with the queue's
+	// lowest start it bounds what every request has scanned (LowestUnscanned)
+	inFlight      atomic.Uint32
 	started       bool
 	requestsQueue *scanRequestQueue
 	filterDB      repository.FilterRepository
@@ -108,6 +112,19 @@ func (s *scannerService) Stop() {
 	s.quitCh <- struct{}{}
 	s.started = false
 	//s.requestsQueue = newScanRequestQueue() TODO: commented cause data race
+}
+
+// LowestUnscanned is the lowest block height some watch has not scanned yet: every block
+// below it is scanned for every watch the scanner holds. ok is false while it holds none.
+func (s *scannerService) LowestUnscanned() (uint32, bool) {
+	low, ok := uint32(0), false
+	if r := s.requestsQueue.peek(); r != nil {
+		low, ok = r.StartHeight, true
+	}
+	if f := s.inFlight.Load(); f > 0 && (!ok || f-1 < low) {
+		low, ok = f-1, true
+	}
+	return low, ok
 }
 
 func (s *scannerService) Watch(opts ...ScanRequestOption) {
@@ -226,6 +243,8 @@ const filterLagBlocks = 6
 func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Report) (err error) {
 	nextBatch := make([]*ScanRequest, 0)
 	nextHeight := req.StartHeight
+	s.inFlight.Store(req.StartHeight + 1)
+	defer s.inFlight.Store(0)
 	var lastHash *chainhash.Hash
 	defer func() {
 		for _, r := range nextBatch {

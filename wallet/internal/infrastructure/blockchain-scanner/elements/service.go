@@ -2,9 +2,12 @@ package elements_scanner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
 	"github.com/aejkcs50/seqdex/wallet/internal/core/ports"
@@ -30,11 +33,16 @@ type service struct {
 	lock        *sync.RWMutex
 
 	quit      chan struct{}
+	// checkpoints: each account's scanned height as the last run saved it (CheckpointFile)
+	checkpoints map[string]uint32
 }
 
 type ServiceArgs struct {
 	RpcAddr string
 	Network string
+	// CheckpointFile is optional: where each account's scanned height is kept, so a restart
+	// resumes there instead of scanning again from the account's birth.
+	CheckpointFile string
 	// EsploraUrl is optional. When empty the scanner fetches blocks directly
 	// from the node via JSON-RPC (node-RPC-only mode); when set it uses an
 	// external Esplora HTTP endpoint instead. The filters and headers repos are
@@ -103,6 +111,7 @@ func NewElementsScanner(args ServiceArgs) (ports.BlockchainScanner, error) {
 		scanners:    scanners,
 		genesisHash: genesisHash,
 		filtersRepo: filtersDb,
+		checkpoints: loadCheckpoints(args.CheckpointFile),
 		headersRepo: headersDb,
 		lock:        lock,
 		quit:        make(chan struct{}),
@@ -112,10 +121,81 @@ func NewElementsScanner(args ServiceArgs) (ports.BlockchainScanner, error) {
 // Start starts nothing of its own: each account's scanner follows the node's
 // tip by itself, its watches waiting at the first block not yet scanned and
 // scanned as soon as the node has it.
-func (s *service) Start() {}
+// Start saves each account's scanned height every minute (CheckpointFile), and once more at
+// Stop. Each account's scanner follows the node's tip by itself.
+func (s *service) Start() {
+	if s.args.CheckpointFile == "" {
+		return
+	}
+	go func() {
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-s.quit:
+				return
+			case <-t.C:
+				s.saveCheckpoints()
+			}
+		}
+	}()
+}
 
 func (s *service) Stop() {
+	s.saveCheckpoints()
 	close(s.quit)
+}
+
+// checkpointMargin is how far below its saved height an account resumes: a reorg of the
+// last blocks before a stop is scanned again.
+const checkpointMargin = 12
+
+func loadCheckpoints(path string) map[string]uint32 {
+	out := map[string]uint32{}
+	if path == "" {
+		return out
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return out
+	}
+	_ = json.Unmarshal(b, &out)
+	return out
+}
+
+// saveCheckpoints writes every account's lowest unscanned height (written whole, then renamed).
+func (s *service) saveCheckpoints() {
+	if s.args.CheckpointFile == "" {
+		return
+	}
+	s.lock.RLock()
+	out := map[string]uint32{}
+	for name, sc := range s.scanners {
+		if p, ok := sc.svc.(interface{ LowestUnscanned() (uint32, bool) }); ok {
+			if h, ok := p.LowestUnscanned(); ok {
+				out[name] = h
+			}
+		}
+	}
+	s.lock.RUnlock()
+	b, _ := json.Marshal(out)
+	tmp := s.args.CheckpointFile + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err == nil {
+		_ = os.Rename(tmp, s.args.CheckpointFile)
+	}
+}
+
+// resumeHeight is where an account's watches start after a restart: its saved height less the
+// margin, never below its birth.
+func resumeHeight(saved map[string]uint32, account string, birth uint32) uint32 {
+	h, ok := saved[account]
+	if !ok || h <= checkpointMargin {
+		return birth
+	}
+	if h-checkpointMargin > birth {
+		return h - checkpointMargin
+	}
+	return birth
 }
 
 func (s *service) GetUtxoChannel(accountName string) chan []*domain.Utxo {
@@ -336,6 +416,9 @@ func (s *service) getOrCreateScanner(
 		accountName, startingBlock, s.filtersRepo, s.headersRepo, s.blockSvc,
 		s.genesisHash,
 	)
+	// The watches set as the wallet opens resume where the last run had scanned to; an
+	// address or coin watched later starts from the account's birth, as before.
+	scannerSvc.resumeFrom = resumeHeight(s.checkpoints, accountName, startingBlock)
 	s.scanners[accountName] = scannerSvc
 	return scannerSvc
 }

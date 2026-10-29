@@ -48,6 +48,10 @@ type scannerService struct {
 	svc                 scanner.Service
 	blindingKeys        map[string][]byte
 	startingBlockHeight uint32
+	// resumeFrom is where the first set of watches starts (a restart's saved height); the
+	// watches set later start at startingBlockHeight
+	resumeFrom uint32
+	resumed    bool
 	chTxs               chan *domain.Transaction
 	chUtxos             chan []*domain.Utxo
 	lock                *sync.RWMutex
@@ -127,9 +131,20 @@ func (s *scannerService) deliverTx(tx *domain.Transaction) bool {
 	}
 }
 
+// startFor is where a watch set now starts: the resumed height for the watches set as the wallet
+// opens, the account's birth for any set after them.
+func (s *scannerService) startFor() uint32 {
+	if !s.resumed && s.resumeFrom > s.startingBlockHeight {
+		return s.resumeFrom
+	}
+	return s.startingBlockHeight
+}
+
 func (s *scannerService) watchAddresses(addressesInfo []domain.AddressInfo) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	start := s.startFor()
+	defer func() { s.resumed = true }()
 
 	for _, info := range addressesInfo {
 		// Prevent duplicates
@@ -145,7 +160,7 @@ func (s *scannerService) watchAddresses(addressesInfo []domain.AddressInfo) {
 		}
 		s.svc.Watch(
 			scanner.WithWatchItem(&unspentWatchItem{outputScript: script}),
-			scanner.WithStartBlock(s.startingBlockHeight),
+			scanner.WithStartBlock(start),
 			scanner.WithPersistentWatch(),
 		)
 		s.log(
@@ -158,6 +173,8 @@ func (s *scannerService) watchAddresses(addressesInfo []domain.AddressInfo) {
 func (s *scannerService) watchUtxos(utxos []domain.UtxoInfo) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	// the coins known as the wallet opens: spent before the resumed height, the last run saw it
+	start := s.startFor()
 
 	for _, u := range utxos {
 		hash, _ := elementsutil.TxIDToBytes(u.TxID)
@@ -166,7 +183,7 @@ func (s *scannerService) watchUtxos(utxos []domain.UtxoInfo) {
 		)
 		s.svc.Watch(
 			scanner.WithWatchItem(item),
-			scanner.WithStartBlock(s.startingBlockHeight),
+			scanner.WithStartBlock(start),
 		)
 
 		s.log("start watching utxo %s for account %s", u, s.accountName)

@@ -222,3 +222,25 @@ func TestAMissingFilterDeepIsScannedInFull(t *testing.T) {
 		}
 	}
 }
+
+// The lowest height some watch has not scanned: the queue's lowest start, or a pass in flight
+// below it, so a checkpoint never runs ahead of what is scanned.
+func TestLowestUnscanned(t *testing.T) {
+	c := &fakeChain{tip: 1000, txs: map[uint32][]*transaction.Transaction{}}
+	s := newTestScanner(c)
+	if _, ok := s.LowestUnscanned(); ok {
+		t.Fatal("no watch, no height")
+	}
+	watchAll(s, 3)
+	if h, _ := s.LowestUnscanned(); h != 0 {
+		t.Fatalf("before a pass: %d", h)
+	}
+	pass(t, s)
+	if h, _ := s.LowestUnscanned(); h != 1001 {
+		t.Fatalf("after a pass to the tip: %d", h)
+	}
+	s.inFlight.Store(301) // a pass from 300 running
+	if h, _ := s.LowestUnscanned(); h != 300 {
+		t.Fatalf("a pass in flight from 300 bounds it: %d", h)
+	}
+}
