@@ -76,17 +76,20 @@ type NormOrder struct {
 
 	Base, Quote string // canonical pair (display asset id hex, or the "BTC" sentinel)
 	// Flipped marks an offer that was posted on the REVERSED pair orientation
-	// (its own base is the canonical quote). It still joins price detection, but
-	// execution is not wired for flipped offers (the taker CLIs size -amount in
-	// the offer's OWN base units) — executability() rejects them with a reason.
+	// (its own base is the canonical quote). The taker CLIs size -amount in the
+	// offer's OWN base units, so a flipped leg converts the canonical take at the
+	// offer's own price (legCommand); the families whose drivers that conversion
+	// is wired for are covenant and same-chain (Caps.Executable).
 	Flipped bool
 
 	// BaseSize is the offer's full size in canonical-base atoms. QuoteNum/BaseDen
 	// is the price ratio: quote atoms per BaseDen base atoms (integers straight
 	// from the signed offer — never a float).
+	// BaseSize is capped to what the relay says is left of the offer
+	// (ApplyStatuses); BaseDen stays the signed whole.
 	BaseSize uint64
 	QuoteNum uint64 // quote-side atoms for the whole offer
-	BaseDen  uint64 // base-side atoms for the whole offer (== BaseSize)
+	BaseDen  uint64 // base-side atoms for the whole offer, as signed
 
 	AllowPartial bool
 	MinFill      uint64 // canonical-base atoms
@@ -290,6 +293,33 @@ func Normalize(o *seqobv1.Offer, relay, base, quote string) (*NormOrder, string)
 	}
 	if fam == FamCovenant {
 		n.MinLot = o.GetCovenant().GetMinLot()
+		if flipped && n.MinLot > 0 {
+			// min_lot is in the covenant's asset A, the offer's own base = our
+			// quote: in canonical-base atoms, rounded up.
+			n.MinLot = ceilMulDiv(n.MinLot, baseSize, quoteNum)
+		}
 	}
 	return n, ""
+}
+
+// Whole reports whether taking `take` takes the whole signed offer, which the
+// taker CLIs spell -amount 0.
+func (n *NormOrder) Whole(take uint64) bool {
+	return take == n.BaseSize && n.BaseSize == n.BaseDen
+}
+
+// OwnAmount is the -amount a taker CLI wants for a canonical take: atoms of the
+// offer's OWN base. Unflipped, that is the take itself. Flipped, the offer's own
+// base is our quote, so the take converts at the offer's own price: the quote we
+// pay to an ask, rounded up (we then receive at least `take`), or the quote we
+// receive from a bid, rounded down (we then pay at most `take`) — the same
+// numbers CostFor and RevenueFor booked for the leg.
+func (n *NormOrder) OwnAmount(take uint64) uint64 {
+	if !n.Flipped {
+		return take
+	}
+	if n.Side == SideAsk {
+		return n.CostFor(take)
+	}
+	return n.RevenueFor(take)
 }

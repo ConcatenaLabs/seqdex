@@ -48,8 +48,9 @@ func truncate(s string, n int) string {
 // FetchPairOffers pulls one pair's offers (BOTH orientations) from every relay.
 // A relay that is down or lacks the market is skipped with a log line, never
 // fatal — the union is whatever the reachable relays serve.
-func FetchPairOffers(relays []string, base, quote string, logf func(string, ...interface{})) map[string][]*seqobv1.Offer {
+func FetchPairOffers(relays []string, base, quote string, logf func(string, ...interface{})) (map[string][]*seqobv1.Offer, map[string]*seqobv1.OrderStatus) {
 	out := map[string][]*seqobv1.Offer{}
+	statuses := map[string]*seqobv1.OrderStatus{}
 	for _, r := range relays {
 		var offers []*seqobv1.Offer
 		for _, orient := range [][2]string{{base, quote}, {quote, base}} {
@@ -60,10 +61,47 @@ func FetchPairOffers(relays []string, base, quote string, logf func(string, ...i
 				continue
 			}
 			offers = append(offers, book.GetOffers()...)
+			for _, st := range book.GetStatuses() {
+				statuses[st.GetMakerPubkey()+":"+st.GetOfferId()] = st
+			}
 		}
 		if len(offers) > 0 {
 			out[r] = offers
 		}
+	}
+	return out, statuses
+}
+
+// ApplyStatuses keeps the offers the relays call liftable (open, or partly
+// filled with something left) and caps each one's size to what is left of it:
+// the relay refuses a take over an offer's active_amount, so a leg sized to the
+// signed whole of a partly filled offer could never open. active_amount is in
+// the offer's own base; a flipped offer's own base is our quote. An offer
+// without a status (an older relay) passes as signed.
+func ApplyStatuses(union []*NormOrder, statuses map[string]*seqobv1.OrderStatus) []*NormOrder {
+	out := union[:0]
+	for _, n := range union {
+		st, ok := statuses[n.ID()]
+		if !ok {
+			out = append(out, n)
+			continue
+		}
+		switch st.GetStatus() {
+		case seqobv1.OfferStatus_OFFER_STATUS_OPEN, seqobv1.OfferStatus_OFFER_STATUS_PARTIAL:
+		default:
+			continue
+		}
+		left := st.GetActiveAmount()
+		if n.Flipped {
+			left = floorMulDiv(left, n.BaseDen, n.QuoteNum)
+		}
+		if left == 0 {
+			continue
+		}
+		if left < n.BaseSize {
+			n.BaseSize = left
+		}
+		out = append(out, n)
 	}
 	return out
 }
