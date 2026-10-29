@@ -153,6 +153,13 @@ func main() {
 	quoteAmt := flag.Uint64("quote-amount", 45, "quote size (quote atoms)")
 	feeAsset := flag.String("fee-asset", "", "preferred fee asset hint (any-asset fee market)")
 	expiry := flag.Duration("expiry", time.Hour, "time until the offer expires")
+	guardFeed := flag.String("guard-feed", "", "samechain: price feed URL (the price server's /prices); with it the maker retires its quote, as -max-quote-age does, once the feed's mid has moved to within -guard-bps of the touch level (feed_guard.go)")
+	guardBaseKey := flag.String("guard-base-key", "", "samechain -guard-feed: the feed's key for the base asset")
+	guardQuoteKey := flag.String("guard-quote-key", "", "samechain -guard-feed: the feed's key for the quote asset")
+	guardBasePrec := flag.Int("guard-base-prec", 8, "samechain -guard-feed: the base asset's display precision (the feed prices whole units)")
+	guardQuotePrec := flag.Int("guard-quote-prec", 8, "samechain -guard-feed: the quote asset's display precision")
+	guardBps := flag.Float64("guard-bps", 10, "samechain -guard-feed: the margin, in basis points of the mid")
+	guardEvery := flag.Duration("guard-every", 20*time.Second, "samechain -guard-feed: how often the feed is read")
 	quoteAge := flag.Duration("max-quote-age", 0, "retire for a re-price no later than this after posting, regardless of -expiry (0 = only at expiry); the supervisor re-runs at the current price")
 	minAnchor := flag.Uint("min-anchor-depth", 0, "Bitcoin-anchor confs before FILLED (0 = 0-conf tolerant)")
 	confidential := flag.Bool("confidential", false, "post a confidential offer (blinded settlement); default explicit — Sequentia is transparent by default, confidentiality is opt-in")
@@ -219,6 +226,8 @@ func main() {
 	}
 
 	maxQuoteAge = *quoteAge
+	feedGuard = feedGuardConfig{URL: *guardFeed, BaseKey: *guardBaseKey, QuoteKey: *guardQuoteKey,
+		BasePrec: *guardBasePrec, QuotePrec: *guardQuotePrec, Bps: *guardBps, Every: *guardEvery}
 	makerKey := loadOrGenKey(*makerPriv)
 	makerPubHex := hex.EncodeToString(makerKey.PubKey().SerializeCompressed())
 	ctx := context.Background()
@@ -468,6 +477,7 @@ func serve(conn *websocket.Conn, makers map[string]*client.Maker, ladder []*seqo
 		return liveSessions.Load() == 0 || time.Since(time.Unix(lastAccept.Load(), 0)) > 10*time.Minute
 	}
 	armRequoteExit(o, idle)
+	armFeedGuard(o, idle)
 	// HEAR OUR OWN FILLS. The relay sends an order's status changes only to connections that
 	// subscribed to its market, so a maker that never subscribed never learns a rung was
 	// filled whole, and the re-post below (on FILLED / UTXO_INVALIDATED) never ran: a taken
