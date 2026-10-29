@@ -445,6 +445,17 @@ func main() {
 		}
 	}
 	o := ladder[0]
+	// A maker's key is stable across its restarts, so offers an earlier run of it posted and
+	// never withdrew (killed, or retired while its wallet hung) read as live again once this
+	// run connects, and no one can co-sign them: withdraw every offer of this key on this pair
+	// that this run did not just post.
+	keep := make(map[string]bool, len(ladder))
+	for _, lo := range ladder {
+		keep[lo.GetOfferId()] = true
+	}
+	if n := withdrawStale(*relay, o.GetPair().GetBaseAsset(), o.GetPair().GetQuoteAsset(), makerPubHex, keep, makerKey); n > 0 {
+		fmt.Printf("withdrew %d offer(s) an earlier run of this maker left on the relay\n", n)
+	}
 	fmt.Printf("seqob-maker up: posted %s offer %s (+%d ladder levels) by maker %s\n", *side, o.GetOfferId(), len(ladder)-1, makerPubHex)
 	fmt.Printf("  pair %s/%s  give %d %s  want %d %s  confidential=%v  fee-rate=%d msat/vB\n",
 		o.GetPair().GetBaseAsset(), o.GetPair().GetQuoteAsset(), o.GetOfferAmount(), o.GetOfferAsset(), o.GetWantAmount(), o.GetWantAsset(), *confidential, *msats)
@@ -2362,6 +2373,40 @@ func cancelOffer(relay string, o *seqobv1.Offer, key *btcec.PrivateKey) {
 		return
 	}
 	fmt.Printf("offer %s cancelled after fill (restart the maker to re-quote)\n", o.GetOfferId())
+}
+
+// withdrawStale cancels every offer of maker `pub` on the pair base/quote (both orientations)
+// that `keep` does not name, and returns how many it withdrew.
+func withdrawStale(relay, base, quote, pub string, keep map[string]bool, key *btcec.PrivateKey) int {
+	n := 0
+	for _, bq := range [][2]string{{base, quote}, {quote, base}} {
+		resp, err := http.Get(fmt.Sprintf("%s/v1/market/%s/%s/orderbook", relay, bq[0], bq[1]))
+		if err != nil {
+			continue
+		}
+		body, _ := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+		var book struct {
+			Offers []struct {
+				OfferID     string `json:"offer_id"`
+				MakerPubkey string `json:"maker_pubkey"`
+			} `json:"offers"`
+		}
+		if json.Unmarshal(body, &book) != nil {
+			continue
+		}
+		for _, of := range book.Offers {
+			if !strings.EqualFold(of.MakerPubkey, pub) || keep[of.OfferID] {
+				continue
+			}
+			if err := postCancel(relay, &seqobv1.Offer{OfferId: of.OfferID}, key); err == nil {
+				n++
+			} else {
+				fmt.Printf("withdraw offer %s: %v\n", of.OfferID, err)
+			}
+		}
+	}
+	return n
 }
 
 // postCancel signs and POSTs an offer cancel to the relay, returning only when the
