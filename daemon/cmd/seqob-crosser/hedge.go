@@ -33,6 +33,17 @@ import (
 // Preflight is the check of leg `n` for a take of `take` base atoms; "" when it
 // can run, else why not.
 func (e *Executor) Preflight(n *NormOrder, take uint64) string {
+	// A leg that spends from the crosser's node wallet needs that wallet loaded: a node
+	// restart drops a wallet that is not loaded on startup, and the leg then fails with
+	// "Requested wallet does not exist or is not loaded" after the other leg settled.
+	switch n.Family {
+	case FamCovenant, FamCross, FamSubmarine, FamSubAsset:
+		if e.Caps.SeqRPC != "" && e.Caps.SeqWallet != "" {
+			if loaded, err := e.walletLoaded(e.Caps.SeqWallet); err == nil && !loaded {
+				return fmt.Sprintf("the node wallet %s is not loaded", e.Caps.SeqWallet)
+			}
+		}
+	}
 	switch n.Family {
 	case FamCovenant:
 		cov := n.Offer.GetCovenant()
@@ -68,18 +79,35 @@ func (e *Executor) Preflight(n *NormOrder, take uint64) string {
 	return ""
 }
 
-// txOutUnspent asks the node whether txid:vout is unspent, mempool included.
-func (e *Executor) txOutUnspent(txid string, vout uint32) (bool, error) {
-	body := fmt.Sprintf(`{"jsonrpc":"1.0","id":"pre","method":"gettxout","params":[%q,%d,true]}`, txid, vout)
-	req, err := http.NewRequest("POST", e.Caps.SeqRPC, strings.NewReader(body))
+// walletLoaded asks the node whether `wallet` is loaded.
+func (e *Executor) walletLoaded(wallet string) (bool, error) {
+	res, err := e.nodeCall("listwallets", "[]")
 	if err != nil {
 		return false, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	c := &http.Client{Timeout: 15 * time.Second}
-	resp, err := c.Do(req)
-	if err != nil {
+	var names []string
+	if err := json.Unmarshal(res, &names); err != nil {
 		return false, err
+	}
+	for _, w := range names {
+		if w == wallet {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// nodeCall is one JSON-RPC call to the crosser's node (no wallet), its result raw.
+func (e *Executor) nodeCall(method, params string) (json.RawMessage, error) {
+	body := fmt.Sprintf(`{"jsonrpc":"1.0","id":"pre","method":%q,"params":%s}`, method, params)
+	req, err := http.NewRequest("POST", e.Caps.SeqRPC, strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
 	var r struct {
@@ -87,12 +115,21 @@ func (e *Executor) txOutUnspent(txid string, vout uint32) (bool, error) {
 		Error  map[string]interface{} `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return false, err
+		return nil, err
 	}
 	if r.Error != nil {
-		return false, fmt.Errorf("gettxout: %v", r.Error["message"])
+		return nil, fmt.Errorf("%s: %v", method, r.Error["message"])
 	}
-	return string(r.Result) != "null" && len(r.Result) > 0, nil
+	return r.Result, nil
+}
+
+// txOutUnspent asks the node whether txid:vout is unspent, mempool included.
+func (e *Executor) txOutUnspent(txid string, vout uint32) (bool, error) {
+	res, err := e.nodeCall("gettxout", fmt.Sprintf(`[%q,%d,true]`, txid, vout))
+	if err != nil {
+		return false, err
+	}
+	return string(res) != "null" && len(res) > 0, nil
 }
 
 // spendable sums what the node at `sock` can send now over its usable channels
