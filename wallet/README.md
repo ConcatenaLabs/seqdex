@@ -40,7 +40,13 @@ Elements code, untouched. What changed:
   go-elements cannot parse Sequentia's anchored PoS headers. Individual
   transactions still decode with go-elements (Sequentia is wire-compatible for
   transactions). The scanner polls the node tip (~2s) and needs
-  `-blockfilterindex=1` on the node. A vendored neutrino-elements scanner
+  `-blockfilterindex=1` on the node; a block deeper than six below the tip
+  that has no filter is read in full. Each watch resumes at the first block it
+  has not scanned, and each account's scanned height is saved every minute in
+  `<datadir>/<scanner dir>/checkpoints.json`, so after a restart the watches set
+  as the wallet opens resume there (twelve blocks back) instead of scanning
+  again from the account's birth; an address or coin watched later still
+  starts from the account's birth. A vendored neutrino-elements scanner
   variant exists as well (`internal/infrastructure/blockchain-scanner/`).
 - **Open fee market**: non-swap transfers pay the network fee in the
   transacted asset (node-fed exchange rates) rather than assuming a native fee

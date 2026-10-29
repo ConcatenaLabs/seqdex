@@ -123,10 +123,12 @@ func buildScannerConfig() interface{} {
 	scannerDir := filepath.Join(datadir, config.ScannerLocation)
 	switch bcScannerType {
 	case "elements":
+		_ = os.MkdirAll(scannerDir, 0o700)
 		return elements_scanner.ServiceArgs{
-			RpcAddr:    elementsRpcAddr,
-			Network:    network.Name,
-			EsploraUrl: esploraUrl, // optional; empty => node-RPC-only mode
+			RpcAddr:        elementsRpcAddr,
+			Network:        network.Name,
+			EsploraUrl:     esploraUrl, // optional; empty => node-RPC-only mode
+			CheckpointFile: filepath.Join(scannerDir, "checkpoints.json"),
 		}
 	case "neutrino":
 		return neutrino_scanner.NodeServiceArgs{
