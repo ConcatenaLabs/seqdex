@@ -1,6 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -84,5 +88,32 @@ func TestCompleteLeg(t *testing.T) {
 	// nothing within the bound: nothing taken, the drift stays booked
 	if d, _ := completeLegWith([]*NormOrder{failed, far, bid}, failed, 1000, 300, execAll, pre, run); d != 0 {
 		t.Fatalf("nothing within the bound: %d", d)
+	}
+}
+
+// A leg spending from the crosser's node wallet fails its preflight while that
+// wallet is not loaded, and passes once it is.
+func TestPreflightWalletLoaded(t *testing.T) {
+	loaded := []string{"other"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var q struct{ Method string }
+		_ = json.NewDecoder(r.Body).Decode(&q)
+		switch q.Method {
+		case "listwallets":
+			b, _ := json.Marshal(loaded)
+			fmt.Fprintf(w, `{"result":%s,"error":null}`, b)
+		case "gettxout":
+			fmt.Fprint(w, `{"result":{"confirmations":3},"error":null}`)
+		}
+	}))
+	defer srv.Close()
+	e := &Executor{Caps: Caps{SeqRPC: srv.URL, SeqWallet: "lsp-inventory"}}
+	cov := norm(mkOffer(FamCovenant, SideAsk, tBase, tQuote, 1000, 2000), tBase, tQuote)
+	if why := e.Preflight(cov, 1000); !strings.Contains(why, "lsp-inventory is not loaded") {
+		t.Fatalf("an unloaded wallet fails the preflight: %q", why)
+	}
+	loaded = append(loaded, "lsp-inventory")
+	if why := e.Preflight(cov, 1000); why != "" {
+		t.Fatalf("loaded, and the coin unspent: %q", why)
 	}
 }
