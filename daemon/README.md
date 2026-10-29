@@ -82,6 +82,10 @@ GET  /v1/market/{base}/{quote}/candles      OHLCV from the trades (JSON)
 GET  /v1/market/{base}/{quote}/ticker       last price, the last 24 hours'
                                             open/high/low/change/volume, best
                                             bid and ask (JSON)
+GET  /v1/tickers                             every market's ticker in one
+                                            answer, each in the market's
+                                            canonical direction, with spark_7d
+                                            (JSON)
 GET  /v1/market/{base}/{quote}/fills        fill records of covenant and resting
                                             orders (JSON)
 GET  /v1/rounds                             clearing rounds: each round's one
@@ -111,6 +115,12 @@ names: `/v1/market/A/B/...` and `/v1/market/B/A/...` show the same trades, one t
 inverse of the other. Each trade in `trades` carries `price` (quote atoms per base
 atom), `size` (base atoms), `quote_size` (quote atoms), `side` (`buy` when the
 taker received the base), its `rail` and an `id` unique to the fill.
+
+`/v1/tickers` lists every market once, in its canonical direction: each market
+with a trade held, and each market with an order on the transparent book. Each
+entry is that market's `ticker` plus `spark_7d`, the price at the end of each six
+hours of the last seven days, oldest first (the last trade at or before each
+point; 0 before the market's first trade). A markets list is one request.
 
 Every rail's fills reach that log:
 

@@ -8,6 +8,8 @@
 //	POST /v1/offers/cancel                       submit a signed OfferCancel
 //	GET  /v1/offers?maker_pubkey=...             a maker's own orders
 //	GET  /v1/markets                             market summaries
+//	GET  /v1/tickers                             every market's ticker, with its
+//	                                             seven-day line (spark_7d)
 //	GET  /v1/market/{base}/{quote}/orderbook     per-pair snapshot (PublicBook: the
 //	                                             signed offers, and statuses[i], each
 //	                                             one's live size, active_amount)
@@ -142,6 +144,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/pools/moves", s.handlePoolMoves)
 	mux.HandleFunc("/v1/trades/report", s.handleTradeReport)
 	mux.HandleFunc("/v1/trades", s.handleAllTrades)
+	mux.HandleFunc("/v1/tickers", s.handleTickers)
 	return mux
 }
 

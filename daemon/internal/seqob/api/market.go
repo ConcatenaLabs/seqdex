@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -102,13 +103,21 @@ const tickerWindow = 24 * time.Hour
 // 24 hours and are absent when there were none. best_bid and best_ask are the
 // liftable transparent book's, both orientations of the pair taken together.
 func (s *Server) handleTicker(w http.ResponseWriter, _ *http.Request, pair *seqobv1.AssetPair) {
+	writeJSON(w, s.tickerOf(pair, time.Now(), false))
+}
+
+// tickerOf is a market's ticker in pair's direction (handleTicker). With spark,
+// it also carries spark_7d: the price at the end of each six hours of the last
+// seven days, oldest first, each the last trade at or before then (0 before the
+// market's first trade), present once the market has traded.
+func (s *Server) tickerOf(pair *seqobv1.AssetPair, now time.Time, spark bool) map[string]interface{} {
 	out := map[string]interface{}{"base": pair.BaseAsset, "quote": pair.QuoteAsset}
 	trades := s.store.TradesFor(pair, 0)
 	if n := len(trades); n > 0 {
 		out["last"] = trades[n-1].Price
 		out["last_ts"] = trades[n-1].TS.Unix()
 	}
-	since := time.Now().Add(-tickerWindow)
+	since := now.Add(-tickerWindow)
 	var open, hi, lo, last float64
 	var vb, vq uint64
 	cnt := 0
@@ -138,6 +147,9 @@ func (s *Server) handleTicker(w http.ResponseWriter, _ *http.Request, pair *seqo
 			out["change_pct_24h"] = (last - open) / open * 100
 		}
 	}
+	if spark && len(trades) > 0 {
+		out["spark_7d"] = sparkOf(trades, now, sparkSteps, sparkStep)
+	}
 	bid, ask := s.bestOf(pair)
 	if bid > 0 {
 		out["best_bid"] = bid
@@ -145,7 +157,72 @@ func (s *Server) handleTicker(w http.ResponseWriter, _ *http.Request, pair *seqo
 	if ask > 0 {
 		out["best_ask"] = ask
 	}
-	writeJSON(w, out)
+	return out
+}
+
+// The tickers' seven-day line: 28 points, six hours apart.
+const (
+	sparkSteps = 28
+	sparkStep  = 6 * time.Hour
+)
+
+// sparkOf is the price at the end of each of n steps ending now, oldest first:
+// the last trade at or before each point, 0 before the first trade. trades are
+// oldest first.
+func sparkOf(trades []offerstore.Trade, now time.Time, n int, step time.Duration) []float64 {
+	out := make([]float64, n)
+	i, p := 0, 0.0
+	for k := 0; k < n; k++ {
+		at := now.Add(-time.Duration(n-1-k) * step)
+		for i < len(trades) && !trades[i].TS.After(at) {
+			p = trades[i].Price
+			i++
+		}
+		out[k] = p
+	}
+	return out
+}
+
+// handleTickers serves every market's ticker in one answer: GET /v1/tickers.
+// A market is listed once, in the direction the relay keeps its trades (the
+// asset whose id sorts first is the base), whether it has traded or only has
+// orders on the transparent book. Each entry is what
+// /v1/market/{base}/{quote}/ticker answers, plus spark_7d.
+func (s *Server) handleTickers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	seen := make(map[string]bool)
+	var keys []string
+	add := func(a, b string) {
+		if a == "" || b == "" || a == b {
+			return
+		}
+		base, quote := offerstore.CanonicalPair(a, b)
+		if k := base + "/" + quote; !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	for _, k := range s.store.TradeMarkets() {
+		if i := strings.IndexByte(k, '/'); i > 0 {
+			add(k[:i], k[i+1:])
+		}
+	}
+	for _, m := range s.markets() {
+		if p := m.GetPair(); p != nil && !p.GetConfidential() {
+			add(p.GetBaseAsset(), p.GetQuoteAsset())
+		}
+	}
+	sort.Strings(keys)
+	now := time.Now()
+	list := make([]map[string]interface{}, 0, len(keys))
+	for _, k := range keys {
+		i := strings.IndexByte(k, '/')
+		list = append(list, s.tickerOf(&seqobv1.AssetPair{BaseAsset: k[:i], QuoteAsset: k[i+1:]}, now, true))
+	}
+	writeJSON(w, map[string]interface{}{"tickers": list, "at": now.Unix()})
 }
 
 // bestOf is the best bid and ask of the pair's liftable transparent book, read
