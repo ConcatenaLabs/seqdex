@@ -151,7 +151,7 @@ func (s *Store) RecordCovenantFill(f CovenantFill, resting *seqobv1.Offer) {
 	s.fills[pk] = ring
 	s.mu.Unlock()
 	if resting != nil && f.Filled > 0 {
-		s.RecordTradeTx(resting, f.Filled, f.Txid)
+		s.RecordTradeVia(resting, f.Filled, f.Txid, "fill:"+id, railOfTaker(f.Taker.Via))
 	}
 }
 
@@ -290,4 +290,20 @@ func (s *Store) RemoveCovenantRefunded(k Key, txid string) error {
 	e.SettleTxid = txid
 	s.mu.Unlock()
 	return s.dropWithStatus(k, seqobv1.OfferStatus_OFFER_STATUS_EXPIRED)
+}
+
+// railOfTaker is the rail a covenant fill settled on, from who took it.
+func railOfTaker(via string) string {
+	switch via {
+	case TakerArcaRound:
+		return RailCovenantRound
+	case TakerClearingRound:
+		return RailClearingRound
+	case TakerOperatorTree:
+		return RailLeafResting
+	case TakerInteractive:
+		return RailInteractive
+	default:
+		return RailOnchain
+	}
 }

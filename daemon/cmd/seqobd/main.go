@@ -80,6 +80,8 @@ func main() {
 		maxExpiry      = flag.Duration("max-expiry", 7*24*time.Hour, "maximum offer expiry horizon")
 		offersPerMin   = flag.Int("offers-per-min", 60, "max offers/min per maker_pubkey")
 		offersPerMinI  = flag.Int("offers-per-min-ip", 120, "max offers/min per IP")
+		tradeReporters = flag.String("trade-reporters", env("SEQOB_TRADE_REPORTERS", ""), "comma-separated compressed public keys (hex) of the makers whose own trade reports (POST /v1/trades/report: in-tree swaps, BTC desk) are recorded in the trade log (env SEQOB_TRADE_REPORTERS; empty = none)")
+		tradeFollow    = flag.String("trade-follow", env("SEQOB_TRADE_FOLLOW", ""), "comma-separated base URLs of other relays whose trades (GET /v1/trades) this relay's market view includes, so one relay serves every rail's trades (env SEQOB_TRADE_FOLLOW; empty = none)")
 		tradeLog       = flag.String("trade-log", env("SEQOB_TRADE_LOG", ""), "path to an append-only JSONL trade log so last_price/trades/candles survive a relay restart (env SEQOB_TRADE_LOG; empty = in-memory only)")
 		covenantBook   = flag.String("covenant-book", env("SEQOB_COVENANT_BOOK", ""), "path to a file keeping the covenant orders and pools across a relay restart, each checked again against the chain when read back (env SEQOB_COVENANT_BOOK; empty = in memory only)")
 		finalDepth     = flag.Int64("fill-anchor-depth", watcher.DefaultFinalAnchorDepth, "Bitcoin blocks that must bury a covenant fill's anchor, its block certified, before the relay records it final (an offer's min_anchor_depth raises it)")
@@ -204,6 +206,15 @@ func main() {
 
 	srv := api.New(store, v, router, logger)
 	srv.SetCrossSessionDeadline(*xsessionTTL)
+	if *tradeReporters != "" {
+		keys := strings.Split(*tradeReporters, ",")
+		srv.SetTradeReporters(keys)
+		logger.Printf("trade reports recorded from %d maker key(s)", len(keys))
+	}
+	if *tradeFollow != "" {
+		srv.FollowTrades(strings.Split(*tradeFollow, ","), 3*time.Second, nil)
+		logger.Printf("market view follows the trades of %s", *tradeFollow)
+	}
 
 	stop := make(chan struct{})
 	go store.RunExpirySweeper(*expirySweep, stop)
