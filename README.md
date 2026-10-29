@@ -334,7 +334,10 @@ daemon/                The Go daemon module (fork of tdex-daemon).
                        bid crosses a resting ask it takes BOTH sides with its
                        own inventory, sized to what the relay says is left of
                        each. One participant, not infrastructure; anyone can
-                       run one.
+                       run one. With -take it is a one-shot market taker
+                       instead: the best offer on the side and rails named,
+                       one leg of the same drivers, one JSON line out
+                       (take.go).
   cmd/seqob-relaycli/  Scripting client for the relay (post | take), used by
                        the regtest matcher proof.
   cmd/seqob-octl/      Helper for inspecting/preparing Ocean maker accounts.
