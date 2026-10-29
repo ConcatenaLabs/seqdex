@@ -59,6 +59,11 @@ type Server struct {
 	// routed to an online maker. Best-effort (Phase-1).
 	makerConns *connRegistry
 
+	// reporters are the makers whose own trade reports are recorded
+	// (SetTradeReporters, POST /v1/trades/report).
+	reportersMu sync.Mutex
+	reporters   map[string]bool
+
 	// offerOwners tracks which CONNECTION posted each resting offer. Pubkey-scoped
 	// eviction cannot tell two maker processes sharing one identity key apart (a
 	// requote overlap, a stray sibling), so a dead process's offers ghosted while any
@@ -135,6 +140,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/ws", s.handleWS)
 	mux.HandleFunc("/v1/rounds", s.handleRounds)
 	mux.HandleFunc("/v1/pools/moves", s.handlePoolMoves)
+	mux.HandleFunc("/v1/trades/report", s.handleTradeReport)
+	mux.HandleFunc("/v1/trades", s.handleAllTrades)
 	return mux
 }
 
@@ -252,7 +259,7 @@ func (s *Server) markets() []*seqobv1.Market {
 	return s.store.MarketsFiltered(func(o *seqobv1.Offer) bool { return s.offerLiftable(o, now) })
 }
 
-// handleOrderbook serves /v1/market/{base}/{quote}/{orderbook|trades|candles|fills}.
+// handleOrderbook serves /v1/market/{base}/{quote}/{orderbook|trades|candles|ticker|fills}.
 func (s *Server) handleOrderbook(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		httpErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -261,7 +268,7 @@ func (s *Server) handleOrderbook(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/v1/market/")
 	parts := strings.Split(rest, "/")
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" {
-		httpErr(w, http.StatusNotFound, "expected /v1/market/{base}/{quote}/{orderbook|trades|candles|fills}")
+		httpErr(w, http.StatusNotFound, "expected /v1/market/{base}/{quote}/{orderbook|trades|candles|ticker|fills}")
 		return
 	}
 	pair := &seqobv1.AssetPair{BaseAsset: parts[0], QuoteAsset: parts[1]}
@@ -276,29 +283,27 @@ func (s *Server) handleOrderbook(w http.ResponseWriter, r *http.Request) {
 		s.handleTrades(w, r, pair)
 	case "candles":
 		s.handleCandles(w, r, pair)
+	case "ticker":
+		s.handleTicker(w, r, pair)
 	case "fills":
 		s.handleFills(w, r, pair)
 	default:
-		httpErr(w, http.StatusNotFound, "expected /v1/market/{base}/{quote}/{orderbook|trades|candles|fills}")
+		httpErr(w, http.StatusNotFound, "expected /v1/market/{base}/{quote}/{orderbook|trades|candles|ticker|fills}")
 	}
 }
 
-// handleTrades serves the recent-cross feed: GET /v1/market/{base}/{quote}/trades?limit=N.
-// JSON (not proto — this is metadata the wallet renders, and there is no Trade proto).
+// handleTrades serves the market's recent trades, every rail's, newest last:
+// GET /v1/market/{base}/{quote}/trades?limit=N, in the direction asked for.
+// JSON (not proto: this is metadata the wallet renders).
 func (s *Server) handleTrades(w http.ResponseWriter, r *http.Request, pair *seqobv1.AssetPair) {
 	limit := 100
 	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 && v <= 1000 {
 		limit = v
 	}
-	type tradeJSON struct {
-		Ts    int64   `json:"ts"`    // unix seconds
-		Price float64 `json:"price"` // quote per base
-		Size  uint64  `json:"size"`  // base atoms
-	}
 	trades := s.store.TradesFor(pair, limit)
 	out := make([]tradeJSON, 0, len(trades))
 	for _, t := range trades {
-		out = append(out, tradeJSON{Ts: t.TS.Unix(), Price: t.Price, Size: t.Size})
+		out = append(out, tradeOut(t))
 	}
 	writeJSON(w, map[string]interface{}{"base": pair.BaseAsset, "quote": pair.QuoteAsset, "trades": out})
 }
@@ -347,7 +352,8 @@ func (s *Server) handlePoolMoves(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"moves": s.store.PoolMoves(r.URL.Query().Get("pool"))})
 }
 
-// handleCandles serves OHLCV bucketed from the trades: GET
+// handleCandles serves OHLCV bucketed from the market's trades, every rail's,
+// in the direction asked for: GET
 // /v1/market/{base}/{quote}/candles?interval=<seconds>&limit=N. Buckets align to the epoch.
 func (s *Server) handleCandles(w http.ResponseWriter, r *http.Request, pair *seqobv1.AssetPair) {
 	interval := int64(3600) // 1h default

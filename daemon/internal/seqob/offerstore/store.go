@@ -11,8 +11,6 @@
 package offerstore
 
 import (
-	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -44,37 +42,6 @@ type Entry struct {
 	heldFill     uint64 // B1: active size captured when a mempool spend zeroed it, so the confirmed fill's trade size isn't lost
 	reRested     bool   // F3: this covenant order was re-rested to a remainder outpoint at least once (its funding is no longer the original), so a Ghost of the current outpoint may be a reorg-undone fill whose earlier outpoint is restored — hold it, don't invalidate.
 	demoted      bool   // P3.10: this INTERACTIVE offer pushed the maker's committed capital in its offer_asset past the soft cap (likely phantom depth). Advisory; still resting/liftable.
-}
-
-// Trade is one recorded cross, captured at on-chain SETTLEMENT: the chain watcher records a
-// covenant fill with its fill record (RecordCovenantFill) once it is in a block, and retracts it
-// when the fill is undone; the interactive-lift SettleAck records its fill. (The matcher no longer
-// records at match.) Feeds last_price, the trades feed, and candles. Price is
-// quote-per-base, the same convention as displayPrice / best_bid|ask.
-type Trade struct {
-	TS    time.Time
-	Price float64 // quote per base (matches best_bid/best_ask units)
-	Size  uint64  // base atoms filled
-	// Txid is the settling tx this trade was recorded for (empty for a match-time or
-	// txid-less record). It lets a Bitcoin-driven reorg RETRACT the phantom trade
-	// (RetractTrade) so a reorged-away fill no longer leaves a stale last_price (P3.9).
-	Txid string
-}
-
-const maxTradesPerPair = 1000 // ring cap per market; oldest dropped
-
-// tradeRec is one line of the durable JSONL trade log: the pairKey plus the trade, so
-// last_price/trades/candles can be replayed after a relay restart (the book itself is ephemeral).
-// A record with RetractTxid set is a RETRACTION (P3.9): on replay it removes any already-
-// replayed trades with that txid for that pair, so a reorged-away fill does not resurrect
-// after a restart. The append-only log stays append-only (no rewrite on a reorg).
-type tradeRec struct {
-	PK          string    `json:"pk"`
-	TS          time.Time `json:"ts"`
-	Price       float64   `json:"price"`
-	Size        uint64    `json:"size"`
-	Txid        string    `json:"txid,omitempty"`
-	RetractTxid string    `json:"retract_txid,omitempty"`
 }
 
 // EventType is the kind of book delta.
@@ -131,189 +98,13 @@ type Store struct {
 	settledNonce   map[Key]uint64 // highest settled-trade nonce seen per key (replay defense; offer_id is reused across -requote)
 	subBuf         int
 	now            func() time.Time
-	trades         map[string][]Trade         // pairKey -> recent trades ring (newest last), lazy
-	fills          map[string][]*CovenantFill // pairKey -> recent covenant fill records (newest last), lazy
-	interactive    []*InteractiveWatch        // interactive fills the chain watcher follows to finality, oldest first, lazy
-	poolMoves      map[string]PoolMove        // pool key/txid -> the move the pool follower recorded (pool.go), lazy
-	tradeLog       *os.File                   // B1: append-only JSONL sink so trade history survives a relay restart (nil = disabled)
-	interactiveCap uint64                     // P3.10: per-maker soft cap on committed capital per offer_asset (0 = disabled). An interactive offer that pushes the maker's cumulative offer_amount in an asset past this is demoted.
-}
-
-// RecordTrade appends one executed cross for the resting offer's pair at its execution
-// price (displayPrice of the resting order). Called by the matcher when a fill is produced.
-// Best-effort + non-blocking: bad inputs are ignored, never an error on the match path.
-func (s *Store) RecordTrade(restingOffer *seqobv1.Offer, sizeBase uint64) {
-	s.RecordTradeTx(restingOffer, sizeBase, "")
-}
-
-// RecordTradeTx is RecordTrade with the SETTLING TXID attached, so a later Bitcoin
-// reorg can retract this exact trade (RetractTrade). Callers with a settle txid (the
-// interactive-lift SettleAck, cross/LN SettledTrade) pass it; a txid-less record ("")
-// behaves exactly like RecordTrade.
-func (s *Store) RecordTradeTx(restingOffer *seqobv1.Offer, sizeBase uint64, txid string) {
-	if restingOffer == nil || sizeBase == 0 {
-		return
-	}
-	price, _ := displayPrice(restingOffer)
-	pair := restingOffer.GetPair()
-	if price <= 0 || pair == nil {
-		return
-	}
-	pk := pairKey(pair)
-	ts := s.now()
-	s.mu.Lock()
-	if s.trades == nil {
-		s.trades = make(map[string][]Trade)
-	}
-	t := append(s.trades[pk], Trade{TS: ts, Price: price, Size: sizeBase, Txid: txid})
-	if len(t) > maxTradesPerPair {
-		t = t[len(t)-maxTradesPerPair:]
-	}
-	s.trades[pk] = t
-	logf := s.tradeLog
-	s.mu.Unlock()
-	// Durably append AFTER releasing the lock (B-4): a slow/networked disk must never serialize the whole
-	// book behind the trade-log write on the match/settle hot path. os.File appends (O_APPEND) are atomic
-	// and Write is goroutine-safe, so concurrent appends are fine. Best-effort — a log error never breaks.
-	if logf != nil {
-		if b, err := json.Marshal(tradeRec{PK: pk, TS: ts, Price: price, Size: sizeBase, Txid: txid}); err == nil {
-			_, _ = logf.Write(append(b, '\n'))
-		}
-	}
-}
-
-// RetractTrade removes every recorded trade for pair whose settling tx is txid, then
-// durably appends a RETRACTION to the JSONL so the trade does not resurrect on a
-// restart replay (P3.9). It is the trade-feed half of reorg-undo: when a Bitcoin
-// reorg orphans a settling tx, the fill un-happened, so the phantom trade print, its
-// contribution to last_price (the newest ring entry), and its candle volume must go.
-// The append-only log stays append-only (no rewrite). Returns the number removed.
-// No-op for an empty txid (a txid-less trade cannot be targeted).
-func (s *Store) RetractTrade(pair *seqobv1.AssetPair, txid string) int {
-	if pair == nil || txid == "" {
-		return 0
-	}
-	pk := pairKey(pair)
-	ts := s.now()
-	s.mu.Lock()
-	ring := s.trades[pk]
-	kept := ring[:0:0]
-	removed := 0
-	for _, tr := range ring {
-		if tr.Txid == txid {
-			removed++
-			continue
-		}
-		kept = append(kept, tr)
-	}
-	if removed > 0 {
-		s.trades[pk] = kept
-	}
-	logf := s.tradeLog
-	s.mu.Unlock()
-	if removed > 0 && logf != nil {
-		if b, err := json.Marshal(tradeRec{PK: pk, TS: ts, RetractTxid: txid}); err == nil {
-			_, _ = logf.Write(append(b, '\n'))
-		}
-	}
-	return removed
-}
-
-// EnableTradeLog makes the trade history durable: it replays an existing append-only JSONL log into
-// the in-memory rings, then keeps appending new trades to it. The book itself is ephemeral, but
-// last_price/trades/candles should survive a relay restart. Best-effort; call once at startup.
-func (s *Store) EnableTradeLog(path string) error {
-	if f, err := os.Open(path); err == nil {
-		s.mu.Lock()
-		if s.trades == nil {
-			s.trades = make(map[string][]Trade)
-		}
-		// bufio.Reader (not Scanner): a single over-long/corrupt line must not silently END the replay
-		// (Scanner returns false past its cap) — read line by line, skip a bad one, keep going (B-5).
-		rd := bufio.NewReaderSize(f, 1<<20)
-		for {
-			line, rerr := rd.ReadBytes('\n')
-			if len(line) > 0 {
-				var r tradeRec
-				if json.Unmarshal(line, &r) == nil && r.PK != "" {
-					if r.RetractTxid != "" {
-						// A reorg retraction (P3.9): drop any already-replayed trades with this
-						// txid so a reorged-away fill does not resurrect after a restart.
-						ring := s.trades[r.PK]
-						kept := ring[:0:0]
-						for _, tr := range ring {
-							if tr.Txid != r.RetractTxid {
-								kept = append(kept, tr)
-							}
-						}
-						s.trades[r.PK] = kept
-					} else if r.Price > 0 && r.Size != 0 {
-						t := append(s.trades[r.PK], Trade{TS: r.TS, Price: r.Price, Size: r.Size, Txid: r.Txid})
-						if len(t) > maxTradesPerPair {
-							t = t[len(t)-maxTradesPerPair:]
-						}
-						s.trades[r.PK] = t
-					}
-				}
-			}
-			if rerr != nil {
-				break
-			}
-		}
-		s.mu.Unlock()
-		_ = f.Close()
-		// Compact to just the retained tail (<= maxTradesPerPair per pair) so the log can't grow without
-		// bound and each restart's replay stays O(retained), not O(all history ever) (B-5).
-		s.compactTradeLog(path)
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return err
-	}
-	s.mu.Lock()
-	s.tradeLog = f
-	s.mu.Unlock()
-	return nil
-}
-
-// compactTradeLog rewrites the log to exactly the retained in-memory trades (best-effort; startup only,
-// before any concurrent RecordTrade writer is armed).
-func (s *Store) compactTradeLog(path string) {
-	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
-	if err != nil {
-		return
-	}
-	s.mu.RLock()
-	for pk, ring := range s.trades {
-		for _, tr := range ring {
-			if b, mErr := json.Marshal(tradeRec{PK: pk, TS: tr.TS, Price: tr.Price, Size: tr.Size, Txid: tr.Txid}); mErr == nil {
-				_, _ = f.Write(append(b, '\n'))
-			}
-		}
-	}
-	s.mu.RUnlock()
-	if f.Close() == nil {
-		_ = os.Rename(tmp, path)
-	} else {
-		_ = os.Remove(tmp)
-	}
-}
-
-// TradesFor returns the most recent trades for a pair (up to limit; 0 = all held), newest last.
-func (s *Store) TradesFor(pair *seqobv1.AssetPair, limit int) []Trade {
-	if pair == nil {
-		return nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	t := s.trades[pairKey(pair)]
-	if limit > 0 && len(t) > limit {
-		t = t[len(t)-limit:]
-	}
-	out := make([]Trade, len(t))
-	copy(out, t)
-	return out
+	trades         map[string][]Trade            // market key (canonical) -> recent trades ring (newest last), lazy
+	mirrors        map[string]map[string][]Trade // followed relay -> market key -> its trades (SetMirror), lazy
+	fills          map[string][]*CovenantFill    // pairKey -> recent covenant fill records (newest last), lazy
+	interactive    []*InteractiveWatch           // interactive fills the chain watcher follows to finality, oldest first, lazy
+	poolMoves      map[string]PoolMove           // pool key/txid -> the move the pool follower recorded (pool.go), lazy
+	tradeLog       *os.File                      // B1: append-only JSONL sink so trade history survives a relay restart (nil = disabled)
+	interactiveCap uint64                        // P3.10: per-maker soft cap on committed capital per offer_asset (0 = disabled). An interactive offer that pushes the maker's cumulative offer_amount in an asset past this is demoted.
 }
 
 // New returns an empty store. If now is nil, time.Now is used.
@@ -724,8 +515,8 @@ func (s *Store) MarketsFiltered(keep func(*seqobv1.Offer) bool) []*seqobv1.Marke
 			}
 		}
 		var last float64
-		if t := s.trades[pk]; len(t) > 0 {
-			last = t[len(t)-1].Price // newest recorded cross
+		if t, ok := s.lastTradeLocked(pk); ok {
+			last = t.Price // newest recorded trade of the pair, in this book's direction
 		}
 		for _, a := range books {
 			if a == nil || a.n == 0 {
@@ -858,7 +649,11 @@ func (s *Store) RecordSettledFill(k Key, fillBase uint64, settleTxid string, anc
 	}
 	// Record BEFORE ApplyPartialFill (which may remove the entry, after which the pair/price is
 	// no longer fetchable). Both re-lock internally; this mirrors wsSettleAck's ordering.
-	s.RecordTrade(restingOffer, fill)
+	rail := RailCross
+	if restingOffer.GetLightning() != nil {
+		rail = RailLightning
+	}
+	s.RecordTradeVia(restingOffer, fill, settleTxid, tradeIDOf(k, settleTxid), rail)
 	return s.ApplyPartialFill(k, fill, settleTxid, anchorConfs)
 }
 

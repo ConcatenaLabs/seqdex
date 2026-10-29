@@ -40,6 +40,13 @@ seqobd [flags]
   -trade-log         append-only JSONL trade log so last_price, trades and
                      candles survive a restart (env SEQOB_TRADE_LOG; empty =
                      in-memory only)
+  -trade-reporters   comma-separated compressed public keys (hex) of the
+                     makers whose own trade reports are recorded: in-tree
+                     swaps and BTC desk trades the relay cannot watch
+                     (env SEQOB_TRADE_REPORTERS; empty = none)
+  -trade-follow      comma-separated base URLs of other relays whose trades
+                     this relay's market view includes, so one relay serves
+                     every rail's trades (env SEQOB_TRADE_FOLLOW)
   -covenant-book     file keeping the covenant orders, both sides of each
                      maker's pool, and the orders resting in operators'
                      trees, across a restart; each is checked again (against
@@ -70,8 +77,11 @@ GET  /v1/markets                            market summaries
 GET  /v1/market/{base}/{quote}/orderbook    per-pair snapshot: the signed
                                             offers, and statuses[i], the live
                                             state of offers[i]
-GET  /v1/market/{base}/{quote}/trades       recent trades
-GET  /v1/market/{base}/{quote}/candles      OHLCV from the trades
+GET  /v1/market/{base}/{quote}/trades       recent trades, every rail's (JSON)
+GET  /v1/market/{base}/{quote}/candles      OHLCV from the trades (JSON)
+GET  /v1/market/{base}/{quote}/ticker       last price, the last 24 hours'
+                                            open/high/low/change/volume, best
+                                            bid and ask (JSON)
 GET  /v1/market/{base}/{quote}/fills        fill records of covenant and resting
                                             orders (JSON)
 GET  /v1/rounds                             clearing rounds: each round's one
@@ -79,12 +89,58 @@ GET  /v1/rounds                             clearing rounds: each round's one
                                             pools it moved, and its state (JSON)
 GET  /v1/pools/moves[?pool=KEY]             each pool's fills and withdrawal
                                             (JSON)
+GET  /v1/trades                             every market's trades this relay
+                                            recorded itself, for a relay that
+                                            follows it (JSON)
+POST /v1/trades/report                      a trusted maker's signed record of
+                                            a trade of its own (JSON)
 POST /v1/lift                               open a lift session
 GET  /v1/ws                                 WebSocket (To/From envelope): book
                                             subscriptions, offer submission,
                                             lift and match notifications,
                                             opaque SwapMsg courier
 ```
+
+### Market data
+
+A market is the unordered pair of two assets. An order selling A for B and one
+selling B for A trade in the same market, so the relay keeps one trade log per
+market, in its canonical direction (the asset whose id sorts first is the base),
+and serves `trades`, `candles` and `ticker` in whichever direction the path
+names: `/v1/market/A/B/...` and `/v1/market/B/A/...` show the same trades, one the
+inverse of the other. Each trade in `trades` carries `price` (quote atoms per base
+atom), `size` (base atoms), `quote_size` (quote atoms), `side` (`buy` when the
+taker received the base), its `rail` and an `id` unique to the fill.
+
+Every rail's fills reach that log:
+
+| rail | recorded by |
+|---|---|
+| `onchain-fill`, `covenant-round`, `clearing-round` | the chain watcher, from the filling transaction |
+| `leaf-resting` | the resting follower, from the operator's view of the order |
+| `interactive` | the lift session's settle ack, then the chain watcher |
+| `cross`, `lightning` | the maker's signed settled-trade record |
+| `leaf-maker`, `btc-gateway` | the maker itself, `POST /v1/trades/report` |
+
+A fill attested twice (by its session and by the chain watcher, or a report sent
+again) is one trade: a second record of an id the market holds is ignored. A
+reorg that undoes a fill's transaction retracts its trade.
+
+`POST /v1/trades/report` takes `{reporter, rail, id, give_asset, give,
+want_asset, want, sig}`: the maker gave `give` atoms of `give_asset` (an asset id,
+or `BTC`) for `want` atoms of `want_asset`. `sig` is a low-S DER ECDSA signature
+(base64) by `reporter`'s key over
+`sha256("seqob-trade-report-v1|reporter|rail|id|give_asset|give|want_asset|want")`.
+The relay records it only when `reporter` is listed in `-trade-reporters` and the
+rail is `leaf-maker` or `btc-gateway`; it answers `{recorded, id}`, `recorded`
+false for a fill already held. A report is the maker's word: list only makers
+whose trades the relay's operator vouches for.
+
+Where several relays each serve some rails, the one the wallets read follows the
+others with `-trade-follow`: it asks each `GET /v1/trades` every three seconds and
+shows their trades with its own, one per id; a trade a followed relay retracts is
+gone at its next answer. Follow only transparent relays: a confidential relay's
+trades stay off the public view.
 
 With `-node-rpc`, a covenant offer is admitted only when its outpoint is
 unspent, pays the program its signed terms derive, holds asset A explicitly,

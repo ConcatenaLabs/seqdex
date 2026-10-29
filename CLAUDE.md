@@ -78,6 +78,11 @@ default documents the fleet (9955 cross, 9965 pure-LN and submarine, 9966 sub-as
 sub-asset sell, plus the confidential relay on 9975). Publicly they are the `/seqob`,
 `/seqob-pln` and `/seqob-conf` mounts.
 
+Each relay keeps one trade log per market (the unordered pair, `offerstore/trades.go`), fed by
+every rail; the relay the wallets read follows the others' trades with `-trade-follow` and takes
+the leaf makers' own reports (`POST /v1/trades/report`, from keys in `-trade-reporters`), so
+candles, the ticker and recent trades are one view (`daemon/README.md`, "Market data").
+
 The relay holds its book in memory; the trade log is durable with `-trade-log`, and the covenant
 orders and the sides of makers' pools with `-covenant-book`, which lists them again at start after checking each against the
 chain. Without that flag, restarting a relay empties its book until every maker re-posts, which
