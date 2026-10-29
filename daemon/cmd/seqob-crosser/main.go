@@ -164,8 +164,8 @@ func main() {
 				continue
 			}
 
-			raw := FetchPairOffers(relays, base, quote, logf)
-			union := BuildUnion(raw, base, quote, time.Now(), *minTTL, logf)
+			raw, statuses := FetchPairOffers(relays, base, quote, logf)
+			union := ApplyStatuses(BuildUnion(raw, base, quote, time.Now(), *minTTL, logf), statuses)
 			if len(union) == 0 {
 				continue
 			}

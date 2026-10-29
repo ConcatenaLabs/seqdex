@@ -63,8 +63,8 @@ type Caps struct {
 
 // Executable implements the Executability check for the configured caps.
 func (c *Caps) Executable(n *NormOrder) (bool, string) {
-	if n.Flipped {
-		return false, "flipped-orientation execution not wired (taker CLIs size -amount in the offer's own base)"
+	if n.Flipped && n.Family != FamCovenant && n.Family != FamSameChain {
+		return false, "flipped-orientation execution not wired for this family (its taker CLI sizes -amount in the offer's own base)"
 	}
 	need := func(ok bool, what string) (bool, string) {
 		if !ok {
@@ -129,7 +129,7 @@ type Executor struct {
 
 // takeArg is the -amount value: the CLIs treat 0 as "the whole offer".
 func takeArg(n *NormOrder, take uint64) uint64 {
-	if take == n.BaseSize {
+	if n.Whole(take) {
 		return 0
 	}
 	return take
@@ -239,7 +239,9 @@ func (e *Executor) legCommand(n *NormOrder, take uint64) (args []string, stateFi
 		// takes the canonical-base amount directly; on a BID (the covenant locks
 		// our quote) the crosser receives asset A as the quote leg, so the take
 		// converts at the offer's own price, floored — exactly RevenueFor, i.e.
-		// what the plan already books as this leg's proceeds.
+		// what the plan already books as this leg's proceeds. A covenant posted on
+		// the reverse orientation (Flipped) always lands here as a BID: it sells
+		// its own base, which is our quote.
 		covAmt := takeArg(n, take)
 		if n.Side == SideBid && covAmt != 0 {
 			covAmt = floorMulDiv(take, n.QuoteNum, n.BaseDen)
@@ -263,12 +265,13 @@ func (e *Executor) legCommand(n *NormOrder, take uint64) (args []string, stateFi
 
 	case n.Family == FamSameChain:
 		// seqob-cli lift is direction-agnostic (the taker pays want_asset), so one
-		// command serves bid and ask; its base/quote are the OFFER's own pair.
+		// command serves bid and ask; its base/quote are the OFFER's own pair, and
+		// its -amount is in that pair's base (OwnAmount converts a flipped take).
 		args = []string{"lift",
 			"-relay", n.Relay,
 			"-base", n.Offer.GetPair().GetBaseAsset(), "-quote", n.Offer.GetPair().GetQuoteAsset(),
 			"-offer-id", oid, "-maker-pubkey", mk,
-			"-amount", fmt.Sprint(take), // lift has no 0=whole convention; pass the size explicitly
+			"-amount", fmt.Sprint(n.OwnAmount(take)), // lift has no 0=whole convention; pass the size explicitly
 			"-esplora", c.Esplora, "-taker-priv", c.TakerPriv, "-taker-blinding", c.TakerBlinding,
 		}
 		resume = "same-chain lift is a single co-signed tx: nothing to refund on failure"

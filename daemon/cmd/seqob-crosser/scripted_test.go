@@ -179,9 +179,16 @@ func TestCapsExecutabilityMatrix(t *testing.T) {
 	if ok, _ := (&Caps{AssetLNSocket: "a", BtcRPC: "r", BtcWallet: "w"}).Executable(mixed); ok {
 		t.Error("mixed same-chain sub-asset must not claim bitcoind suffices")
 	}
-	// Flipped offers are detected but not executable.
-	flipped := norm(mkOffer(FamSameChain, SideAsk, tQuote, tBase, 50, 100), tBase, tQuote)
-	if ok, why := full.Executable(flipped); ok || !strings.Contains(why, "flipped") {
-		t.Errorf("flipped executability: ok=%v why=%q", ok, why)
+	// Flipped offers: covenant and same-chain legs execute (their -amount is
+	// converted to the offer's own base); the other families do not.
+	for _, fam := range []Family{FamSameChain, FamCovenant} {
+		flipped := norm(mkOffer(fam, SideAsk, tQuote, tBase, 50, 100), tBase, tQuote)
+		if ok, why := full.Executable(flipped); !ok {
+			t.Errorf("flipped %v executability: ok=%v why=%q", fam, ok, why)
+		}
+	}
+	flippedLN := norm(mkOffer(FamPureLN, SideAsk, tQuote, tBase, 50, 100), tBase, tQuote)
+	if ok, why := full.Executable(flippedLN); ok || !strings.Contains(why, "flipped") {
+		t.Errorf("flipped pure-LN executability: ok=%v why=%q", ok, why)
 	}
 }

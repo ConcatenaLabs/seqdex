@@ -330,9 +330,11 @@ daemon/                The Go daemon module (fork of tdex-daemon).
                        | round | roundsign | poolfill | poolwithdraw |
                        roundrefund).
   cmd/seqob-crosser/   Crossing agent: polls every relay, builds the union
-                       book per pair, and when a resting bid crosses a resting
-                       ask it takes BOTH sides with its own inventory. One
-                       participant, not infrastructure; anyone can run one.
+                       book per pair from both orientations, and when a resting
+                       bid crosses a resting ask it takes BOTH sides with its
+                       own inventory, sized to what the relay says is left of
+                       each. One participant, not infrastructure; anyone can
+                       run one.
   cmd/seqob-relaycli/  Scripting client for the relay (post | take), used by
                        the regtest matcher proof.
   cmd/seqob-octl/      Helper for inspecting/preparing Ocean maker accounts.
