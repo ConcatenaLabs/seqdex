@@ -214,6 +214,10 @@ func (s *scannerService) requestsManager(ch chan<- Report) {
 // yet: the pass resumes there, so the block is scanned, never skipped.
 var errNotYet = errors.New("block not available yet")
 
+// filterLagBlocks is how far below the tip a block's filter may still be on its way: a block
+// deeper than that with no filter is scanned in full.
+const filterLagBlocks = 6
+
 // requestWorker scans forward from the request's start height for every block
 // holding a watched item. Each request it takes off the queue goes back on it,
 // whatever happens, at the first height it has not scanned (with the hash of
@@ -314,6 +318,11 @@ func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Repo
 
 		// check with filterDB if the block has one of the items
 		matched, err := s.blockFilterMatches(itemsBytes, blockHash)
+		if errors.Is(err, errNotYet) && nextHeight+filterLagBlocks <= chainTip.Height {
+			// No filter for a block well below the tip: the node will not index it now, so the
+			// block itself is read and matched in full rather than waited for, or skipped.
+			matched, err = true, nil
+		}
 		if err != nil {
 			return err
 		}

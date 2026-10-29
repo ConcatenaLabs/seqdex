@@ -160,14 +160,14 @@ func TestAnErrorKeepsEveryWatch(t *testing.T) {
 			t.Fatalf("a watch resumes at the block it could not read: %d", r.StartHeight)
 		}
 	}
-	// a filter the node has not indexed yet is waited for, never skipped
-	c.failAt = map[uint32]error{500: repository.ErrFilterNotFound}
+	// a filter near the tip the node has not indexed yet is waited for, never skipped
+	c.failAt = map[uint32]error{998: repository.ErrFilterNotFound}
 	if err := s.requestWorker(s.requestsQueue.peek(), make(chan Report, 1)); err != nil {
 		t.Fatalf("a missing filter is a pause, not an error: %v", err)
 	}
 	for _, r := range s.requestsQueue.requests {
-		if r.StartHeight != 500 {
-			t.Fatalf("a block whose filter is missing is not skipped: %d", r.StartHeight)
+		if r.StartHeight != 998 {
+			t.Fatalf("a block near the tip whose filter is missing is not skipped: %d", r.StartHeight)
 		}
 	}
 }
@@ -200,5 +200,25 @@ func TestAMatchIsWatchedAgainOnce(t *testing.T) {
 	}
 	if q := s.requestsQueue.len(); q != 5 {
 		t.Fatalf("five watches, five requests: %d", q)
+	}
+}
+
+// A block with no filter well below the tip is read in full: its match is found, and the scan
+// goes on past it. Only a block near the tip waits for its filter.
+func TestAMissingFilterDeepIsScannedInFull(t *testing.T) {
+	pay := transaction.NewTx(2)
+	pay.AddOutput(transaction.NewTxOutput(make([]byte, 33), []byte{1, 0, 0, 0, 0, 0, 0, 0, 1}, script(2)))
+	c := &fakeChain{tip: 1000, txs: map[uint32][]*transaction.Transaction{500: {pay}},
+		failAt: map[uint32]error{500: repository.ErrFilterNotFound, 998: repository.ErrFilterNotFound}}
+	s := newTestScanner(c)
+	watchAll(s, 5)
+	reports := pass(t, s)
+	if len(reports) != 1 || reports[0].BlockHeight != 500 {
+		t.Fatalf("the match in the block with no filter is found: %d reports", len(reports))
+	}
+	for _, r := range s.requestsQueue.requests {
+		if r.StartHeight != 998 {
+			t.Fatalf("the scan goes past the deep gap and waits at the missing filter near the tip (998): %d", r.StartHeight)
+		}
 	}
 }
