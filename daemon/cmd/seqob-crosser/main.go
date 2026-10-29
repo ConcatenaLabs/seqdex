@@ -71,6 +71,11 @@ func main() {
 	maxBackoff := flag.Duration("max-backoff", 30*time.Minute, "cap on the per-pair failure backoff")
 	clearStranded := flag.Bool("clear-stranded", false, "drop the journal's stranded records (AFTER resuming/refunding their driver state files) and exit")
 	logToStderr := flag.Bool("logtostderr", true, "log to stderr (the fleet idiom); false = stdout")
+	takeFlag := flag.String("take", "", `one trade and exit: "BASEHEX/QUOTEHEX" (quote may be "BTC"); prints one JSON line (take.go)`)
+	takeSide := flag.String("take-side", "buy", "with -take: buy (take the best ask) or sell (take the best bid)")
+	takeAmount := flag.Uint64("take-amount", 0, "with -take: about this many base atoms (the one offer taken may make it up to twice that, or less)")
+	takeFamilies := flag.String("take-families", "", "with -take: the rails it may use, e.g. pureln,covenant,samechain (empty: any it can execute)")
+	takeAvoid := flag.String("take-avoid", "", "with -take: maker pubkeys never taken from, comma-separated")
 	flag.Parse()
 
 	out := os.Stderr
@@ -109,6 +114,25 @@ func main() {
 		LegTimeout: *legTimeout,
 	}
 	exec := &Executor{Caps: caps, Logf: logf}
+	if *takeFlag != "" {
+		bq := strings.SplitN(*takeFlag, "/", 2)
+		if len(bq) != 2 || bq[0] == "" || bq[1] == "" {
+			lg.Fatalf(`bad -take %q (want BASEHEX/QUOTEHEX)`, *takeFlag)
+		}
+		fams, avoid := map[string]bool{}, map[string]bool{}
+		for _, f := range splitNonEmpty(*takeFamilies) {
+			fams[f] = true
+		}
+		for _, k := range splitNonEmpty(*takeAvoid) {
+			avoid[k] = true
+		}
+		r := RunTake(exec, splitNonEmpty(*relaysFlag), bq[0], bq[1], *takeSide, *takeAmount, fams, avoid, *minTTL, logf)
+		fmt.Println(printTake(r))
+		if !r.Settled {
+			os.Exit(1)
+		}
+		return
+	}
 	ledger := NewLedger(*maxExposure, journal.SeedDrift())
 	gate := GateConfig{MinProfitBps: *minProfitBps, SpendFeeAtoms: *spendFeeAtoms}
 	relays := splitNonEmpty(*relaysFlag)
