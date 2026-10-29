@@ -47,7 +47,6 @@ type scannerService struct {
 	accountName         string
 	svc                 scanner.Service
 	blindingKeys        map[string][]byte
-	watchedScripts      map[string][]byte // script hex -> decoded output script
 	startingBlockHeight uint32
 	chTxs               chan *domain.Transaction
 	chUtxos             chan []*domain.Utxo
@@ -80,7 +79,6 @@ func newScannerSvc(
 		accountName:         accountName,
 		svc:                 scanner.New(filtersDb, headersDb, blockSvc, genesisHash),
 		blindingKeys:        make(map[string][]byte),
-		watchedScripts:      make(map[string][]byte),
 		startingBlockHeight: startingBlockHeight,
 		chTxs:               make(chan *domain.Transaction, 10),
 		chUtxos:             make(chan []*domain.Utxo, 10),
@@ -145,7 +143,6 @@ func (s *scannerService) watchAddresses(addressesInfo []domain.AddressInfo) {
 			s.warn(err, "skip watching address with invalid script %q", info.Script)
 			continue
 		}
-		s.watchedScripts[info.Script] = script
 		s.svc.Watch(
 			scanner.WithWatchItem(&unspentWatchItem{outputScript: script}),
 			scanner.WithStartBlock(s.startingBlockHeight),
@@ -154,28 +151,6 @@ func (s *scannerService) watchAddresses(addressesInfo []domain.AddressInfo) {
 		s.log(
 			"start watching address %s for account %s",
 			info.DerivationPath, s.accountName,
-		)
-	}
-}
-
-// rescanFrom re-arms all watched addresses starting at the given block height,
-// waking the scanner queue so that blocks appended after the initial watch are
-// scanned. Overlapping rescans are harmless: UTXO storage is keyed by txid:vout.
-func (s *scannerService) rescanFrom(fromHeight uint32) {
-	s.lock.RLock()
-	defer s.lock.RUnlock()
-
-	for _, script := range s.watchedScripts {
-		s.svc.Watch(
-			scanner.WithWatchItem(&unspentWatchItem{outputScript: script}),
-			scanner.WithStartBlock(fromHeight),
-			scanner.WithPersistentWatch(),
-		)
-	}
-	if len(s.watchedScripts) > 0 {
-		s.log(
-			"rescan %d address(es) from block %d for account %s",
-			len(s.watchedScripts), fromHeight, s.accountName,
 		)
 	}
 }

@@ -194,6 +194,9 @@ func (s *scannerService) requestsManager(ch chan<- Report) {
 		err := s.requestWorker(nextRequest, ch)
 		if err != nil {
 			logrus.Errorf("error while scanning: %v", err)
+			// the requests are back in the queue where they stopped: try again
+			// after a pause rather than hammer a node that is failing
+			time.Sleep(2 * time.Second)
 		}
 
 		// check if we should quit the routine
@@ -207,12 +210,34 @@ func (s *scannerService) requestsManager(ch chan<- Report) {
 	}
 }
 
-// will check if any blocks has the requested item
-// if yes, will extract the transaction that match the item
-// TODO handle properly errors (enqueue the unresolved requests ??)
-func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Report) error {
+// errNotYet stops a pass at a block whose filter or body the node cannot give
+// yet: the pass resumes there, so the block is scanned, never skipped.
+var errNotYet = errors.New("block not available yet")
+
+// requestWorker scans forward from the request's start height for every block
+// holding a watched item. Each request it takes off the queue goes back on it,
+// whatever happens, at the first height it has not scanned (with the hash of
+// the last block it did scan, for the reorg check), so a pass never scans a
+// block twice for the same request and an error never drops one.
+func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Report) (err error) {
 	nextBatch := make([]*ScanRequest, 0)
 	nextHeight := req.StartHeight
+	var lastHash *chainhash.Hash
+	defer func() {
+		for _, r := range nextBatch {
+			if r.StartHeight < nextHeight {
+				r.StartHeight = nextHeight
+				if lastHash != nil {
+					r.LastBlockHash = lastHash
+				}
+			}
+			s.requestsQueue.enqueue(r)
+		}
+		if errors.Is(err, errNotYet) {
+			time.Sleep(2 * time.Second)
+			err = nil
+		}
+	}()
 
 	chainTip, err := s.headerDB.ChainTip(context.Background())
 	if err != nil {
@@ -298,13 +323,19 @@ func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Repo
 			if err != nil {
 				return err
 			}
+			// the matched requests leave the batch here: each persistent one is
+			// watched again below from the block after its match
+			nextBatch = remainReqs
 
+			rewatched := make(map[*ScanRequest]bool)
 			for _, report := range reports {
 				// send the report to the output channel
 				reportsChan <- report
 
-				// if the request is persistent, the scanner will keep watching the item at the next block height
-				if report.Request.IsPersistent {
+				// if the request is persistent, the scanner keeps watching the item from the
+				// next block: once, however many of the block's transactions it matched
+				if report.Request.IsPersistent && !rewatched[report.Request] {
+					rewatched[report.Request] = true
 					s.Watch(
 						WithRequestID(report.Request.ClientID),
 						WithStartBlock(report.BlockHeight+1),
@@ -315,24 +346,16 @@ func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Repo
 				}
 			}
 
-			// if some requests remain, put them back in the next batch
-			// this will remove the resolved requests from the batch
-			nextBatch = remainReqs
 		}
 
-		// increment the height to scan
-		// if nothing was found, we can just continue with same batch and next height
+		// the block is scanned for every request in the batch
+		lastHash = blockHash
 		nextHeight++
 
 		chainTip, err = s.headerDB.ChainTip(context.Background())
 		if err != nil {
 			return err
 		}
-	}
-
-	// enqueue the remaining requests
-	for _, req := range nextBatch {
-		s.requestsQueue.enqueue(req)
 	}
 
 	return nil
@@ -347,7 +370,7 @@ func (s *scannerService) blockFilterMatches(items [][]byte, blockHash *chainhash
 	filter, err := s.filterDB.GetFilter(context.Background(), filterToFetchKey)
 	if err != nil {
 		if err == repository.ErrFilterNotFound {
-			return false, nil
+			return false, errNotYet
 		}
 		return false, err
 	}
@@ -370,7 +393,7 @@ func (s *scannerService) extractBlockMatches(blockHash *chainhash.Hash, requests
 	block, err := s.blockService.GetBlock(blockHash)
 	if err != nil {
 		if err == blockservice.ErrorBlockNotFound {
-			return nil, requests, nil // skip requests if block svc is not able to find the block
+			return nil, nil, errNotYet // the block matched a filter: never skip it
 		}
 
 		return nil, nil, err
