@@ -49,11 +49,21 @@ func (queue *scanRequestQueue) peek() *ScanRequest {
 	queue.locker.Lock()
 	defer queue.locker.Unlock()
 
-	if len(queue.requests) == 0 {
-		return nil
+	// the request with the lowest start height, so a pass takes every request
+	// at or above it as it reaches their heights
+	var lowest *ScanRequest
+	for _, r := range queue.requests {
+		if lowest == nil || r.StartHeight < lowest.StartHeight {
+			lowest = r
+		}
 	}
+	return lowest
+}
 
-	return queue.requests[0]
+func (queue *scanRequestQueue) len() int {
+	queue.locker.Lock()
+	defer queue.locker.Unlock()
+	return len(queue.requests)
 }
 
 func (queue *scanRequestQueue) isEmpty() bool {

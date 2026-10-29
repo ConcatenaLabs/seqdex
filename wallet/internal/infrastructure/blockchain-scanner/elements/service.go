@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
 	"github.com/aejkcs50/seqdex/wallet/internal/core/ports"
@@ -31,8 +30,6 @@ type service struct {
 	lock        *sync.RWMutex
 
 	quit      chan struct{}
-	lastTip   uint32
-	tipTicker *time.Ticker
 }
 
 type ServiceArgs struct {
@@ -112,52 +109,13 @@ func NewElementsScanner(args ServiceArgs) (ports.BlockchainScanner, error) {
 	}, nil
 }
 
-func (s *service) Start() {
-	// Poll the node for new blocks and re-arm the watches when the chain tip
-	// advances. The vendored neutrino-elements scanner is otherwise driven by a
-	// P2P node pushing new blocks; in node-RPC-only mode nothing pushes blocks,
-	// so without this poll a watch registered before funds arrive would never
-	// rescan the blocks that contain them.
-	s.tipTicker = time.NewTicker(2 * time.Second)
-	go func() {
-		for {
-			select {
-			case <-s.quit:
-				return
-			case <-s.tipTicker.C:
-				s.maybeRescanOnNewTip()
-			}
-		}
-	}()
-}
+// Start starts nothing of its own: each account's scanner follows the node's
+// tip by itself, its watches waiting at the first block not yet scanned and
+// scanned as soon as the node has it.
+func (s *service) Start() {}
 
 func (s *service) Stop() {
-	if s.tipTicker != nil {
-		s.tipTicker.Stop()
-	}
 	close(s.quit)
-}
-
-// maybeRescanOnNewTip re-arms every active scanner from the previously-seen tip
-// when the chain has grown. Re-watching overlapping ranges is safe: downstream
-// UTXO storage is keyed by txid:vout and ignores duplicates.
-func (s *service) maybeRescanOnNewTip() {
-	tip, err := s.headersRepo.ChainTip(context.Background())
-	if err != nil {
-		return
-	}
-
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	if tip.Height <= s.lastTip {
-		return
-	}
-	from := s.lastTip
-	s.lastTip = tip.Height
-	for _, scannerSvc := range s.scanners {
-		scannerSvc.rescanFrom(from)
-	}
 }
 
 func (s *service) GetUtxoChannel(accountName string) chan []*domain.Utxo {
