@@ -77,7 +77,11 @@ func main() {
 	takeFamilies := flag.String("take-families", "", "with -take: the rails it may use, e.g. pureln,covenant,samechain (empty: any it can execute)")
 	takeAvoid := flag.String("take-avoid", "", "with -take: maker pubkeys never taken from, comma-separated")
 	hedgeMaxBps := flag.Uint64("hedge-max-bps", 300, "when leg 2 fails after leg 1 settled, complete it with other offers priced at most this far (bps) from it (hedge.go); 0: never")
-	lnCli := flag.String("lightning-cli", "lightning-cli", "lightning-cli, for the pure-Lightning preflight of a second leg")
+	lnCliDefault := os.Getenv("SEQOB_LIGHTNING_CLI")
+	if lnCliDefault == "" {
+		lnCliDefault = "lightning-cli"
+	}
+	lnCli := flag.String("lightning-cli", lnCliDefault, "lightning-cli, for the pure-Lightning preflight of a second leg (env SEQOB_LIGHTNING_CLI); a preflight that cannot run it lets the leg run")
 	flag.Parse()
 
 	out := os.Stderr
