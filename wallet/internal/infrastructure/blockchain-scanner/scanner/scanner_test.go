@@ -26,6 +26,7 @@ type fakeChain struct {
 	txs       map[uint32][]*transaction.Transaction
 	filterGet int
 	failAt    map[uint32]error
+	onFilter  func(h uint32) // called, unlocked, as each block's filter is read
 }
 
 func hashAt(h uint32) *chainhash.Hash {
@@ -65,6 +66,11 @@ func (c *fakeChain) GetFilter(_ context.Context, key repository.FilterKey) (*rep
 	h := heightOf(c, hash)
 	if err := c.failAt[h]; err != nil {
 		return nil, err
+	}
+	if c.onFilter != nil {
+		c.mu.Unlock()
+		c.onFilter(h)
+		c.mu.Lock()
 	}
 	items := [][]byte{[]byte("nothing watched pays here")}
 	for _, tx := range c.txs[h] {
@@ -242,5 +248,27 @@ func TestLowestUnscanned(t *testing.T) {
 	s.inFlight.Store(301) // a pass from 300 running
 	if h, _ := s.LowestUnscanned(); h != 300 {
 		t.Fatalf("a pass in flight from 300 bounds it: %d", h)
+	}
+}
+
+// A long pass (a first scan from an account's birth) moves the checkpoint with
+// it: taken at block 600 of a pass from 0, it says 600, so a restart there
+// resumes at 600 instead of starting the pass again from 0.
+func TestTheCheckpointMovesDuringAPass(t *testing.T) {
+	c := &fakeChain{tip: 1000, txs: map[uint32][]*transaction.Transaction{}}
+	s := newTestScanner(c)
+	watchAll(s, 3)
+	var at600 uint32
+	c.onFilter = func(h uint32) {
+		if h == 600 {
+			at600, _ = s.LowestUnscanned()
+		}
+	}
+	pass(t, s)
+	if at600 != 600 {
+		t.Fatalf("the checkpoint at block 600 of a pass from 0 says %d, not 600", at600)
+	}
+	if h, _ := s.LowestUnscanned(); h != 1001 {
+		t.Fatalf("after the pass: %d", h)
 	}
 }

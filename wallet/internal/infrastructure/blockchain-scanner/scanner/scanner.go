@@ -60,9 +60,16 @@ type Service interface {
 }
 
 type scannerService struct {
-	// inFlight is the start height of the pass running now, +1 (0: none): with the queue's
-	// lowest start it bounds what every request has scanned (LowestUnscanned)
+	// inFlight is the first height the pass running now has not scanned yet, +1 (0: none): with
+	// the queue's lowest start it bounds what every request has scanned (LowestUnscanned). It
+	// moves with the pass, block by block, so a checkpoint taken during a long pass (a first
+	// scan from an account's birth) keeps what the pass has done, and a restart resumes there
+	// rather than at the pass's start.
 	inFlight      atomic.Uint32
+	// name says whose scanner this is in its log lines (SetName); progressAt is when it last
+	// said how far a pass had got
+	name          string
+	progressAt    time.Time
 	started       bool
 	requestsQueue *scanRequestQueue
 	filterDB      repository.FilterRepository
@@ -73,6 +80,12 @@ type scannerService struct {
 }
 
 var _ Service = (*scannerService)(nil)
+
+// SetName names the scanner in its log lines (the account it scans for).
+func (s *scannerService) SetName(name string) { s.name = name }
+
+// progressEvery is how often a pass says how far it has got.
+const progressEvery = time.Minute
 
 func New(
 	filterDB repository.FilterRepository,
@@ -289,10 +302,12 @@ func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Repo
 			// keyed by outpoint). A reorg deeper than the horizon is not expected on a
 			// Bitcoin-anchored chain (it would require an implausibly deep parent reorg).
 			const reorgRollbackHorizon = 1000
-			rollback := nextHeight - reorgRollbackHorizon
-			if rollback < 0 {
-				rollback = 0
+			rollback := uint32(0) // unsigned: a chain shorter than the horizon rolls back to genesis
+			if nextHeight > reorgRollbackHorizon {
+				rollback = nextHeight - reorgRollbackHorizon
 			}
+			log.Warnf("scanner %s: block %d it last scanned is no longer on the chain (a reorg): scanning again from %d",
+				s.name, nextHeight-1, rollback)
 			req.StartHeight = rollback
 			req.LastBlockHash = nil
 			nextHeight = rollback
@@ -379,6 +394,11 @@ func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Repo
 		// the block is scanned for every request in the batch
 		lastHash = blockHash
 		nextHeight++
+		s.inFlight.Store(nextHeight + 1)
+		if time.Since(s.progressAt) >= progressEvery {
+			s.progressAt = time.Now()
+			log.Infof("scanner %s: scanned to block %d of %d, %d to go", s.name, nextHeight-1, chainTip.Height, chainTip.Height-(nextHeight-1))
+		}
 
 		chainTip, err = s.headerDB.ChainTip(context.Background())
 		if err != nil {
