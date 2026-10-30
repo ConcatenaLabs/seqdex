@@ -55,6 +55,7 @@ func main() {
 	esplora := flag.String("esplora", "", "esplora API URL (enables same-chain lift legs)")
 	takerPriv := flag.String("taker-priv", "", "same-chain lift on-chain signing key (32-byte hex)")
 	takerBlinding := flag.String("taker-blinding", "", "same-chain lift blinding key (32-byte hex)")
+	takerKeyFile := flag.String("taker-key-file", "", "same-chain lift: a file holding the taker's two keys (seqob-cli taker-key makes one), passed on to seqob-cli by its path so no key is on a command line")
 
 	// Economics.
 	minProfitBps := flag.Uint64("min-profit-bps", 10, "minimum net profit on deployed quote, basis points; never execute at a loss regardless")
@@ -114,7 +115,7 @@ func main() {
 		SeqRPC: *seqRPC, SeqWallet: *seqWallet,
 		BtcRPC: *btcRPC, BtcWallet: *btcWallet, BtcChain: *btcChain,
 		AssetLNSocket: *assetLN, BtcLNSocket: *btcLN,
-		Esplora: *esplora, TakerPriv: *takerPriv, TakerBlinding: *takerBlinding,
+		Esplora: *esplora, TakerPriv: *takerPriv, TakerBlinding: *takerBlinding, TakerKeyFile: *takerKeyFile,
 		SeqobCli: *seqobCli, StateDir: *stateDir, LNCli: *lnCli,
 		SpendFee: *spendFee, BtcFeeRate: *btcFeeRate, MinBTCConf: *minBTCConf,
 		LegTimeout: *legTimeout,

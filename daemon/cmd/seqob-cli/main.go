@@ -87,6 +87,8 @@ func main() {
 		cmdXSeqRefund(os.Args[2:])
 	case "keygen":
 		cmdKeygen(os.Args[2:])
+	case "taker-key":
+		cmdTakerKey(os.Args[2:])
 	default:
 		usage()
 	}
@@ -297,6 +299,7 @@ func cmdLift(args []string) {
 	netName := fs.String("net", "testnet", "network: testnet|mainnet")
 	takerPriv := fs.String("taker-priv", "", "taker on-chain signing key (32-byte hex)")
 	takerBlinding := fs.String("taker-blinding", "", "taker on-chain blinding key (32-byte hex)")
+	takerKeyFile := fs.String("taker-key-file", "", "a file holding the taker's two keys (taker-key makes one): kept off the command line")
 	confidential := fs.Bool("confidential", false, "build a confidential (blinded) taker half; default explicit")
 	timeout := fs.Duration("timeout", 90*time.Second, "how long to await the maker co-sign")
 	_ = fs.Parse(args)
@@ -333,6 +336,16 @@ func cmdLift(args []string) {
 
 	// Select the taker wallet: real (LiveWallet + RealBackend over esplora) or the
 	// in-memory StubWallet demo.
+	if *takerKeyFile != "" {
+		if *takerPriv != "" || *takerBlinding != "" {
+			fatal("-taker-key-file and -taker-priv/-taker-blinding are one or the other")
+		}
+		p, b, err := readTakerKeyFile(*takerKeyFile)
+		if err != nil {
+			fatal("-taker-key-file: %v", err)
+		}
+		*takerPriv, *takerBlinding = p, b
+	}
 	liftWallet := buildTakerWallet(*esploraURL, *netName, *takerPriv, *takerBlinding, *confidential)
 
 	takerKey := loadOrGenKey(*priv) // ephemeral E2E session key (distinct from the on-chain key)

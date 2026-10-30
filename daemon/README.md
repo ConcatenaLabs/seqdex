@@ -355,8 +355,10 @@ default 0 = 0-conf tolerant), `-expiry`, `-offer-id`, `-msats-per-byte`.
 seqob-cli post         post a signed offer (no maker process; lifts need one)
 seqob-cli book         print a market's order book
 seqob-cli lift         lift a same-chain offer (real settlement with
-                       -esplora -taker-priv -taker-blinding; stub-wallet
-                       demo mode without them)
+                       -esplora and -taker-key-file, or -taker-priv
+                       -taker-blinding; stub-wallet demo mode without them)
+seqob-cli taker-key    make a taker key file (mode 600) and print the
+                       address to fund; the keys stay in the file
 seqob-cli xlift        buy an asset with on-chain BTC (forward cross-chain)
 seqob-cli xsell        sell an asset for on-chain BTC (reverse cross-chain)
 seqob-cli xrefund      recover the BTC leg of an aborted xlift after T_btc
