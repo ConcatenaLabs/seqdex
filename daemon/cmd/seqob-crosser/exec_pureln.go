@@ -55,7 +55,7 @@ func (e *Executor) runPureLN(n *NormOrder, take uint64) LegResult {
 		effBtcAsset = n.Quote
 	}
 
-	assetAtoms, btcSats := n.BaseSize, n.QuoteNum
+	assetAtoms, btcSats := plnWhole(n)
 	seqMsat, btcMsat := assetAtoms*1000, btcSats*1000
 	takeMsat := uint64(0)
 	if take < assetAtoms {
@@ -124,7 +124,7 @@ func (e *Executor) runPureLN(n *NormOrder, take uint64) LegResult {
 
 	var btcLeg xchain.LNLeg = xchain.NewCLNLNLeg(c.BtcLNSocket)
 	if effBtcAsset != "" {
-		btcLeg = xchain.NewCLNAssetLNLeg(c.BtcLNSocket, effBtcAsset)
+		btcLeg = xchain.NewCLNAssetLNLeg(counterLegSocket(c, effBtcAsset), effBtcAsset)
 	}
 	swap := xchain.NewPureLNSwap(xchain.NewCLNAssetLNLeg(c.AssetLNSocket, n.Base), btcLeg)
 	var ops client.PlnTakerOps
@@ -224,4 +224,25 @@ func startCourierReader(c *websocket.Conn) client.XcRecv {
 			}
 		}
 	}
+}
+
+// counterLegSocket is the node the counter leg of a pure-LN take settles on: real BTC on the
+// bitcoin node, an asset quote (an asset<->asset market) on the asset node, where every asset's
+// channels are. The bitcoin node knows no asset: an asset invoice asked of it is refused ("assets
+// are only supported" on Elements chains) and the maker's asset node is not in its graph, so every
+// asset<->asset take failed there.
+func counterLegSocket(c *Caps, quoteAsset string) string {
+	if quoteAsset == "" || offer.IsBTCSentinel(quoteAsset) {
+		return c.BtcLNSocket
+	}
+	return c.AssetLNSocket
+}
+
+// plnWhole is the offer's signed whole, asset atoms and sats, that both sides of a pure-LN take
+// price a slice from. BaseSize is capped to what the relay says is left of a partly filled offer
+// while QuoteNum stays the signed whole, so a ratio of the two priced a slice of a partly filled
+// offer off a whole the maker never signed, and the maker's terms were rejected ("maker BTC
+// amount N != the N the offer's ratio gives").
+func plnWhole(n *NormOrder) (assetAtoms, btcSats uint64) {
+	return n.BaseDen, n.QuoteNum
 }
