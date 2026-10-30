@@ -1342,6 +1342,26 @@ func runCrossMaker(cfg crossMakerConfig) {
 	if _, err := seqChain.BlockCount(); err != nil {
 		fatal("sequentia node unreachable: %v", err)
 	}
+	// An offer is posted only when it can be filled: the bitcoin wallet loaded (it claims the BTC
+	// a buyer locks, and pays the BTC a seller is owed), and, when this maker gives BTC, holding
+	// what the offer gives. A refusal waits a minute before it exits, so a supervisor's retry
+	// loop does not spin on it.
+	if err := btcChain.EnsureWalletLoaded(); err != nil {
+		time.Sleep(time.Minute)
+		fatal("not posted: %v", err)
+	}
+	if sideL == "buy" {
+		const feeMargin = 20000 // sats: the lock's fee at testnet4's going rate, with room
+		have, err := btcChain.SpendableSats()
+		if err != nil {
+			time.Sleep(time.Minute)
+			fatal("not posted: the bitcoin wallet's balance does not read: %v", err)
+		}
+		if have < cfg.btcAmt+feeMargin {
+			time.Sleep(time.Minute)
+			fatal("not posted: the bitcoin wallet %s can spend %d sats, and this offer gives %d (and its lock's fee)", cfg.btcWallet, have, cfg.btcAmt)
+		}
+	}
 
 	// Advisory receive address for the resting offer, from the node wallet.
 	var recvAddr string

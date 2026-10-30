@@ -866,3 +866,41 @@ func (c *BitcoinChain) rawTxWalletAware(txid string) (string, error) {
 	}
 	return gt.Hex, nil
 }
+
+// EnsureWalletLoaded makes sure the node has this chain's wallet loaded, loading it from the
+// node's disk when it is not (a node restarted without it in its startup list drops it). A cross
+// maker that posted with its wallet unloaded made offers it could never fill: every BTC lock
+// failed with "Requested wallet does not exist or is not loaded". It returns an error when the
+// wallet cannot be loaded.
+func (c *BitcoinChain) EnsureWalletLoaded() error {
+	var info struct {
+		WalletName string `json:"walletname"`
+	}
+	err := c.rpc.Call(&info, "getwalletinfo")
+	if err == nil {
+		return nil
+	}
+	if !strings.Contains(err.Error(), "-18") && !strings.Contains(err.Error(), "not loaded") {
+		return fmt.Errorf("getwalletinfo: %w", err)
+	}
+	var res struct {
+		Name string `json:"name"`
+	}
+	if lerr := c.rpc.Call(&res, "loadwallet", c.rpc.wallet); lerr != nil && !strings.Contains(lerr.Error(), "already loaded") {
+		return fmt.Errorf("the node's wallet %q is not loaded and does not load: %w", c.rpc.wallet, lerr)
+	}
+	return nil
+}
+
+// SpendableSats is what the wallet can spend now (its trusted balance), in satoshis.
+func (c *BitcoinChain) SpendableSats() (uint64, error) {
+	var b struct {
+		Mine struct {
+			Trusted float64 `json:"trusted"`
+		} `json:"mine"`
+	}
+	if err := c.rpc.Call(&b, "getbalances"); err != nil {
+		return 0, err
+	}
+	return uint64(b.Mine.Trusted*1e8 + 0.5), nil
+}
