@@ -2,14 +2,44 @@ package elements_scanner
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 )
+
+// rpcMaxConns bounds the connections the client holds to the node, in use and
+// idle together. Every account's scanner shares one client: unbounded, a busy
+// node (its work queue full, its answers slow) had the client open a connection
+// per waiting call, thousands at once, until the process ran out of file
+// descriptors ("socket: too many open files"). A call beyond the bound waits for
+// a free connection, within its timeout. The node serves a few calls at a time
+// anyway (-rpcthreads).
+const rpcMaxConns = 16
+
+// newHTTPClient is the node client's HTTP client: its timeout covers a whole
+// call (the wait for a connection, the request and the body read), so a call
+// that times out is cancelled and its connection closed or given back, never
+// left with a response nobody reads.
+func newHTTPClient(useSSL bool, timeout int) *http.Client {
+	t := &http.Transport{
+		DialContext:         (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		MaxIdleConns:        rpcMaxConns,
+		MaxIdleConnsPerHost: rpcMaxConns,
+		MaxConnsPerHost:     rpcMaxConns,
+		IdleConnTimeout:     60 * time.Second,
+	}
+	if useSSL {
+		// #nosec G402
+		t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+	return &http.Client{Transport: t, Timeout: time.Duration(timeout) * time.Second}
+}
 
 // rpcTimeoutSeconds is the default per-request HTTP timeout for the node JSON-RPC
 // client. It must be generous enough for large `getblock`/`getblockfilter`
@@ -42,22 +72,9 @@ type rpcResponse struct {
 func newRpcClient(
 	addr string, timeout int,
 ) (c *rpcClient, err error) {
-	var httpClient *http.Client
-
-	useSSL := strings.HasPrefix(addr, "https")
-	if useSSL {
-		t := &http.Transport{
-			// #nosec G402
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
-		httpClient = &http.Client{Transport: t}
-	} else {
-		httpClient = &http.Client{}
-	}
-
 	c = &rpcClient{
 		serverAddr: addr,
-		httpClient: httpClient,
+		httpClient: newHTTPClient(strings.HasPrefix(addr, "https"), timeout),
 		timeout:    timeout,
 	}
 
@@ -94,22 +111,26 @@ func (c *rpcClient) handleRPCRequest(
 	method string, params interface{},
 ) (status int, rr rpcResponse, err error) {
 	status = http.StatusInternalServerError
-	connectTimer := time.NewTimer(time.Duration(c.timeout) * time.Second)
 	rpcR := rpcRequest{method, params, time.Now().UnixNano(), "1.0"}
 	payloadBuffer := &bytes.Buffer{}
 	if err = json.NewEncoder(payloadBuffer).Encode(rpcR); err != nil {
 		return
 	}
 
-	req, err := http.NewRequest("POST", c.serverAddr, payloadBuffer)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.timeout)*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", c.serverAddr, payloadBuffer)
 	if err != nil {
 		return
 	}
 	req.Header.Add("Content-Type", "application/json;charset=utf-8")
 	req.Header.Add("Accept", "application/json")
 
-	resp, err := c.doTimeoutRequest(connectTimer, req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			err = fmt.Errorf("method %s: request timed out after %ds", method, c.timeout)
+		}
 		return
 	}
 	defer resp.Body.Close()
@@ -152,26 +173,4 @@ func (c *rpcClient) handleRPCRequest(
 
 	status = resp.StatusCode
 	return
-}
-
-// doTimeoutRequest process a HTTP request with timeout
-func (c *rpcClient) doTimeoutRequest(
-	timer *time.Timer, req *http.Request,
-) (*http.Response, error) {
-	type result struct {
-		resp *http.Response
-		err  error
-	}
-	done := make(chan result, 1)
-	go func() {
-		resp, err := c.httpClient.Do(req)
-		done <- result{resp, err}
-	}()
-	// Wait for the read or the timeout
-	select {
-	case r := <-done:
-		return r.resp, r.err
-	case <-timer.C:
-		return nil, fmt.Errorf("request timed out")
-	}
 }

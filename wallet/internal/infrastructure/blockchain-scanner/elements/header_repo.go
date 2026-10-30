@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -29,6 +30,17 @@ import (
 
 type headersRepo struct {
 	rpcClient *rpcClient
+	// shared by every account's scanner (see boundedCache): the tip for a second,
+	// a header by its hash for good, a height's hash for a few seconds (a reorg
+	// changes it)
+	tip      *boundedCache[string, tipEntry]
+	headers  *boundedCache[string, *block.Header]
+	byHeight *boundedCache[uint32, *chainhash.Hash]
+}
+
+type tipEntry struct {
+	hash   string
+	header *block.Header
 }
 
 func NewHeadersRepo(
@@ -40,26 +52,45 @@ func NewHeadersRepo(
 func newHeadersRepo(
 	rpcClient *rpcClient,
 ) *headersRepo {
-	return &headersRepo{rpcClient}
+	return &headersRepo{
+		rpcClient: rpcClient,
+		tip:       newBoundedCache[string, tipEntry](1, time.Second),
+		headers:   newBoundedCache[string, *block.Header](8192, 0),
+		byHeight:  newBoundedCache[uint32, *chainhash.Hash](4096, 5*time.Second),
+	}
 }
 
 func (r *headersRepo) ChainTip(
 	_ context.Context,
 ) (*block.Header, error) {
-	resp, err := r.rpcClient.call("getbestblockhash", nil)
+	t, err := r.bestTip()
 	if err != nil {
 		return nil, err
 	}
-	hash := resp.(string)
+	return t.header, nil
+}
 
-	header, err := r.getHeader(hash)
-	if err != nil {
-		return nil, err
-	}
-	if header == nil {
-		return nil, repository.ErrNoBlocksHeaders
-	}
-	return header, nil
+// bestTip is the node's best block, read at most once a second for every
+// scanner together.
+func (r *headersRepo) bestTip() (tipEntry, error) {
+	return r.tip.getOrLoad("", func() (tipEntry, error) {
+		resp, err := r.rpcClient.call("getbestblockhash", nil)
+		if err != nil {
+			return tipEntry{}, err
+		}
+		hash, ok := resp.(string)
+		if !ok {
+			return tipEntry{}, fmt.Errorf("getbestblockhash gave %v", resp)
+		}
+		header, err := r.getHeader(hash)
+		if err != nil {
+			return tipEntry{}, err
+		}
+		if header == nil {
+			return tipEntry{}, repository.ErrNoBlocksHeaders
+		}
+		return tipEntry{hash: hash, header: header}, nil
+	}, nil)
 }
 
 func (r *headersRepo) GetBlockHeader(
@@ -154,6 +185,12 @@ type jsonHeader struct {
 // re-hashes these headers (block hashes everywhere come straight from the node
 // via getblockhash/getbestblockhash), so the omitted fields are unused.
 func (r *headersRepo) getHeader(hash string) (*block.Header, error) {
+	// a header never changes for its hash; one not found yet is asked again
+	return r.headers.getOrLoad(hash, func() (*block.Header, error) { return r.loadHeader(hash) },
+		func(h *block.Header) bool { return h != nil })
+}
+
+func (r *headersRepo) loadHeader(hash string) (*block.Header, error) {
 	resp, err := r.rpcClient.call("getblockheader", []interface{}{hash, true})
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "not found") {
@@ -186,6 +223,12 @@ func (r *headersRepo) getHeader(hash string) (*block.Header, error) {
 }
 
 func (r *headersRepo) getHeaderByHeight(
+	height uint32,
+) (*chainhash.Hash, error) {
+	return r.byHeight.getOrLoad(height, func() (*chainhash.Hash, error) { return r.loadHashByHeight(height) }, nil)
+}
+
+func (r *headersRepo) loadHashByHeight(
 	height uint32,
 ) (*chainhash.Hash, error) {
 	resp, err := r.rpcClient.call("getblockhash", []interface{}{height})

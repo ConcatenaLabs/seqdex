@@ -32,6 +32,9 @@ import (
 // header carrying those fields is sufficient.
 type rpcBlockService struct {
 	rpcClient *rpcClient
+	// the last blocks read: a block that matches several accounts' watches is
+	// read and decoded once
+	cache *boundedCache[string, *block.Block]
 }
 
 var _ blockservice.BlockService = (*rpcBlockService)(nil)
@@ -39,10 +42,16 @@ var _ blockservice.BlockService = (*rpcBlockService)(nil)
 // NewRpcBlockService returns a blockservice.BlockService that fetches blocks
 // from the node via `getblock <hash> 2` (JSON incl. each tx's raw hex).
 func NewRpcBlockService(rpcClient *rpcClient) blockservice.BlockService {
-	return &rpcBlockService{rpcClient: rpcClient}
+	return &rpcBlockService{rpcClient: rpcClient, cache: newBoundedCache[string, *block.Block](16, 0)}
 }
 
 func (b *rpcBlockService) GetBlock(
+	hash *chainhash.Hash,
+) (*block.Block, error) {
+	return b.cache.getOrLoad(hash.String(), func() (*block.Block, error) { return b.loadBlock(hash) }, nil)
+}
+
+func (b *rpcBlockService) loadBlock(
 	hash *chainhash.Hash,
 ) (*block.Block, error) {
 	// verbosity 2 -> JSON block with full (hex-serialized) transactions.
