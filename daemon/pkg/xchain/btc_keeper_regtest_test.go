@@ -190,3 +190,28 @@ func TestKeeperLiftsAFundingByCPFP(t *testing.T) {
 		t.Fatal("the funding is still kept after the block")
 	}
 }
+
+// A wallet the node dropped is loaded again before a maker posts, and its spendable balance reads.
+func TestEnsureWalletLoaded(t *testing.T) {
+	c := regtestChain(t)
+	var r struct{ Name string `json:"name"` }
+	base := NewRPC(c.rpc.url[len("http://"):strings.LastIndex(c.rpc.url, ":")], func() int {
+		p, _ := strconv.Atoi(c.rpc.url[strings.LastIndex(c.rpc.url, ":")+1:]); return p }(), c.rpc.user, c.rpc.pass)
+	if err := base.Call(&r, "unloadwallet", c.rpc.wallet); err != nil {
+		t.Fatalf("unload: %v", err)
+	}
+	if _, err := c.SpendableSats(); err == nil {
+		t.Fatal("an unloaded wallet answered")
+	}
+	if err := c.EnsureWalletLoaded(); err != nil {
+		t.Fatalf("not loaded again: %v", err)
+	}
+	if err := c.EnsureWalletLoaded(); err != nil {
+		t.Fatalf("a loaded wallet: %v", err)
+	}
+	sats, err := c.SpendableSats()
+	if err != nil || sats == 0 {
+		t.Fatalf("spendable %d, %v", sats, err)
+	}
+	t.Logf("loaded again; spendable %d sats", sats)
+}
