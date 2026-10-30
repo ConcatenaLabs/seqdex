@@ -92,6 +92,9 @@ func newScannerSvc(
 		log:                 logFn,
 		warn:                warnFn,
 	}
+	if n, ok := scannerSvc.svc.(interface{ SetName(string) }); ok {
+		n.SetName(accountName)
+	}
 	chReports, _ := scannerSvc.svc.Start()
 	scannerSvc.reports.Add(1)
 	go func() {
