@@ -177,7 +177,10 @@ func cmdXPln(args []string) {
 
 	var btcLeg xchain.LNLeg = xchain.NewCLNLNLeg(*lnSocket)
 	if effBtcAsset != "" {
-		btcLeg = xchain.NewCLNAssetLNLeg(*lnSocket, effBtcAsset)
+		// an asset counter leg settles over that asset's channels, on the asset node: the
+		// bitcoin node knows no asset (it refuses an asset invoice, and the maker's asset node
+		// is not in its graph)
+		btcLeg = xchain.NewCLNAssetLNLeg(*assetLnSocket, effBtcAsset)
 	}
 	swap := xchain.NewPureLNSwap(
 		xchain.NewCLNAssetLNLeg(*assetLnSocket, *asset),
