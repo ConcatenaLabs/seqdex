@@ -74,7 +74,7 @@ func cmdXSell(args []string) {
 	minBTCConf := fs.Int("min-btc-conf", 1, "confirmations required on the maker's BTC leg before we fund the asset")
 	takeAmount := fs.Uint64("amount", 0, "PARTIAL FILL: asset atoms to sell (<= the offer). 0 = the whole offer. The BTC you receive is the proportional price (floor, in the maker's favour); the maker re-rests the remainder.")
 	spendFee := fs.Uint64("spend-fee", 1000, "HTLC spend fee target in native sats (converted per-asset)")
-	btcFeeRate := fs.Float64("btc-fee-rate", 2, "sat/vB fee rate for BTC-side spends (explicit; 0 = node default)")
+	btcFeeRate := fs.Float64("btc-fee-rate", 0, "the least sat/vB a BTC-side spend pays; it pays the live going rate, never under this (0: the chain's floor)")
 	maxFeeBtc := fs.Uint64("max-fee-btc", 0, "max maker fee_btc (sats) we accept")
 	stateFile := fs.String("state-file", "xsell-session.json", "session persistence (refund needs this)")
 	_ = fs.Parse(args)
