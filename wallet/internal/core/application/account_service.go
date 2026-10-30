@@ -228,12 +228,13 @@ func (as *AccountService) registerHandlerForWalletEvents() {
 
 			for _, account := range w.Accounts {
 				addressesInfo, _ := w.AllDerivedAddressesForAccount(account.Namespace)
-				if len(addressesInfo) > 0 {
-					as.log("start watching addresses for account %s", account.Namespace)
-					as.bcScanner.WatchForAccount(
-						account.Namespace, account.BirthdayBlock, addressesInfo,
-					)
-				}
+				// even with no address yet: the account's scanner is made here with its
+				// birthday, not later by the first caller that knows none (the channels below,
+				// or a derive), which made it scan from genesis
+				as.log("start watching %d addresses for account %s", len(addressesInfo), account.Namespace)
+				as.bcScanner.WatchForAccount(
+					account.Namespace, account.BirthdayBlock, addressesInfo,
+				)
 				go as.listenToUtxoChannel(
 					account.Namespace, as.bcScanner.GetUtxoChannel(account.Namespace),
 				)
@@ -258,8 +259,10 @@ func (as *AccountService) registerHandlerForWalletEvents() {
 	// Start watching account address as soon as it's derived.
 	as.repoManager.RegisterHandlerForWalletEvent(
 		domain.WalletAccountAddressesDerived, func(event domain.WalletEvent) {
+			// the event names no birthday: the account's own, so that a derive that comes
+			// before the account's creation event is handled never starts its scan at genesis
 			as.bcScanner.WatchForAccount(
-				event.AccountName, event.AccountBirthdayBlock, event.AccountAddresses,
+				event.AccountName, as.birthdayOf(event.AccountName, event.AccountBirthdayBlock), event.AccountAddresses,
 			)
 		},
 	)
@@ -400,4 +403,25 @@ func (as *AccountService) storeQueuedTransactions() {
 			as.log("confirmed transaction %s for account(s) %s", tx.TxID, accounts)
 		}
 	}
+}
+
+// birthdayOf is the block an account was made at: `known` when the event carries it, else the
+// wallet's record of the account (0 only for an account the wallet does not know).
+func (as *AccountService) birthdayOf(accountName string, known uint32) uint32 {
+	if known > 0 {
+		return known
+	}
+	w, err := as.repoManager.WalletRepository().GetWallet(context.Background())
+	if err != nil || w == nil {
+		return 0
+	}
+	if a, ok := w.Accounts[accountName]; ok {
+		return a.BirthdayBlock
+	}
+	for _, a := range w.Accounts {
+		if a.Label == accountName {
+			return a.BirthdayBlock
+		}
+	}
+	return 0
 }

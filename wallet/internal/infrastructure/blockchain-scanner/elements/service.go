@@ -409,6 +409,11 @@ func (s *service) getOrCreateScanner(
 	defer s.lock.Unlock()
 
 	if scannerSvc, ok := s.scanners[accountName]; ok {
+		// made before the account's birthday was known (by a caller that knows none): it
+		// takes the birthday now, so its watches start there and not at genesis
+		if startingBlock > 0 {
+			scannerSvc.adoptBirthday(startingBlock, resumeHeight(s.checkpoints, accountName, startingBlock))
+		}
 		return scannerSvc
 	}
 
