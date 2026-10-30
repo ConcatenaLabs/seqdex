@@ -136,6 +136,18 @@ func (s *scannerService) deliverTx(tx *domain.Transaction) bool {
 
 // startFor is where a watch set now starts: the resumed height for the watches set as the wallet
 // opens, the account's birth for any set after them.
+// adoptBirthday sets the account's birthday, and where its watches resume, on a scanner made
+// without one; true when it did.
+func (s *scannerService) adoptBirthday(birth, resume uint32) bool {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if s.startingBlockHeight != 0 {
+		return false
+	}
+	s.startingBlockHeight, s.resumeFrom = birth, resume
+	return true
+}
+
 func (s *scannerService) startFor() uint32 {
 	if !s.resumed && s.resumeFrom > s.startingBlockHeight {
 		return s.resumeFrom

@@ -65,3 +65,22 @@ func TestCheckpointsRoundTripAndResume(t *testing.T) {
 		t.Fatalf("the opening watches resume, a later one starts at birth: %v", f.starts)
 	}
 }
+
+// A scanner made before its account's birthday was known (by a caller that knows none: the
+// coin channels at unlock, or an address derived before the account's creation event) takes the
+// birthday when it comes, and watches from there, never from genesis; one made with a birthday
+// keeps it. A checkpoint saved at 0 by such a scan does not pull it back to genesis either.
+func TestAScannerTakesItsAccountsBirthday(t *testing.T) {
+	f := &fakeSvc{}
+	s := &service{lock: &sync.RWMutex{}, checkpoints: map[string]uint32{"late": 0},
+		scanners: map[string]*scannerService{"late": {svc: f, blindingKeys: map[string][]byte{}, lock: &sync.RWMutex{},
+			log: func(string, ...interface{}) {}, warn: func(error, string, ...interface{}) {}}}}
+	sc := s.getOrCreateScanner("late", 191900)
+	sc.watchAddresses([]domain.AddressInfo{{Script: "0014" + "33333333333333333333333333333333333333cc"}})
+	if len(f.starts) != 1 || f.starts[0] != 191900 {
+		t.Fatalf("a scanner made without a birthday watches from %v, not its birthday 191900", f.starts)
+	}
+	if sc.adoptBirthday(5, 5) || sc.startingBlockHeight != 191900 {
+		t.Fatalf("a known birthday is kept: %d", sc.startingBlockHeight)
+	}
+}
