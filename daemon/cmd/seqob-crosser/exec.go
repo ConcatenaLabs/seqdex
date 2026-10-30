@@ -30,13 +30,13 @@ package main
 //     asset A.
 
 import (
-	"sync"
-	"syscall"
 	"bufio"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offer"
