@@ -70,8 +70,19 @@ func throughFeed(o *seqobv1.Offer, mid, bps float64) bool {
 	return p >= mid*(1-bps/1e4)
 }
 
-// readFeedPrice reads one key of the feed: a number or {"price": number}.
+// feedMaxAge is how old a price the feed dates (as_of, the time of the reading
+// it serves) may be: an older one is its source's last answer, and reads as no
+// price, so the guard leaves the quote alone as it does when the feed is down.
+const feedMaxAge = 10 * time.Minute
+
+// readFeedPrice reads one key of the feed: a number or {"price": number}. A
+// price dated more than feedMaxAge ago reads as 0; a seeded one ("static") has
+// no age.
 func readFeedPrice(feed map[string]json.RawMessage, key string) float64 {
+	return readFeedPriceAt(feed, key, time.Now())
+}
+
+func readFeedPriceAt(feed map[string]json.RawMessage, key string, now time.Time) float64 {
 	raw, ok := feed[key]
 	if !ok {
 		return 0
@@ -81,9 +92,14 @@ func readFeedPrice(feed map[string]json.RawMessage, key string) float64 {
 		return v
 	}
 	var obj struct {
-		Price float64 `json:"price"`
+		Price  float64 `json:"price"`
+		AsOf   int64   `json:"as_of"`
+		Static bool    `json:"static"`
 	}
 	if json.Unmarshal(raw, &obj) == nil {
+		if !obj.Static && obj.AsOf > 0 && now.Sub(time.Unix(obj.AsOf, 0)) > feedMaxAge {
+			return 0
+		}
 		return obj.Price
 	}
 	return 0

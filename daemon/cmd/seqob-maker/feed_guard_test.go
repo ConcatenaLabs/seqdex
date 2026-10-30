@@ -66,6 +66,21 @@ func TestReadFeedPrice(t *testing.T) {
 	}
 }
 
+func TestReadFeedPriceSkipsAnOldReading(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	var feed map[string]json.RawMessage
+	_ = json.Unmarshal([]byte(`{"GOLD":{"price":4000,"as_of":1799999400},"EURX":{"price":1.1,"as_of":1799999399},"ACME":{"price":2,"as_of":1700000000,"static":true}}`), &feed)
+	if readFeedPriceAt(feed, "GOLD", now) != 4000 {
+		t.Fatal("a reading ten minutes old is still a price")
+	}
+	if readFeedPriceAt(feed, "EURX", now) != 0 {
+		t.Fatal("a reading over ten minutes old reads as no price")
+	}
+	if readFeedPriceAt(feed, "ACME", now) != 2 {
+		t.Fatal("a seeded price has no age")
+	}
+}
+
 // The guard end to end in a child process: a feed that moves through the ask
 // makes the maker print the reason and exit 0 for its supervisor to re-quote.
 func TestFeedGuardExitsWhenFeedMovesThrough(t *testing.T) {
