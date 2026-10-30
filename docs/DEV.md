@@ -181,17 +181,22 @@ wallet syncs the UTXO/balance. Drive it with the `ocean` CLI
 4. **Taker**: inspect the book, then lift.
 
    ```sh
+   ./bin/seqob-cli taker-key -file taker.key     # once: makes the keys, prints the address to fund
    ./bin/seqob-cli book -relay http://127.0.0.1:9955 -base <GOLD hex> -quote <USDX hex>
    ./bin/seqob-cli lift -relay http://127.0.0.1:9955 \
      -base <GOLD hex> -quote <USDX hex> \
      -offer-id <id> -maker-pubkey <hex> -amount 100 \
-     -esplora <esplora url> -taker-priv <32-byte hex> -taker-blinding <32-byte hex>
+     -esplora <esplora url> -taker-key-file taker.key
    ```
 
-   Without `-esplora`/`-taker-priv`/`-taker-blinding` the lift runs in demo
-   mode against an in-memory stub wallet (it exercises the courier handshake
-   but settles nothing on-chain); with them the taker funds and broadcasts a
-   real swap.
+   `taker-key` writes the taker's signing and blinding keys to the file, mode
+   600, and prints the address that pays them (unblinded, and its blinded
+   form); fund it with what the lift pays. The keys can also be given as
+   `-taker-priv`/`-taker-blinding`, which puts them on the command line. Without
+   `-esplora` and a key the lift runs in demo mode against an in-memory stub
+   wallet (it exercises the courier handshake but settles nothing on-chain);
+   with them the taker funds and broadcasts a real swap. `seqob-crosser` takes
+   the same `-taker-key-file` for its same-chain legs.
 
 `seqob-cli post` can also place an offer without running a maker process, but
 settling a lift requires the maker online (interactive co-signing; the relay

@@ -30,13 +30,13 @@ package main
 //     asset A.
 
 import (
-	"sync"
-	"syscall"
 	"bufio"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offer"
@@ -52,6 +52,7 @@ type Caps struct {
 
 	// Same-chain lift wiring (seqob-cli lift's real-taker seams).
 	Esplora, TakerPriv, TakerBlinding string
+	TakerKeyFile                      string // instead of the two keys: seqob-cli reads it (lift -taker-key-file)
 
 	SeqobCli   string // path to the seqob-cli binary
 	LNCli      string // lightning-cli, for the pure-Lightning preflight (hedge.go)
@@ -98,8 +99,8 @@ func (c *Caps) Executable(n *NormOrder) (bool, string) {
 		// Mixed same-chain (rails 7/8): the on-chain leg is a Sequentia-asset HTLC.
 		return need(c.SeqRPC != "" && c.SeqWallet != "", "-seq-rpc/-seq-wallet (mixed same-chain quote)")
 	case FamSameChain:
-		return need(c.Esplora != "" && c.TakerPriv != "" && c.TakerBlinding != "",
-			"-esplora/-taker-priv/-taker-blinding (same-chain lift seams)")
+		return need(c.Esplora != "" && (c.TakerKeyFile != "" || (c.TakerPriv != "" && c.TakerBlinding != "")),
+			"-esplora and -taker-key-file (or -taker-priv/-taker-blinding) (same-chain lift seams)")
 	case FamCovenant:
 		return need(c.SeqRPC != "" && c.SeqWallet != "", "-seq-rpc/-seq-wallet (covenant fill)")
 	default:
@@ -273,7 +274,12 @@ func (e *Executor) legCommand(n *NormOrder, take uint64) (args []string, stateFi
 			"-base", n.Offer.GetPair().GetBaseAsset(), "-quote", n.Offer.GetPair().GetQuoteAsset(),
 			"-offer-id", oid, "-maker-pubkey", mk,
 			"-amount", fmt.Sprint(n.OwnAmount(take)), // lift has no 0=whole convention; pass the size explicitly
-			"-esplora", c.Esplora, "-taker-priv", c.TakerPriv, "-taker-blinding", c.TakerBlinding,
+			"-esplora", c.Esplora,
+		}
+		if c.TakerKeyFile != "" {
+			args = append(args, "-taker-key-file", c.TakerKeyFile)
+		} else {
+			args = append(args, "-taker-priv", c.TakerPriv, "-taker-blinding", c.TakerBlinding)
 		}
 		resume = "same-chain lift is a single co-signed tx: nothing to refund on failure"
 

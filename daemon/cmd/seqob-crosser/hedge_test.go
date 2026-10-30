@@ -26,8 +26,8 @@ func TestSpendableIn(t *testing.T) {
 
 func TestPriceWithin(t *testing.T) {
 	failedAsk := norm(mkOffer(FamCovenant, SideAsk, tBase, tQuote, 1000, 2000), tBase, tQuote) // 2.0
-	near := norm(mkOffer(FamPureLN, SideAsk, tBase, tQuote, 1000, 2050), tBase, tQuote)       // +2.5%
-	far := norm(mkOffer(FamPureLN, SideAsk, tBase, tQuote, 1000, 2200), tBase, tQuote)        // +10%
+	near := norm(mkOffer(FamPureLN, SideAsk, tBase, tQuote, 1000, 2050), tBase, tQuote)        // +2.5%
+	far := norm(mkOffer(FamPureLN, SideAsk, tBase, tQuote, 1000, 2200), tBase, tQuote)         // +10%
 	if !priceWithin(near, failedAsk, 300) || priceWithin(far, failedAsk, 300) {
 		t.Fatal("a buy pays at most 300 bps more")
 	}
