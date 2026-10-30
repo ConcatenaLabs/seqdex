@@ -304,6 +304,21 @@ one; the relay grants makers no special standing. Six settlement modes:
   `-min-btc-conf` (default 1), `-btc-locktime-delta` (T_btc, default 100
   parent blocks), `-seq-locktime-delta` (T_seq, default 240 Sequentia blocks),
   `-btc-fee-rate`, `-spend-fee`.
+
+  Every Bitcoin payment of a swap (the HTLC funding, its claim, its refund)
+  pays the going rate of the live mempool: the most of the chain's floor
+  (30 sat/vB on testnet4, 1 elsewhere), `-btc-fee-rate` when it is higher, the
+  node's `estimatesmartfee`, the rate that makes the next block of the node's
+  mempool, and on testnet4 the public mempool's rate (mempool.space); capped
+  at 500. `-spend-fee` is the least a claim or refund pays, never more than
+  half its output. While one waits, the process keeps it moving: a claim or
+  refund still unconfirmed when the going rate has risen past it is replaced
+  (both signal RBF) at the new rate, and a funding is lifted by a child that
+  spends its change (CPFP), so its txid, which the other side holds, stays.
+  A claim must confirm before the other side's timelock lets it refund, and a
+  refund before the other side could still claim. `seqob-cli` waits for its
+  claims and refunds to confirm before it exits (`SEQOB_BTC_SETTLE`, a Go
+  duration, bounds the wait; default 6h).
 - `-mode lightning`: submarine swaps (asset on-chain against BTC over
   Lightning). Needs `-ln-socket` (a SeqLN/CLN `lightning-rpc` on Bitcoin) plus
   `-xseq-rpc`/`-xseq-wallet`. `-side buy` serves the NORMAL direction (taker

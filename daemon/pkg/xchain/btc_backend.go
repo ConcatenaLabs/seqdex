@@ -1,6 +1,8 @@
 package xchain
 
 import (
+	"sync"
+
 	"fmt"
 
 	"github.com/btcsuite/btcd/chaincfg"
@@ -231,6 +233,13 @@ type bitcoinBTCBackend struct {
 	chain  *BitcoinChain
 	leg    *BitcoinLeg
 	spends spendCache
+	keep   *btcKeeper
+	once   sync.Once
+}
+
+func (b *bitcoinBTCBackend) keeper() *btcKeeper {
+	b.once.Do(func() { b.keep = newBTCKeeper(b.chain) })
+	return b.keep
 }
 
 func newBitcoinBTCBackend(chain *BitcoinChain, prim LockPrimitive) *bitcoinBTCBackend {
@@ -261,18 +270,17 @@ func (b *bitcoinBTCBackend) LockBTCLeg(script []byte, amountCoins string, lockti
 	if err != nil {
 		return nil, 0, err
 	}
+	// The going rate (GoingRate: the live mempool, never under the policy's floor
+	// or SetFeeRate), so funding never waits on a stale estimate; the keeper
+	// lifts it by CPFP while it waits, keeping its txid, which the other side
+	// has been told.
 	var txid string
-	if fr := b.chain.FeeRate(); fr > 0 {
-		// Explicit fee_rate (sat/vB) so funding never depends on the node's
-		// estimatesmartfee or a manual settxfee. sendtoaddress's named-arg form
-		// takes fee_rate directly (Bitcoin Core v0.21+; testnet4 is v28+).
-		named := map[string]interface{}{"address": addr, "amount": amountCoins, "fee_rate": fr}
-		if err := b.chain.RPC().CallNamed(&txid, "sendtoaddress", named); err != nil {
-			return nil, 0, err
-		}
-	} else if err := b.chain.RPC().Call(&txid, "sendtoaddress", addr, amountCoins); err != nil {
+	rate, _ := b.chain.GoingRate()
+	named := map[string]interface{}{"address": addr, "amount": amountCoins, "fee_rate": rate}
+	if err := b.chain.RPC().CallNamed(&txid, "sendtoaddress", named); err != nil {
 		return nil, 0, err
 	}
+	b.keeper().watchFunding(txid)
 
 	// Only regtest can confirm the funding tx on demand; a real network must wait.
 	regtest := b.chain.Params() == &chaincfg.RegressionNetParams
@@ -371,15 +379,16 @@ func (b *bitcoinBTCBackend) ClaimBTCLeg(leg *LegLock, claimKey *Key, fee uint64)
 	if err != nil {
 		return "", err
 	}
-	return b.spends.once(b.chain, leg.Funded.TxID, leg.Funded.Vout, "claim", func() (string, error) {
+	build := func(f uint64) (string, error) {
 		return b.leg.BuildClaimTx(leg.Script, BitcoinSpendInput{
 			TxID:   leg.Funded.TxID,
 			Vout:   leg.Funded.Vout,
 			Amount: leg.Funded.Amount,
 			DestPK: dest,
-			Fee:    fee,
+			Fee:    f,
 		}, claimKey)
-	})
+	}
+	return b.spend(leg, "claim", fee, build)
 }
 
 func (b *bitcoinBTCBackend) RefundBTCLeg(leg *LegLock, refundKey *Key, nLockTime uint32, fee uint64) (string, error) {
@@ -387,15 +396,51 @@ func (b *bitcoinBTCBackend) RefundBTCLeg(leg *LegLock, refundKey *Key, nLockTime
 	if err != nil {
 		return "", err
 	}
-	return b.spends.once(b.chain, leg.Funded.TxID, leg.Funded.Vout, "refund", func() (string, error) {
+	build := func(f uint64) (string, error) {
 		return b.leg.BuildRefundTx(leg.Script, BitcoinSpendInput{
 			TxID:   leg.Funded.TxID,
 			Vout:   leg.Funded.Vout,
 			Amount: leg.Funded.Amount,
 			DestPK: dest,
-			Fee:    fee,
+			Fee:    f,
 		}, nLockTime, refundKey)
+	}
+	return b.spend(leg, "refund", fee, build)
+}
+
+// spend builds an HTLC claim or refund at the going rate (the caller's fee
+// when that is more; never over half the output), broadcasts it once per
+// outpoint (spendCache), and hands it to the keeper, which bumps it (RBF:
+// both spends signal it) while it waits and the going rate rises past it, so
+// a claim confirms before the other side's timelock and a refund before the
+// other side could still claim.
+func (b *bitcoinBTCBackend) spend(leg *LegLock, kind string, asked uint64, build func(uint64) (string, error)) (string, error) {
+	var fee uint64
+	var vsize int
+	txid, err := b.spends.once(b.chain, leg.Funded.TxID, leg.Funded.Vout, kind, func() (string, error) {
+		probe, err := build(asked)
+		if err != nil {
+			return "", err
+		}
+		// A legacy P2SH spend: no witness, so its vsize is its size. Its size does
+		// not depend on the fee (one input, one output), but a DER signature's
+		// length varies by up to two bytes from one signing to the next.
+		vsize = len(probe)/2 + 2
+		rate, _ := b.chain.GoingRate()
+		fee = spendFee(asked, rate, vsize, leg.Funded.Amount)
+		if fee == asked {
+			return probe, nil
+		}
+		return build(fee)
 	})
+	if err != nil {
+		return "", err
+	}
+	if fee > 0 { // built now, not a retry of a spend already built
+		b.keeper().watchSpend(&pendingSpend{kind: kind, fundTxid: leg.Funded.TxID, vout: leg.Funded.Vout, amount: leg.Funded.Amount,
+			txid: txid, fee: fee, vsize: vsize, rebuild: build, cache: &b.spends})
+	}
+	return txid, nil
 }
 
 // locateHTLCOutput finds the (vout, value) of the output paying the script's

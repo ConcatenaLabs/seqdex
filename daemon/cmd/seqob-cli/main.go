@@ -30,6 +30,7 @@ import (
 	"github.com/aejkcs50/seqdex/daemon/pkg/covenant"
 	"github.com/aejkcs50/seqdex/daemon/pkg/explorer/esplora"
 	"github.com/aejkcs50/seqdex/daemon/pkg/seqnet"
+	"github.com/aejkcs50/seqdex/daemon/pkg/xchain"
 )
 
 var jsonMarshal = protojson.MarshalOptions{UseProtoNames: true}
@@ -88,6 +89,25 @@ func main() {
 		cmdKeygen(os.Args[2:])
 	default:
 		usage()
+	}
+	settleBTC()
+}
+
+// settleBTC waits, before the command exits, for every Bitcoin HTLC claim or
+// refund it broadcast to confirm, bumping each to the going rate while it
+// waits (xchain.SettleBTCSpends): no one bumps a spend once its process is
+// gone, and a claim that confirms after the other side's timelock, or a refund
+// after the other side could still claim, loses the swap.
+// SEQOB_BTC_SETTLE bounds the wait (a Go duration; default 6h).
+func settleBTC() {
+	d := 6 * time.Hour
+	if v := os.Getenv("SEQOB_BTC_SETTLE"); v != "" {
+		if p, err := time.ParseDuration(v); err == nil {
+			d = p
+		}
+	}
+	if err := xchain.SettleBTCSpends(d, func(f string, a ...interface{}) { fmt.Fprintf(os.Stderr, f+"\n", a...) }); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v; bump it with seqob-cli xsubas-refund-btc -feerate, or wait\n", err)
 	}
 }
 
@@ -629,5 +649,6 @@ func orDefault(v, def string) string {
 
 func fatal(format string, a ...interface{}) {
 	fmt.Fprintf(os.Stderr, "error: "+format+"\n", a...)
+	settleBTC()
 	os.Exit(1)
 }

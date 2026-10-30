@@ -44,7 +44,7 @@ func cmdXSubAsFundBtc(args []string) {
 	btcChainName := fs.String("btc-chain", "testnet4", "parent chain params: testnet4 | regtest")
 	refundPubHex := fs.String("refund-pub", "", "LSP payer-bridge: the CALLER's OWN refund pubkey (33-byte compressed hex) to embed in the redeem script; when set, NO refund key is minted or returned here (the caller persisted its private key BEFORE broadcast). Mutually exclusive with -refund-priv.")
 	refundPrivHex := fs.String("refund-priv", "", "device BTC refund privkey (32-byte hex); a fresh one is generated + printed if empty (ignored when -refund-pub is set)")
-	feeRate := fs.Float64("btc-fee-rate", 2, "sat/vB fee rate for funding the HTLC (0 = node default)")
+	feeRate := fs.Float64("btc-fee-rate", 0, "the least sat/vB funding the HTLC pays; it pays the live going rate, never under this (0: the chain's floor)")
 	locateOnly := fs.Bool("locate-only", false, "DRY-LOCATE (broadcast NOTHING): compute the deterministic Design-A redeem script from -maker-claim-pub/-hash/-btc-locktime/-refund-pub and scan the chain+wallet for an output ALREADY paying its P2SH. Prints {funded:true,...outpoint} if found, {funded:false,...} otherwise. Makes the LSP payer-bridge funding crash-IDEMPOTENT: scan-before-broadcast + recover-on-resume so a crash between a prior broadcast and the caller persisting the funding facts never double-funds. Requires -refund-pub (or -refund-priv to derive it) so the P2SH is deterministic.")
 	_ = fs.Parse(args)
 

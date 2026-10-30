@@ -23,17 +23,18 @@ import (
 type BitcoinChain struct {
 	rpc    *RPC
 	params *chaincfg.Params
-	// feeRateSatVb, when > 0, is passed as sendtoaddress's fee_rate (sat/vB) when
-	// funding an HTLC leg, so the daemon sets its own fee instead of relying on
-	// the node's estimatesmartfee (unavailable on sparse testnet4 without
-	// -fallbackfee) or a manual settxfee. 0 keeps the node's default behavior.
+	// feeRateSatVb, when > 0, is the least sat/vB any of its payments pays: an
+	// HTLC funding, claim or refund pays the going rate (GoingRate), never below
+	// it. 0 sets no minimum beyond the fee policy's floor.
 	feeRateSatVb float64
+	// fees is what the going rate is read from (DefaultFeePolicy for the chain).
+	fees FeePolicy
 }
 
-// SetFeeRate sets the sat/vB fee rate used when funding HTLC legs.
+// SetFeeRate sets the least sat/vB an HTLC funding, claim or refund pays.
 func (c *BitcoinChain) SetFeeRate(satVb float64) { c.feeRateSatVb = satVb }
 
-// FeeRate returns the configured HTLC funding fee rate (sat/vB), 0 if unset.
+// FeeRate returns the configured minimum fee rate (sat/vB), 0 if unset.
 func (c *BitcoinChain) FeeRate() float64 { return c.feeRateSatVb }
 
 // NewBitcoinChain binds a BitcoinChain to a bitcoind RPC + wallet and chain
@@ -41,7 +42,7 @@ func (c *BitcoinChain) FeeRate() float64 { return c.feeRateSatVb }
 // (claim destination) and, on regtest, generatetoaddress/sendtoaddress in the
 // verification harness; HTLC verification/claim themselves are wallet-agnostic.
 func NewBitcoinChain(rpc *RPC, wallet string, params *chaincfg.Params) *BitcoinChain {
-	return &BitcoinChain{rpc: rpc.WithWallet(wallet), params: params}
+	return &BitcoinChain{rpc: rpc.WithWallet(wallet), params: params, fees: DefaultFeePolicy(params)}
 }
 
 // RPC exposes the underlying wallet-scoped client (for the harness / ad-hoc).

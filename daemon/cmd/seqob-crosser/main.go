@@ -66,7 +66,7 @@ func main() {
 	seqobCli := flag.String("seqob-cli", "seqob-cli", "path to the seqob-cli binary (shelled on-chain-leg takers)")
 	legTimeout := flag.Duration("leg-timeout", 2*time.Hour, "hard cap on one shelled leg (cross legs wait out parent-chain confirmations)")
 	spendFee := flag.Uint64("spend-fee", 1000, "HTLC spend fee target passed to the drivers (native sats / per-asset sized)")
-	btcFeeRate := flag.Float64("btc-fee-rate", 2, "sat/vB for funding BTC HTLC legs")
+	btcFeeRate := flag.Float64("btc-fee-rate", 0, "the least sat/vB a BTC HTLC leg pays; it pays the live going rate, never under this (0: the chain's floor)")
 	minBTCConf := flag.Int("min-btc-conf", 1, "confirmations required on counterparty BTC legs")
 	maxBackoff := flag.Duration("max-backoff", 30*time.Minute, "cap on the per-pair failure backoff")
 	clearStranded := flag.Bool("clear-stranded", false, "drop the journal's stranded records (AFTER resuming/refunding their driver state files) and exit")
