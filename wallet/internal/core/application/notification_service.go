@@ -17,16 +17,29 @@ import (
 // of the used domain.TransactionRepository and domain.UtxoRepository
 // accessible by external clients so that they can get real-time updates on the
 // status of the internal wallet.
+//
+// Each client that asks for the events (a notification stream) gets every event
+// on a channel of its own, from the moment it asks until its context ends. An
+// event is never held for a client that is not there: publishing used to start
+// a goroutine per event that waited on one shared channel until some client
+// read it, so a wallet with no stream open (the usual case) kept every event of
+// every coin it ever saw, and the goroutine that held it, for as long as it ran.
 type NotificationService struct {
 	repoManager ports.RepoManager
 	bcScanner   ports.BlockchainScanner
-	chUtxos     chan domain.UtxoEvent
-	chTxs       chan domain.TransactionEvent
-	utxoLock    *sync.Mutex
-	txLock      *sync.Mutex
+
+	mu       sync.Mutex
+	utxoSubs map[chan domain.UtxoEvent]struct{}
+	txSubs   map[chan domain.TransactionEvent]struct{}
+	dropped  uint64
 
 	log func(format string, a ...interface{})
 }
+
+// notifyBuffer is how many events a client may fall behind before the ones past
+// that are dropped for it (and said in the log): a client that stops reading
+// never holds up the wallet.
+const notifyBuffer = 1024
 
 func NewNotificationService(
 	repoManager ports.RepoManager, bcScanner ports.BlockchainScanner,
@@ -35,13 +48,11 @@ func NewNotificationService(
 		format = fmt.Sprintf("notification service: %s", format)
 		log.Debugf(format, a...)
 	}
-	chUtxos := make(chan domain.UtxoEvent)
-	chTxs := make(chan domain.TransactionEvent)
-	utxoLock := &sync.Mutex{}
-	txLock := &sync.Mutex{}
-
 	svc := &NotificationService{
-		repoManager, bcScanner, chUtxos, chTxs, utxoLock, txLock, logFn,
+		repoManager: repoManager, bcScanner: bcScanner,
+		utxoSubs: map[chan domain.UtxoEvent]struct{}{},
+		txSubs:   map[chan domain.TransactionEvent]struct{}{},
+		log:      logFn,
 	}
 	svc.registerHandlersForExternalScripts()
 	go svc.listenToInternalTxs()
@@ -50,16 +61,38 @@ func NewNotificationService(
 	return svc
 }
 
+// GetTxChannel is a channel of the transaction events from now until ctx ends.
 func (ns *NotificationService) GetTxChannel(
 	ctx context.Context,
 ) (chan domain.TransactionEvent, error) {
-	return ns.chTxs, nil
+	ch := make(chan domain.TransactionEvent, notifyBuffer)
+	ns.mu.Lock()
+	ns.txSubs[ch] = struct{}{}
+	ns.mu.Unlock()
+	go func() {
+		<-ctx.Done()
+		ns.mu.Lock()
+		delete(ns.txSubs, ch)
+		ns.mu.Unlock()
+	}()
+	return ch, nil
 }
 
+// GetUtxoChannel is a channel of the coin events from now until ctx ends.
 func (ns *NotificationService) GetUtxoChannel(
 	ctx context.Context,
 ) (chan domain.UtxoEvent, error) {
-	return ns.chUtxos, nil
+	ch := make(chan domain.UtxoEvent, notifyBuffer)
+	ns.mu.Lock()
+	ns.utxoSubs[ch] = struct{}{}
+	ns.mu.Unlock()
+	go func() {
+		<-ctx.Done()
+		ns.mu.Lock()
+		delete(ns.utxoSubs, ch)
+		ns.mu.Unlock()
+	}()
+	return ch, nil
 }
 
 func (ns *NotificationService) WatchScript(
@@ -114,29 +147,49 @@ func (ns *NotificationService) StopWatchingScript(
 func (ns *NotificationService) listenToInternalTxs() {
 	chTxs := ns.repoManager.TransactionRepository().GetEventChannel()
 	for event := range chTxs {
-		go ns.publishTx(event)
+		ns.publishTx(event)
 	}
 }
 
 func (ns *NotificationService) listenToInternalUtxos() {
 	chUtxos := ns.repoManager.UtxoRepository().GetEventChannel()
 	for event := range chUtxos {
-		go ns.publishUtxo(event)
+		ns.publishUtxo(event)
 	}
 }
 
+// publishUtxo hands the event to every client listening, never waiting on one.
 func (ns *NotificationService) publishUtxo(event domain.UtxoEvent) {
-	ns.utxoLock.Lock()
-	defer ns.utxoLock.Unlock()
-
-	ns.chUtxos <- event
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+	for ch := range ns.utxoSubs {
+		select {
+		case ch <- event:
+		default:
+			ns.drop("coin")
+		}
+	}
 }
 
+// publishTx hands the event to every client listening, never waiting on one.
 func (ns *NotificationService) publishTx(event domain.TransactionEvent) {
-	ns.txLock.Lock()
-	defer ns.txLock.Unlock()
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+	for ch := range ns.txSubs {
+		select {
+		case ch <- event:
+		default:
+			ns.drop("transaction")
+		}
+	}
+}
 
-	ns.chTxs <- event
+// drop counts an event a client fell too far behind to take; called with mu held.
+func (ns *NotificationService) drop(what string) {
+	ns.dropped++
+	if ns.dropped&(ns.dropped-1) == 0 { // the 1st, 2nd, 4th, 8th…
+		log.Warnf("notification service: a client %d events behind: %d events dropped for it so far (the last a %s event)", notifyBuffer, ns.dropped, what)
+	}
 }
 
 func (ns *NotificationService) registerHandlersForExternalScripts() {
@@ -193,7 +246,7 @@ func (ns *NotificationService) listenToUtxoChannel(
 		for _, u := range utxos {
 			utxoInfo = append(utxoInfo, u.Info())
 		}
-		go ns.publishUtxo(domain.UtxoEvent{
+		ns.publishUtxo(domain.UtxoEvent{
 			EventType: eventType,
 			Utxos:     utxoInfo,
 		})
@@ -210,7 +263,7 @@ func (ns *NotificationService) listenToTxChannel(
 		if !tx.IsConfirmed() {
 			eventType = domain.TransactionAdded
 		}
-		go ns.publishTx(domain.TransactionEvent{
+		ns.publishTx(domain.TransactionEvent{
 			EventType:   eventType,
 			Transaction: tx,
 		})

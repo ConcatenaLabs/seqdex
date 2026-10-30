@@ -11,6 +11,7 @@ import (
 
 type filtersRepo struct {
 	rpcClient *rpcClient
+	cache     *boundedCache[string, *repository.FilterEntry]
 }
 
 func NewFiltersRepo(rpcClient *rpcClient) repository.FilterRepository {
@@ -18,7 +19,7 @@ func NewFiltersRepo(rpcClient *rpcClient) repository.FilterRepository {
 }
 
 func newFiltersRepo(rpcClient *rpcClient) *filtersRepo {
-	return &filtersRepo{rpcClient}
+	return &filtersRepo{rpcClient: rpcClient, cache: newBoundedCache[string, *repository.FilterEntry](4096, 0)}
 }
 
 func (r *filtersRepo) PutFilter(
@@ -34,6 +35,11 @@ func (r *filtersRepo) GetFilter(
 	if err != nil {
 		return nil, err
 	}
+	// a block's filter never changes: asked of the node once for every account
+	return r.cache.getOrLoad(hash.String(), func() (*repository.FilterEntry, error) { return r.loadFilter(key, hash) }, nil)
+}
+
+func (r *filtersRepo) loadFilter(key repository.FilterKey, hash *chainhash.Hash) (*repository.FilterEntry, error) {
 	resp, err := r.rpcClient.call("getblockfilter", []interface{}{hash.String()})
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "not found") {
