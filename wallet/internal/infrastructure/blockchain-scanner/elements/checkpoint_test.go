@@ -44,8 +44,8 @@ func TestResumeHeight(t *testing.T) {
 	}
 }
 
-// Saved heights are read back by the next run; the watches set as the wallet opens resume there,
-// and an address watched later starts from the account's birth.
+// Saved heights are read back by the next run, and every watch of the account resumes there: the
+// opening ones and one set later (the wallet's addresses watched once it is unlocked).
 func TestCheckpointsRoundTripAndResume(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "checkpoints.json")
 	fa, fb := &fakeSvc{low: 190500}, &fakeSvc{low: 42}
@@ -61,8 +61,8 @@ func TestCheckpointsRoundTripAndResume(t *testing.T) {
 		blindingKeys: map[string][]byte{}, lock: &sync.RWMutex{}, log: func(string, ...interface{}) {}, warn: func(error, string, ...interface{}) {}}
 	sc.watchAddresses([]domain.AddressInfo{{Script: "0014" + "11111111111111111111111111111111111111aa"}})
 	sc.watchAddresses([]domain.AddressInfo{{Script: "0014" + "22222222222222222222222222222222222222bb"}})
-	if len(f.starts) != 2 || f.starts[0] != 190500-checkpointMargin || f.starts[1] != 1000 {
-		t.Fatalf("the opening watches resume, a later one starts at birth: %v", f.starts)
+	if len(f.starts) != 2 || f.starts[0] != 190500-checkpointMargin || f.starts[1] != 190500-checkpointMargin {
+		t.Fatalf("every watch resumes from the saved height: %v", f.starts)
 	}
 }
 

@@ -421,8 +421,7 @@ func (s *service) getOrCreateScanner(
 		accountName, startingBlock, s.filtersRepo, s.headersRepo, s.blockSvc,
 		s.genesisHash,
 	)
-	// The watches set as the wallet opens resume where the last run had scanned to; an
-	// address or coin watched later starts from the account's birth, as before.
+	// Every watch resumes where the last run had scanned the account to.
 	scannerSvc.resumeFrom = resumeHeight(s.checkpoints, accountName, startingBlock)
 	s.scanners[accountName] = scannerSvc
 	return scannerSvc
