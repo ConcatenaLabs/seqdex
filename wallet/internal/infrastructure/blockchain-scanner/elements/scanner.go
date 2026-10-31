@@ -48,10 +48,9 @@ type scannerService struct {
 	svc                 scanner.Service
 	blindingKeys        map[string][]byte
 	startingBlockHeight uint32
-	// resumeFrom is where the first set of watches starts (a restart's saved height); the
-	// watches set later start at startingBlockHeight
+	// resumeFrom is where every watch starts after a restart: the account's saved height
+	// less the margin (or its birth when it has none)
 	resumeFrom uint32
-	resumed    bool
 	chTxs               chan *domain.Transaction
 	chUtxos             chan []*domain.Utxo
 	lock                *sync.RWMutex
@@ -134,8 +133,12 @@ func (s *scannerService) deliverTx(tx *domain.Transaction) bool {
 	}
 }
 
-// startFor is where a watch set now starts: the resumed height for the watches set as the wallet
-// opens, the account's birth for any set after them.
+// startFor is where a watch starts: the height the account had been scanned to when the wallet
+// started (less the margin), for every watch it sets. An address or coin the account held then was
+// watched up to there by the last run; one it gains later has no history before the start. A
+// watch set after the opening ones started from the account's birth before, and an account whose
+// addresses were watched after the wallet was unlocked scanned 100,000 blocks again on every
+// restart.
 // adoptBirthday sets the account's birthday, and where its watches resume, on a scanner made
 // without one; true when it did.
 func (s *scannerService) adoptBirthday(birth, resume uint32) bool {
@@ -149,7 +152,7 @@ func (s *scannerService) adoptBirthday(birth, resume uint32) bool {
 }
 
 func (s *scannerService) startFor() uint32 {
-	if !s.resumed && s.resumeFrom > s.startingBlockHeight {
+	if s.resumeFrom > s.startingBlockHeight {
 		return s.resumeFrom
 	}
 	return s.startingBlockHeight
@@ -159,7 +162,6 @@ func (s *scannerService) watchAddresses(addressesInfo []domain.AddressInfo) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	start := s.startFor()
-	defer func() { s.resumed = true }()
 
 	for _, info := range addressesInfo {
 		// Prevent duplicates
