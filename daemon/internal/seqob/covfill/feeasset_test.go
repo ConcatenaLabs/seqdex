@@ -58,3 +58,22 @@ func TestFeeAssetForAsksTheNode(t *testing.T) {
 		t.Fatalf("the asset paid in: %s", got)
 	}
 }
+
+// The node names a labelled asset by its label in its fee rates: the wallet's coins of it, named by
+// id, must still be found accepted (the testnet's every labelled asset was refused before).
+func TestFeeAssetForReadsLabelsBackToIds(t *testing.T) {
+	n := &scriptedNode{unspent: []utxoRow{
+		{Txid: "t1", Amount: 0.2, Asset: gld, Spendable: true},
+		{Txid: "t2", Amount: 0.09, Asset: usd, Spendable: true},
+	}, rates: map[string]interface{}{"gold": 390000000000, "usdx": 100000000}, labels: map[string]string{"gold": gld, "usdx": usd}}
+	if got, err := FeeAssetFor(n, gld, nil); err != nil || got != gld {
+		t.Fatalf("paying in gold, labelled: %s %v", got, err)
+	}
+	if got, err := FeeAssetFor(n, "ff"+usd[2:], nil); err != nil || got != gld {
+		t.Fatalf("an unaccepted asset paid in: the accepted coin worth most (gold), got %s %v", got, err)
+	}
+	n.labels = nil
+	if _, err := FeeAssetFor(n, gld, nil); err == nil {
+		t.Fatal("without the labels the rates name no coin the wallet holds: it must be refused, as before")
+	}
+}

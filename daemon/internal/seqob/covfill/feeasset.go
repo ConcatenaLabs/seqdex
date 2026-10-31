@@ -86,11 +86,24 @@ func FeeAssetFor(node Node, moved string, exclude map[string]bool) (string, erro
 	if err := node.Call(&rawRates, "getfeeexchangerates"); err != nil {
 		return "", fmt.Errorf("getfeeexchangerates: %w", err)
 	}
+	// The node names an asset it has a label for by that label ("gold"), every other one by
+	// its id; the wallet's coins name assets by id. Labels are read back to ids, or no labelled
+	// asset would ever be found accepted.
+	var labels map[string]string
+	_ = node.Call(&labels, "dumpassetlabels")
+	ids := map[string]string{}
+	for l, id := range labels {
+		ids[strings.ToLower(l)] = strings.ToLower(id)
+	}
 	rates := map[string]uint64{}
 	for a, r := range rawRates {
 		n, ok := new(big.Int).SetString(r.String(), 10)
 		if ok && n.Sign() > 0 && n.IsUint64() {
-			rates[strings.ToLower(a)] = n.Uint64()
+			k := strings.ToLower(a)
+			if id, ok := ids[k]; ok {
+				k = id
+			}
+			rates[k] = n.Uint64()
 		}
 	}
 	var utxos []struct {

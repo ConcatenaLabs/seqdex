@@ -72,6 +72,7 @@ type scriptedNode struct {
 	txouts  map[string]interface{} // per "txid:vout" gettxout responses, when set
 	unspent []utxoRow
 	rates   map[string]interface{} // getfeeexchangerates response
+	labels  map[string]string      // dumpassetlabels response (label -> id)
 
 	mempoolAllowed bool
 	rejectReason   string
@@ -128,6 +129,8 @@ func (n *scriptedNode) Call(out interface{}, method string, params ...interface{
 		return respond(n.unspent)
 	case "getfeeexchangerates":
 		return respond(n.rates)
+	case "dumpassetlabels":
+		return respond(n.labels)
 	case "getnewaddress":
 		n.addrN++
 		return respond(fmt.Sprintf("addr%d", n.addrN))
