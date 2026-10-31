@@ -40,16 +40,16 @@ type subAssetSellMakerConfig struct {
 	// the maker LOCKS that asset in an on-chain HTLC on the Sequentia chain
 	// (funded/refunded via seqRPCURL/seqWallet, Elements format; heights and
 	// btcDelta are SEQUENTIA heights) and bitcoind is not used at all.
-	quoteAsset string
-	seqRPCURL  string
-	seqWallet  string
-	assetLnSock  string // the maker's asset LN node (holdinvoice plugin; receives the asset)
-	btcDelta     uint32 // T_btc = parent tip + this (the maker's on-chain refund CLTV)
-	minBTCConf   int    // confs the maker waits on its own BTC funding before advertising
-	spendFee     uint64
-	holdTimeout  time.Duration
-	requote      bool
-	stateDir     string // per-lift session persistence (the funded on-chain leg + refund material)
+	quoteAsset  string
+	seqRPCURL   string
+	seqWallet   string
+	assetLnSock string // the maker's asset LN node (holdinvoice plugin; receives the asset)
+	btcDelta    uint32 // T_btc = parent tip + this (the maker's on-chain refund CLTV)
+	minBTCConf  int    // confs the maker waits on its own BTC funding before advertising
+	spendFee    uint64
+	holdTimeout time.Duration
+	requote     bool
+	stateDir    string // per-lift session persistence (the funded on-chain leg + refund material)
 }
 
 // buildSubAssetSellOffer builds a Lightning offer (base=asset, quote=BTC sentinel) with

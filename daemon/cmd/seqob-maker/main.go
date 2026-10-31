@@ -11,14 +11,14 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
-	"math"
 	"io/ioutil"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -477,9 +477,9 @@ func serve(conn *websocket.Conn, makers map[string]*client.Maker, ladder []*seqo
 	// waiting on its counterparty is silent precisely when it must NOT be killed.
 	var serveMu sync.Mutex
 	setBusyFn(func() int { serveMu.Lock(); defer serveMu.Unlock(); return len(accepted) })
-	takes := make(map[string]uint64)                    // session -> take_amount, for the settle-ack fill_base (B-1)
-	sessionMaker := make(map[string]*client.Maker)      // session -> the ladder level it lifted
-	o := ladder[0]                                      // every level shares one expiry window; level 0 represents it
+	takes := make(map[string]uint64)               // session -> take_amount, for the settle-ack fill_base (B-1)
+	sessionMaker := make(map[string]*client.Maker) // session -> the ladder level it lifted
+	o := ladder[0]                                 // every level shares one expiry window; level 0 represents it
 	// Exit-for-requote (see requote_exit.go). A co-sign session quiet for 10
 	// minutes is treated as abandoned (taker vanished after SwapAccept) so a
 	// stuck session can never pin a stale quote on the book forever.
