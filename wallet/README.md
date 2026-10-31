@@ -54,11 +54,16 @@ Elements code, untouched. What changed:
   asset; swap-side any-asset fees live in the daemon module's `CompleteSwap`.
 - Robustness fixes: non-200 / JSON-RPC-error node responses return errors
   instead of panicking; `importaddress` with `rescan=false` in `GetUtxos`.
-- **Value-log collection**: the wallet's whole state (every account and every
-  address it derived) is one badger value, rewritten on each change, so its
-  value log grows by that value every time an address is derived or an account
-  scanned. Every five minutes the daemon collects the log file after file while
-  each has half its bytes discarded, rather than one file every half hour.
+- **The wallet's state in a file of its own**: the wallet (every account and
+  every address it derived) is one value of a few megabytes. In badger every
+  version of it stayed in the value log until a memtable flush, which pointers
+  to it almost never trigger, so a store grew without bound. On disk it is kept
+  in `<datadir>/<network>/db/wallet.state`, written beside itself and renamed
+  over the old one; a store that holds it only in badger is read from there
+  until its first change moves it. A change that changes nothing stored (an
+  unlock, a lock) is not written at all. Every five minutes the daemon also
+  collects the badger value logs, file after file while each has half its bytes
+  discarded.
 
 ## Configuration
 

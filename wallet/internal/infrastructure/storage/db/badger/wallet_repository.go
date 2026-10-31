@@ -1,14 +1,20 @@
 package dbbadger
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
 	"sync"
 
+	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
 	"github.com/dgraph-io/badger/v4"
 	log "github.com/sirupsen/logrus"
 	"github.com/timshannon/badgerhold/v4"
-	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
 )
 
 const (
@@ -18,7 +24,13 @@ const (
 )
 
 type walletRepository struct {
-	store            *badgerhold.Store
+	store *badgerhold.Store
+	// stateFile holds the wallet when the store is on disk. The wallet is one value of a few
+	// megabytes (every account and every address it derived), and badger keeps each version of
+	// it in its value log until its memtable flushes, which pointers to it almost never fill:
+	// rewritten every few seconds, it grew a store to 905 GB. In a file of its own it is replaced
+	// in place. A store whose wallet is only in badger is read from there until its first change.
+	stateFile        string
 	chEvents         chan domain.WalletEvent
 	externalChEvents chan domain.WalletEvent
 	lock             *sync.Mutex
@@ -30,10 +42,10 @@ type walletRepository struct {
 }
 
 func NewWalletRepository(store *badgerhold.Store) domain.WalletRepository {
-	return newWalletRepository(store)
+	return newWalletRepository(store, "")
 }
 
-func newWalletRepository(store *badgerhold.Store) *walletRepository {
+func newWalletRepository(store *badgerhold.Store, stateFile string) *walletRepository {
 	chEvents := make(chan domain.WalletEvent, 10)
 	extrernalChEvents := make(chan domain.WalletEvent, 10)
 	lock := &sync.Mutex{}
@@ -42,7 +54,7 @@ func newWalletRepository(store *badgerhold.Store) *walletRepository {
 		log.Debugf(format, a...)
 	}
 	return &walletRepository{
-		store: store, chEvents: chEvents, externalChEvents: extrernalChEvents, lock: lock,
+		store: store, stateFile: stateFile, chEvents: chEvents, externalChEvents: extrernalChEvents, lock: lock,
 		writeLock: &sync.Mutex{}, log: logFn,
 	}
 }
@@ -115,6 +127,10 @@ func (r *walletRepository) UpdateWallet(
 	r.writeLock.Lock()
 	defer r.writeLock.Unlock()
 
+	before, err := r.getWallet(ctx)
+	if err != nil {
+		return err
+	}
 	wallet, err := r.getWallet(ctx)
 	if err != nil {
 		return err
@@ -125,6 +141,11 @@ func (r *walletRepository) UpdateWallet(
 		return err
 	}
 
+	// A change that changes nothing stored (an unlock, a lock, a label set to itself) is not
+	// written: a client unlocking on every call rewrote the whole wallet every few seconds.
+	if reflect.DeepEqual(before, updatedWallet) {
+		return nil
+	}
 	return r.updateWallet(ctx, updatedWallet)
 }
 
@@ -258,6 +279,13 @@ func (r *walletRepository) insertWallet(
 ) error {
 	var err error
 
+	if r.stateFile != "" && ctx.Value("tx") == nil {
+		if _, err := r.getWallet(ctx); err == nil {
+			return fmt.Errorf("wallet is already initialized")
+		}
+		return r.writeState(wallet)
+	}
+
 	if ctx.Value("tx") != nil {
 		tx := ctx.Value("tx").(*badger.Txn)
 		err = r.store.TxInsert(tx, walletKey, *wallet)
@@ -277,6 +305,20 @@ func (r *walletRepository) insertWallet(
 func (r *walletRepository) getWallet(ctx context.Context) (*domain.Wallet, error) {
 	var err error
 	var wallet domain.Wallet
+
+	if r.stateFile != "" && ctx.Value("tx") == nil {
+		b, err := os.ReadFile(r.stateFile)
+		if err == nil {
+			if err := gob.NewDecoder(bytes.NewReader(b)).Decode(&wallet); err != nil {
+				return nil, fmt.Errorf("reading %s: %w", r.stateFile, err)
+			}
+			return &wallet, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		// Not moved out of the store yet: read from there.
+	}
 
 	if ctx.Value("tx") != nil {
 		tx := ctx.Value("tx").(*badger.Txn)
@@ -298,11 +340,47 @@ func (r *walletRepository) getWallet(ctx context.Context) (*domain.Wallet, error
 func (r *walletRepository) updateWallet(
 	ctx context.Context, wallet *domain.Wallet,
 ) error {
+	if r.stateFile != "" && ctx.Value("tx") == nil {
+		return r.writeState(wallet)
+	}
 	if ctx.Value("tx") != nil {
 		tx := ctx.Value("tx").(*badger.Txn)
 		return r.store.TxUpdate(tx, walletKey, *wallet)
 	}
 	return r.store.Update(walletKey, *wallet)
+}
+
+// writeState replaces the wallet's file: written beside it, synced, then renamed over it, so a
+// crash leaves the old wallet or the new one, never a torn one.
+func (r *walletRepository) writeState(wallet *domain.Wallet) error {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(wallet); err != nil {
+		return err
+	}
+	tmp := r.stateFile + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(buf.Bytes()); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, r.stateFile); err != nil {
+		return err
+	}
+	if d, err := os.Open(filepath.Dir(r.stateFile)); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 func (r *walletRepository) publishEvent(event domain.WalletEvent) {
@@ -321,6 +399,9 @@ func (r *walletRepository) publishEvent(event domain.WalletEvent) {
 
 func (r *walletRepository) reset() {
 	r.store.Badger().DropAll()
+	if r.stateFile != "" {
+		_ = os.Remove(r.stateFile)
+	}
 }
 
 func (r *walletRepository) close() {

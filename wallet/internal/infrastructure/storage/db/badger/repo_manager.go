@@ -62,7 +62,11 @@ func NewRepoManager(baseDbDir string, logger badger.Logger) (ports.RepoManager, 
 	}
 
 	utxoRepo := newUtxoRepository(utxoDb)
-	walletRepo := newWalletRepository(walletDb)
+	stateFile := ""
+	if len(baseDbDir) > 0 {
+		stateFile = filepath.Join(baseDbDir, "wallet.state")
+	}
+	walletRepo := newWalletRepository(walletDb, stateFile)
 	txRepo := newTransactionRepository(txDb)
 	scriptRepo := newExternalScriptRepository(scriptDb)
 
