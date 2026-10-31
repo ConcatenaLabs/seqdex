@@ -3,13 +3,14 @@ package dbbadger
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
+	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
 	"github.com/dgraph-io/badger/v4"
 	log "github.com/sirupsen/logrus"
 	"github.com/timshannon/badgerhold/v4"
-	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
 )
 
 type utxoRepository struct {
@@ -47,13 +48,12 @@ func (r *utxoRepository) GetUtxosByKey(
 ) ([]*domain.Utxo, error) {
 	utxos := make([]*domain.Utxo, 0, len(utxoKeys))
 	for _, key := range utxoKeys {
-		query := badgerhold.Where("TxID").Eq(key.TxID).And("VOut").Eq(key.VOut)
-		foundUtxos, err := r.findUtxos(ctx, query)
+		utxo, err := r.utxoAt(ctx, key)
 		if err != nil {
 			return nil, err
 		}
-		if len(foundUtxos) > 0 {
-			utxos = append(utxos, foundUtxos[0])
+		if utxo != nil {
+			utxos = append(utxos, utxo)
 		}
 	}
 
@@ -383,17 +383,15 @@ func (r *utxoRepository) unlockUtxos(
 func (r *utxoRepository) spendUtxo(
 	ctx context.Context, key domain.UtxoKey, txid string,
 ) (bool, *domain.UtxoInfo, error) {
-	query := badgerhold.Where("TxID").Eq(key.TxID).And("VOut").Eq(key.VOut)
-	utxos, err := r.findUtxos(ctx, query)
+	utxo, err := r.utxoAt(ctx, key)
 	if err != nil {
 		return false, nil, err
 	}
 
-	if utxos == nil {
+	if utxo == nil {
 		return false, nil, nil
 	}
 
-	utxo := utxos[0]
 	if utxo.IsSpent() {
 		return false, nil, nil
 	}
@@ -412,17 +410,15 @@ func (r *utxoRepository) spendUtxo(
 func (r *utxoRepository) confirmSpendUtxo(
 	ctx context.Context, key domain.UtxoKey, status domain.UtxoStatus,
 ) (bool, *domain.UtxoInfo, error) {
-	query := badgerhold.Where("TxID").Eq(key.TxID).And("VOut").Eq(key.VOut)
-	utxos, err := r.findUtxos(ctx, query)
+	utxo, err := r.utxoAt(ctx, key)
 	if err != nil {
 		return false, nil, err
 	}
 
-	if utxos == nil {
+	if utxo == nil {
 		return false, nil, nil
 	}
 
-	utxo := utxos[0]
 	if utxo.IsConfirmedSpent() {
 		return false, nil, nil
 	}
@@ -441,17 +437,15 @@ func (r *utxoRepository) confirmSpendUtxo(
 func (r *utxoRepository) confirmUtxo(
 	ctx context.Context, key domain.UtxoKey, status domain.UtxoStatus,
 ) (bool, *domain.UtxoInfo, error) {
-	query := badgerhold.Where("TxID").Eq(key.TxID).And("VOut").Eq(key.VOut)
-	utxos, err := r.findUtxos(ctx, query)
+	utxo, err := r.utxoAt(ctx, key)
 	if err != nil {
 		return false, nil, err
 	}
 
-	if utxos == nil {
+	if utxo == nil {
 		return false, nil, nil
 	}
 
-	utxo := utxos[0]
 	if utxo.IsConfirmed() {
 		return false, nil, nil
 	}
@@ -470,17 +464,15 @@ func (r *utxoRepository) confirmUtxo(
 func (r *utxoRepository) lockUtxo(
 	ctx context.Context, key domain.UtxoKey, timestamp, expiryTimestamp int64,
 ) (bool, *domain.UtxoInfo, error) {
-	query := badgerhold.Where("TxID").Eq(key.TxID).And("VOut").Eq(key.VOut)
-	utxos, err := r.findUtxos(ctx, query)
+	utxo, err := r.utxoAt(ctx, key)
 	if err != nil {
 		return false, nil, err
 	}
 
-	if utxos == nil {
+	if utxo == nil {
 		return false, nil, nil
 	}
 
-	utxo := utxos[0]
 	if utxo.IsLocked() {
 		return false, nil, nil
 	}
@@ -497,17 +489,15 @@ func (r *utxoRepository) lockUtxo(
 func (r *utxoRepository) unlockUtxo(
 	ctx context.Context, key domain.UtxoKey,
 ) (bool, *domain.UtxoInfo, error) {
-	query := badgerhold.Where("TxID").Eq(key.TxID).And("VOut").Eq(key.VOut)
-	utxos, err := r.findUtxos(ctx, query)
+	utxo, err := r.utxoAt(ctx, key)
 	if err != nil {
 		return false, nil, err
 	}
 
-	if utxos == nil {
+	if utxo == nil {
 		return false, nil, nil
 	}
 
-	utxo := utxos[0]
 	if !utxo.IsLocked() {
 		return false, nil, nil
 	}
@@ -547,10 +537,59 @@ func (r *utxoRepository) findUtxos(
 	return utxos, nil
 }
 
+// utxoAt is the UTXO of `key`, read under the key it is stored at (its key's hash), or nil.
+// A query matching TxID and VOut decodes every UTXO in the store to compare them, and the
+// scanner confirms each UTXO it finds that way: an account catching up confirmed a block's
+// UTXOs one whole-store scan each, and kept two cores busy without catching up. The hash keeps
+// one byte of the output index, so a record found there for another output (256 apart in one
+// transaction) sends the lookup back to the query.
+func (r *utxoRepository) utxoAt(ctx context.Context, key domain.UtxoKey) (*domain.Utxo, error) {
+	utxo, found, err := r.storedAt(ctx, key)
+	if err != nil || found {
+		return utxo, err
+	}
+	utxos, err := r.findUtxos(ctx, badgerhold.Where("TxID").Eq(key.TxID).And("VOut").Eq(key.VOut))
+	if err != nil || len(utxos) == 0 {
+		return nil, err
+	}
+	return utxos[0], nil
+}
+
+// storedAt reads the record under `key`'s hash: found when it is `key`'s UTXO; not found, with
+// a nil UTXO, when the hash holds nothing or another output's.
+func (r *utxoRepository) storedAt(ctx context.Context, key domain.UtxoKey) (*domain.Utxo, bool, error) {
+	var utxo domain.Utxo
+	var err error
+	if tx, ok := ctx.Value("tx").(*badger.Txn); ok {
+		err = r.store.TxGet(tx, key.Hash(), &utxo)
+	} else {
+		err = r.store.Get(key.Hash(), &utxo)
+	}
+	if errors.Is(err, badgerhold.ErrNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if utxo.TxID != key.TxID || utxo.VOut != key.VOut {
+		return nil, false, nil
+	}
+	return &utxo, true, nil
+}
+
 func (r *utxoRepository) updateUtxo(
 	ctx context.Context, utxo *domain.Utxo,
 ) error {
 	key := utxo.Key()
+	// Replaced under its key's hash, where it is stored, unless that holds another output's.
+	if _, found, err := r.storedAt(ctx, key); err != nil {
+		return err
+	} else if found {
+		if tx, ok := ctx.Value("tx").(*badger.Txn); ok {
+			return r.store.TxUpdate(tx, key.Hash(), *utxo)
+		}
+		return r.store.Update(key.Hash(), *utxo)
+	}
 	query := badgerhold.Where("TxID").Eq(key.TxID).And("VOut").Eq(key.VOut)
 	if ctx.Value("tx") != nil {
 		tx := ctx.Value("tx").(*badger.Txn)
