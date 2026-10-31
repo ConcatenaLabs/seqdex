@@ -53,6 +53,11 @@ Elements code, untouched. What changed:
   asset; swap-side any-asset fees live in the daemon module's `CompleteSwap`.
 - Robustness fixes: non-200 / JSON-RPC-error node responses return errors
   instead of panicking; `importaddress` with `rescan=false` in `GetUtxos`.
+- **Value-log collection**: the wallet's whole state (every account and every
+  address it derived) is one badger value, rewritten on each change, so its
+  value log grows by that value every time an address is derived or an account
+  scanned. Every five minutes the daemon collects the log file after file while
+  each has half its bytes discarded, rather than one file every half hour.
 
 ## Configuration
 
@@ -88,6 +93,17 @@ OCEAN_DB_TYPE=badger OCEAN_NO_TLS=true \
 OCEAN_DATADIR=./oceand-data \
 ./bin/seqdex-wallet
 ```
+
+A badger store whose value log outgrew what the collector reclaims is copied,
+with the daemon stopped, into a new directory holding only each key's latest
+value, which then takes the old one's place:
+
+```sh
+go build -o ../bin/ocean-compact ./cmd/ocean-compact
+../bin/ocean-compact -src <datadir>/<network>/db/wallet -dst <datadir>/<network>/db/wallet.compact
+```
+
+It fails unless every key reads back from the copy with the same value.
 
 Then, with the CLI: `ocean config init --no-tls`, `ocean wallet create` /
 `unlock`, `ocean account create`, `ocean account derive`, `ocean account
