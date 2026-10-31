@@ -87,6 +87,34 @@ func plnMsatToBase(o *seqobv1.Offer, seqMsat uint64) uint64 {
 	return client.ProportionalBtcFloor(o.GetBaseAmount(), seqMsat, wholeMsat)
 }
 
+// plnWholeMsat is the offer's signed whole in msat, its counter (BTC or quote asset) leg and its
+// asset leg: what a taker prices a slice from (the crosser's plnWhole).
+func plnWholeMsat(o *seqobv1.Offer) (btcMsat, seqMsat uint64) {
+	if o.GetLightning().GetLnDirection() == offer.LnBTCLNForAssetLN { // the maker gives the asset
+		return o.GetWantAmount() * 1000, o.GetOfferAmount() * 1000
+	}
+	return o.GetOfferAmount() * 1000, o.GetWantAmount() * 1000
+}
+
+// plnRestRemainder re-rests what is left of o after `taken` base atoms filled, at the offer's own
+// rate: the counter leg the maker receives rounded up, the one it gives rounded down. -> the
+// remainder, 0 when nothing is left to rest.
+func plnRestRemainder(o *seqobv1.Offer, taken uint64) uint64 {
+	if taken == 0 || taken >= o.GetBaseAmount() {
+		return 0
+	}
+	remain := o.GetBaseAmount() - taken
+	if o.GetLightning().GetLnDirection() == offer.LnBTCLNForAssetLN {
+		o.WantAmount = client.ProportionalBtc(o.GetWantAmount(), remain, o.GetBaseAmount())
+		o.OfferAmount = remain
+	} else {
+		o.OfferAmount = client.ProportionalBtcFloor(o.GetOfferAmount(), remain, o.GetBaseAmount())
+		o.WantAmount = remain
+	}
+	o.BaseAmount = remain
+	return remain
+}
+
 func buildPureLNOffer(cfg pureLNMakerConfig, holdLnNodeID string) *seqobv1.Offer {
 	_, lnDir := cfg.plnDirection()
 	// The QUOTE (counter) leg: a real Sequentia asset id for an asset<->asset pure-LN market
@@ -330,16 +358,7 @@ func servePureLN(ws *crossWS, wsURL string, o *seqobv1.Offer, cfg pureLNMakerCon
 					if settled && partial {
 						mu.Lock()
 						taken := plnMsatToBase(o, filledSeqMsat)
-						if taken > 0 && taken < o.GetBaseAmount() {
-							remain := o.GetBaseAmount() - taken
-							if o.GetLightning().GetLnDirection() == offer.LnBTCLNForAssetLN {
-								o.WantAmount = client.ProportionalBtc(o.GetWantAmount(), remain, o.GetBaseAmount())
-								o.OfferAmount = remain
-							} else {
-								o.OfferAmount = client.ProportionalBtcFloor(o.GetOfferAmount(), remain, o.GetBaseAmount())
-								o.WantAmount = remain
-							}
-							o.BaseAmount = remain
+						if remain := plnRestRemainder(o, taken); remain > 0 {
 							fmt.Printf("session %s: PARTIAL fill (%d of %d atoms); re-resting the remainder %d\n",
 								sid, taken, taken+remain, remain)
 						}
@@ -362,12 +381,18 @@ func servePureLN(ws *crossWS, wsURL string, o *seqobv1.Offer, cfg pureLNMakerCon
 					}
 					requoteExitIfPending(idle)
 				}()
+				// A slice is priced off the offer as the relay holds it signed, the same whole the
+				// taker reads: after a partial fill that is the re-rested remainder, whose amounts
+				// were rounded, not the size the maker was started with.
+				mu.Lock()
+				btcMsat, seqMsat := plnWholeMsat(o)
+				mu.Unlock()
 				p := client.MakerPlnParams{
 					Direction:   dir,
 					NewMakerOps: newOps,
 					Crypter:     cr,
-					BtcAmtMsat:  cfg.btcSats * 1000,
-					SeqAmtMsat:  cfg.assetAmt * 1000,
+					BtcAmtMsat:  btcMsat,
+					SeqAmtMsat:  seqMsat,
 					HoldTimeout: cfg.holdTimeout,
 					Log:         logf,
 				}
