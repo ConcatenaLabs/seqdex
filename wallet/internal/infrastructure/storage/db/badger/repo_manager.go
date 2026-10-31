@@ -6,12 +6,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
+	"github.com/aejkcs50/seqdex/wallet/internal/core/ports"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/dgraph-io/badger/v4/options"
 	log "github.com/sirupsen/logrus"
 	"github.com/timshannon/badgerhold/v4"
-	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
-	"github.com/aejkcs50/seqdex/wallet/internal/core/ports"
 )
 
 // repoManager holds all the badgerhold stores and domain repositories
@@ -183,6 +183,35 @@ func (rm *repoManager) listenToScriptEvents() {
 	}
 }
 
+// How often the value log is collected, and the most files one collection
+// rewrites. The wallet's whole state is one value, rewritten on every change
+// (an address derived, an account scanned), so the value log grows by that
+// value on each: one rewrite every half hour fell behind it until the store
+// held 905 GB and the daemon spent its time paging. A collection now rewrites
+// file after file while each one has half its bytes discarded, and stops at
+// the first that does not.
+const (
+	gcEvery        = 5 * time.Minute
+	gcMostRewrites = 200
+)
+
+func collectValueLog(db *badger.DB, every time.Duration, most int) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for range ticker.C {
+		for i := 0; i < most; i++ {
+			err := db.RunValueLogGC(0.5)
+			if err == badger.ErrNoRewrite || err == badger.ErrRejected {
+				break
+			}
+			if err != nil {
+				log.Warnf("garbage collector: %s", err)
+				break
+			}
+		}
+	}
+}
+
 func createDb(dbDir string, logger badger.Logger) (*badgerhold.Store, error) {
 	isInMemory := len(dbDir) <= 0
 
@@ -206,16 +235,7 @@ func createDb(dbDir string, logger badger.Logger) (*badgerhold.Store, error) {
 	}
 
 	if !isInMemory {
-		ticker := time.NewTicker(30 * time.Minute)
-
-		go func() {
-			for {
-				<-ticker.C
-				if err := db.Badger().RunValueLogGC(0.5); err != nil && err != badger.ErrNoRewrite {
-					log.Warnf("garbage collector: %s", err)
-				}
-			}
-		}()
+		go collectValueLog(db.Badger(), gcEvery, gcMostRewrites)
 	}
 
 	return db, nil
