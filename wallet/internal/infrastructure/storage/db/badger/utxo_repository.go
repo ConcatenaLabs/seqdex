@@ -539,13 +539,14 @@ func (r *utxoRepository) findUtxos(
 
 // utxoAt is the UTXO of `key`, read under the key it is stored at (its key's hash), or nil.
 // A query matching TxID and VOut decodes every UTXO in the store to compare them, and the
-// scanner confirms each UTXO it finds that way: an account catching up confirmed a block's
-// UTXOs one whole-store scan each, and kept two cores busy without catching up. The hash keeps
-// one byte of the output index, so a record found there for another output (256 apart in one
+// scanner confirms each UTXO it finds, and each spend it sees, that way: an account catching
+// up made a whole-store scan per output, and kept two cores busy without catching up. Every
+// UTXO is inserted under its key's hash, so nothing there means no such UTXO. The hash keeps
+// one byte of the output index: only a record there for another output (256 apart in one
 // transaction) sends the lookup back to the query.
 func (r *utxoRepository) utxoAt(ctx context.Context, key domain.UtxoKey) (*domain.Utxo, error) {
-	utxo, found, err := r.storedAt(ctx, key)
-	if err != nil || found {
+	utxo, held, err := r.storedAt(ctx, key)
+	if err != nil || utxo != nil || !held {
 		return utxo, err
 	}
 	utxos, err := r.findUtxos(ctx, badgerhold.Where("TxID").Eq(key.TxID).And("VOut").Eq(key.VOut))
@@ -555,8 +556,8 @@ func (r *utxoRepository) utxoAt(ctx context.Context, key domain.UtxoKey) (*domai
 	return utxos[0], nil
 }
 
-// storedAt reads the record under `key`'s hash: found when it is `key`'s UTXO; not found, with
-// a nil UTXO, when the hash holds nothing or another output's.
+// storedAt reads the record under `key`'s hash: the UTXO when it is `key`'s; nil with `held`
+// when the hash holds another output's; nil and not held when it holds nothing.
 func (r *utxoRepository) storedAt(ctx context.Context, key domain.UtxoKey) (*domain.Utxo, bool, error) {
 	var utxo domain.Utxo
 	var err error
@@ -572,7 +573,7 @@ func (r *utxoRepository) storedAt(ctx context.Context, key domain.UtxoKey) (*dom
 		return nil, false, err
 	}
 	if utxo.TxID != key.TxID || utxo.VOut != key.VOut {
-		return nil, false, nil
+		return nil, true, nil
 	}
 	return &utxo, true, nil
 }
@@ -582,13 +583,15 @@ func (r *utxoRepository) updateUtxo(
 ) error {
 	key := utxo.Key()
 	// Replaced under its key's hash, where it is stored, unless that holds another output's.
-	if _, found, err := r.storedAt(ctx, key); err != nil {
+	if found, held, err := r.storedAt(ctx, key); err != nil {
 		return err
-	} else if found {
+	} else if found != nil {
 		if tx, ok := ctx.Value("tx").(*badger.Txn); ok {
 			return r.store.TxUpdate(tx, key.Hash(), *utxo)
 		}
 		return r.store.Update(key.Hash(), *utxo)
+	} else if !held {
+		return nil
 	}
 	query := badgerhold.Where("TxID").Eq(key.TxID).And("VOut").Eq(key.VOut)
 	if ctx.Value("tx") != nil {

@@ -102,3 +102,29 @@ func TestAnOutputSharingAKeyHashIsNotTakenForAnother(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, got[0].IsConfirmed(), "the stored output is untouched")
 }
+
+// A spend the scanner sees of an output the wallet never held is answered from the key's hash,
+// holding nothing, without a scan of the store: 3,000 of them beside 3,000 stored UTXOs.
+func TestASpendOfAnOutputNeverHeldIsNoScan(t *testing.T) {
+	ctx := context.Background()
+	rm, err := dbbadger.NewRepoManager(t.TempDir(), nil)
+	require.NoError(t, err)
+	defer rm.Close()
+	repo := rm.UtxoRepository()
+	const n = 3000
+	utxos := make([]*domain.Utxo, n)
+	for i := range utxos {
+		utxos[i] = utxoOf(i, 0)
+	}
+	_, err = repo.AddUtxos(ctx, utxos)
+	require.NoError(t, err)
+	start := time.Now()
+	for i := 0; i < n; i++ {
+		c, err := repo.ConfirmSpendUtxos(ctx, []domain.UtxoKey{{TxID: fmt.Sprintf("%064x", n+i), VOut: 1}}, domain.UtxoStatus{BlockHeight: 9})
+		require.NoError(t, err)
+		require.Equal(t, 0, c)
+	}
+	took := time.Since(start)
+	t.Logf("%d spends of outputs never held in %s", n, took)
+	require.Less(t, took, 10*time.Second)
+}
