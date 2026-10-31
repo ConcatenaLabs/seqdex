@@ -50,16 +50,16 @@ type subAssetMakerConfig struct {
 	// (verified/claimed via seqRPCURL/seqWallet, Elements format; heights and
 	// btcDelta are SEQUENTIA heights) and bitcoind is not used at all. Empty =
 	// the legacy BTC-sentinel sub-asset shape.
-	quoteAsset   string
-	seqRPCURL    string
-	seqWallet    string
-	assetLnSock  string        // the maker's SeqLN-on-Sequentia lightning-rpc (asset leg)
-	btcDelta     uint32        // T_btc = parent tip + this (the taker's on-chain refund CLTV)
-	minBTCConf   int           // confirmations required on the taker's BTC leg before paying the asset
-	spendFee     uint64        // BTC HTLC claim fee target (native sats)
-	holdTimeout  time.Duration // how long the maker waits for the taker to settle after it pays
-	requote      bool          // true = re-post a fresh offer after each settled fill instead of exiting
-	stateDir     string        // per-lift session persistence (P + the taker's on-chain leg once paid)
+	quoteAsset  string
+	seqRPCURL   string
+	seqWallet   string
+	assetLnSock string        // the maker's SeqLN-on-Sequentia lightning-rpc (asset leg)
+	btcDelta    uint32        // T_btc = parent tip + this (the taker's on-chain refund CLTV)
+	minBTCConf  int           // confirmations required on the taker's BTC leg before paying the asset
+	spendFee    uint64        // BTC HTLC claim fee target (native sats)
+	holdTimeout time.Duration // how long the maker waits for the taker to settle after it pays
+	requote     bool          // true = re-post a fresh offer after each settled fill instead of exiting
+	stateDir    string        // per-lift session persistence (P + the taker's on-chain leg once paid)
 }
 
 // buildSubAssetOffer builds a Lightning offer (base=asset, quote=the BTC sentinel)
@@ -347,7 +347,7 @@ func serveSubAsset(ws *crossWS, wsURL string, o *seqobv1.Offer, cfg subAssetMake
 				p := client.MakerSubAssetParams{
 					// Bind the on-chain-leg swap to the taker's H once it arrives (the
 					// hashlock must embed H for VerifyBTCLeg/ClaimBTCLeg).
-					NewMakerOps: newOps,
+					NewMakerOps:   newOps,
 					AssetLNNodeID: assetLNID,
 					Crypter:       cr,
 					// Claim the taker's BTC HTLC with the maker's IDENTITY key, so its pubkey
