@@ -185,7 +185,7 @@ func TestPureLNBuyTakerRejectsBadAmount(t *testing.T) {
 			NewMakerOps: func() PlnMakerOps { return &fakePlnMakerOps{st: st} },
 			Crypter:     mc,
 			SeqAmtMsat:  assetMsat,
-			BtcAmtMsat:  btcMsat + 999, // != taker's expectation
+			BtcAmtMsat:  btcMsat + 50_000, // != taker's expectation, by more than PlnPriceSlackMsat
 			HoldTimeout: 2 * time.Second,
 			Timing:      XcTiming{TermsReqWait: 2 * time.Second, BtcFundWait: 2 * time.Second},
 		}, net.toMaker, net.makerSend)
@@ -420,5 +420,59 @@ func TestPureLNSellPartialRoundsTheOtherWay(t *testing.T) {
 	}
 	if makerRes.FilledBtcMsat != wantBtc {
 		t.Fatalf("maker and taker disagree on the slice price: %d vs %d", makerRes.FilledBtcMsat, wantBtc)
+	}
+}
+
+// A maker that re-rested the remainder of a partly filled offer prices a slice off the new whole,
+// a taker that read the book before the re-rest off the earlier one: a few hundred msat apart. The
+// taker sends its price with the request and the maker takes it, so the slice settles (it failed
+// with "maker BTC amount N != the N the offer's ratio gives").
+func TestPureLNSliceSettlesAcrossARerest(t *testing.T) {
+	st := &plnState{}
+	tc, mc := testCrypters(t)
+	net := newFakeXcNet()
+	const wholeAsset = uint64(1_000_000_000)
+	const takerBtc, makerBtc = uint64(2_000_000_000), uint64(2_000_003_371) // the re-rest moved the counter leg
+	const take = wholeAsset / 3
+	var makerRes *MakerPlnResult
+	var makerErr error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		makerRes, makerErr = RunMakerPureLNBuy(MakerPlnParams{
+			NewMakerOps: func() PlnMakerOps { return &fakePlnMakerOps{st: st} },
+			Crypter:     mc, SeqAmtMsat: wholeAsset, BtcAmtMsat: makerBtc, HoldTimeout: 3 * time.Second,
+			Timing: XcTiming{TermsReqWait: 2 * time.Second, BtcFundWait: 3 * time.Second},
+		}, net.toMaker, net.makerSend)
+	}()
+	takerRes, takerErr := RunTakerPureLNBuy(TakerPlnParams{
+		Ops: &fakePlnTakerOps{st: st}, Crypter: tc, SeqAmtMsat: wholeAsset, BtcAmtMsat: takerBtc, TakeSeqMsat: take,
+		Timing: XcTiming{TermsWait: 2 * time.Second, SeqLockWait: 3 * time.Second},
+	}, net.takerSend, net.takerRecv)
+	wg.Wait()
+	if takerErr != nil || makerErr != nil {
+		t.Fatalf("taker %v, maker %v", takerErr, makerErr)
+	}
+	want := ProportionalBtcFloor(takerBtc, take, wholeAsset)
+	if own := ProportionalBtcFloor(makerBtc, take, wholeAsset); own == want {
+		t.Fatalf("the test's two wholes price the slice alike (%d): it proves nothing", own)
+	}
+	if takerRes.FilledBtcMsat != want || makerRes.FilledBtcMsat != want || !makerRes.Settled {
+		t.Fatalf("filled taker %d maker %d (settled %v), want both %d", takerRes.FilledBtcMsat, makerRes.FilledBtcMsat, makerRes.Settled, want)
+	}
+}
+
+func TestPlnAgreedBtc(t *testing.T) {
+	for _, c := range []struct{ own, asked, want uint64 }{
+		{1000, 0, 1000},                            // an older taker sends no price
+		{7393764953, 7393764110, 7393764110},       // the live gap, 843 msat
+		{7393764110, 7393764953, 7393764953},       // either way
+		{1000, 1000 + PlnPriceSlackMsat + 1, 1000}, // past the slack: the maker's own
+		{1_000_000, 1_000_000 - PlnPriceSlackMsat, 1_000_000 - PlnPriceSlackMsat},
+	} {
+		if got := PlnAgreedBtc(c.own, c.asked); got != c.want {
+			t.Fatalf("PlnAgreedBtc(%d, %d) = %d, want %d", c.own, c.asked, got, c.want)
+		}
 	}
 }
