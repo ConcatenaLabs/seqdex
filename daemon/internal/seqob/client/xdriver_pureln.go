@@ -201,6 +201,8 @@ func RunMakerPureLN(p MakerPlnParams, in <-chan []byte, send XcSend) (*MakerPlnR
 		sendXcFail(p.Crypter, send, "DUST", "that slice prices to zero")
 		return res, fmt.Errorf("pureln maker: take %d of %d prices to 0 msat", takeSeq, p.SeqAmtMsat)
 	}
+	// The taker's own price of the slice, when it sends one, is taken within PlnPriceSlackMsat.
+	takeBtc = PlnAgreedBtc(takeBtc, req.BtcAmount)
 	res.FilledSeqMsat = takeSeq
 	res.FilledBtcMsat = takeBtc
 	res.RemainderSeqMsat = p.SeqAmtMsat - takeSeq
@@ -347,7 +349,9 @@ func RunTakerPureLN(p TakerPlnParams, send XcSend, recv XcRecv) (*TakerPlnResult
 
 	// WIRE NOTE: seq_amount rides as a JSON NUMBER — a quoted string unmarshals to 0
 	// in the Go peer, which here would read as "the whole offer".
-	if err := sendXc(&XcMsg{Type: XcPlnTermsRequest, SeqAmount: takeSeq}, p.Crypter, send); err != nil {
+	// The price we derived goes with the request (BtcAmount), so a maker that re-rested this
+	// offer's remainder between our read of the book and this request prices off our whole.
+	if err := sendXc(&XcMsg{Type: XcPlnTermsRequest, SeqAmount: takeSeq, BtcAmount: takeBtc}, p.Crypter, send); err != nil {
 		return nil, err
 	}
 	stage("terms-requested")
@@ -437,3 +441,28 @@ func RunTakerPureLNSell(p TakerPlnParams, send XcSend, recv XcRecv) (*TakerPlnRe
 
 // ErrLNPeer flags a counterparty protocol violation in a pure-LN swap.
 var ErrLNPeer = fmt.Errorf("pure-LN peer protocol violation")
+
+// PlnPriceSlackMsat is how far a taker's price of a pure-LN slice may differ from the maker's own
+// for the maker to take the taker's. A maker re-rests the remainder of a partly filled offer under
+// the same offer id, its counter leg rounded to the unit; a taker that read the book before the
+// re-rest prices the slice off the earlier whole, the maker off the new one, and the two differ by
+// at most about one unit of the counter leg (1000 msat) and a rounding msat. Two units cover that,
+// and are worth nothing next to any slice.
+const PlnPriceSlackMsat = 2000
+
+// PlnAgreedBtc is the counter-leg msat a pure-LN maker quotes for a slice it prices at `own`, when
+// the taker's request priced it at `asked` (0: a taker that sends no price): the taker's figure
+// when it is within PlnPriceSlackMsat of the maker's, so both sides hold the same number.
+func PlnAgreedBtc(own, asked uint64) uint64 {
+	if asked == 0 {
+		return own
+	}
+	d := own - asked
+	if asked > own {
+		d = asked - own
+	}
+	if d <= PlnPriceSlackMsat {
+		return asked
+	}
+	return own
+}
