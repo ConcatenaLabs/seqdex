@@ -56,8 +56,11 @@ func TestCovenantLegCommandAsk(t *testing.T) {
 	if flags["-base"] != tBase || flags["-quote"] != tQuote {
 		t.Fatalf("pair flags wrong: %v", flags)
 	}
-	if flags["-seq-rpc"] != e.Caps.SeqRPC || flags["-seq-wallet"] != e.Caps.SeqWallet {
-		t.Fatalf("seq node flags wrong: %v", flags)
+	if _, onCmdLine := flags["-seq-rpc"]; onCmdLine || flags["-seq-wallet"] != e.Caps.SeqWallet {
+		t.Fatalf("seq node flags wrong (the node URL travels in the environment): %v", flags)
+	}
+	if !hasEnv(e.Caps.childEnv(), "SEQOB_SEQ_RPC="+e.Caps.SeqRPC) {
+		t.Fatalf("child env lacks SEQOB_SEQ_RPC")
 	}
 	if flags["-offer-id"] != n.Offer.GetOfferId() || flags["-maker-pubkey"] != n.Offer.GetMakerPubkey() {
 		t.Fatalf("offer identity flags wrong: %v", flags)

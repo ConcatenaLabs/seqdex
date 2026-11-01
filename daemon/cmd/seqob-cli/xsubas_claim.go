@@ -15,7 +15,7 @@ import (
 
 func cmdXSubAsClaimBTC(args []string) {
 	fs := newFlagSet("xsubas-claim-btc")
-	btcRPCURL := fs.String("btc-rpc", "", "bitcoind RPC URL http://user:pass@host:port (required)")
+	btcRPCURL := envString(fs, "btc-rpc", "SEQOB_BTC_RPC", "bitcoind RPC URL http://user:pass@host:port (required)")
 	btcWallet := fs.String("btc-wallet", "", "bitcoind wallet that RECEIVES the claimed BTC")
 	btcChainName := fs.String("btc-chain", "testnet4", "parent chain params: testnet4 | regtest")
 	txid := fs.String("txid", "", "maker BTC HTLC funding txid (from /swap btc_htlc.txid) (required)")

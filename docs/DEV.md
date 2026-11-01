@@ -192,7 +192,7 @@ wallet syncs the UTXO/balance. Drive it with the `ocean` CLI
    `taker-key` writes the taker's signing and blinding keys to the file, mode
    600, and prints the address that pays them (unblinded, and its blinded
    form); fund it with what the lift pays. The keys can also be given as
-   `-taker-priv`/`-taker-blinding`, which puts them on the command line. Without
+   `-taker-priv`/`-taker-blinding` (or `SEQOB_TAKER_PRIV`/`SEQOB_TAKER_BLINDING`), the flags putting them on the command line. Without
    `-esplora` and a key the lift runs in demo mode against an in-memory stub
    wallet (it exercises the courier handshake but settles nothing on-chain);
    with them the taker funds and broadcasts a real swap. `seqob-crosser` takes
@@ -231,6 +231,17 @@ Taker:
 ./bin/seqob-cli xrefund     -state-file lift.json -btc-rpc ... -btc-wallet ... -wait
 ./bin/seqob-cli xrefund-seq -state-file sell.json -seq-rpc ... -seq-wallet ... -wait
 ```
+
+A node URL carries its RPC password, and anything on a command line is
+readable by every user on the machine (`ps`, `/proc/<pid>/cmdline`). So every
+seqob-cli flag that holds one also reads its environment when it is not given:
+`-seq-rpc` from `SEQOB_SEQ_RPC`, `-btc-rpc` from `SEQOB_BTC_RPC`, `-xseq-rpc`
+from `SEQOB_XSEQ_RPC`, `-taker-priv` and `-taker-blinding` from
+`SEQOB_TAKER_PRIV` and `SEQOB_TAKER_BLINDING`; seqob-maker reads
+`SEQOB_NODE_RPC`, `SEQOB_BTC_RPC`, `SEQOB_XSEQ_RPC` and `SEQOB_MAKER_PRIV`
+the same way. On a shared machine, set them from a mode-600 environment file
+(a systemd `EnvironmentFile=`) and leave the flags out. A usage text never
+prints a value read from the environment.
 
 After a maker crash, `./bin/seqob-maker -resume -xstate-dir xmaker-sessions ...`
 finishes every non-terminal session (claim or refund) and exits.

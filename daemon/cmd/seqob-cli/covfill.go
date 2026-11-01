@@ -48,7 +48,7 @@ func cmdCovFill(args []string) {
 	offerIDs := fs.String("offer-id", "", "offer id(s) to fill, comma-separated (required)")
 	makerPubs := fs.String("maker-pubkey", "", "maker pubkey of each offer, comma-separated in the same order (required)")
 	amounts := fs.String("amount", "0", "asset-A atoms to take of each offer, comma-separated (0 = the whole covenant; a dust remainder auto-shrinks)")
-	seqRPCURL := fs.String("seq-rpc", "", "Sequentia node RPC URL http://user:pass@host:port (required)")
+	seqRPCURL := envString(fs, "seq-rpc", "SEQOB_SEQ_RPC", "Sequentia node RPC URL http://user:pass@host:port (required)")
 	seqWallet := fs.String("seq-wallet", "", "Sequentia node wallet funding the fill (pays asset B + the fee, receives asset A) (required)")
 	feeAsset := fs.String("fee-asset", "", "fee asset (display hex; default: the asset the fill pays in, if the node accepts it for fees, else the accepted asset whose largest coin in the wallet covers the most fees)")
 	spendFee := fs.Uint64("spend-fee", 2000, "explicit network fee, in the fee asset's own atoms")

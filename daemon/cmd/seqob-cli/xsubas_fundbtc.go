@@ -39,7 +39,7 @@ func cmdXSubAsFundBtc(args []string) {
 	hashHex := fs.String("hash", "", "the swap hash H (hex) = SHA256(device preimage); the HTLC is locked on it (required)")
 	btcAmount := fs.Uint64("btc-amount", 0, "BTC sats to lock in the HTLC (required)")
 	btcLocktime := fs.Uint("btc-locktime", 0, "T_btc: the CLTV height for the device refund branch (required; = btc_tip + offer OnchainCltv)")
-	btcRPCURL := fs.String("btc-rpc", "", "bitcoind RPC URL http://user:pass@host:port (required)")
+	btcRPCURL := envString(fs, "btc-rpc", "SEQOB_BTC_RPC", "bitcoind RPC URL http://user:pass@host:port (required)")
 	btcWallet := fs.String("btc-wallet", "", "bitcoind wallet holding the USER's BTC that funds the HTLC")
 	btcChainName := fs.String("btc-chain", "testnet4", "parent chain params: testnet4 | regtest")
 	refundPubHex := fs.String("refund-pub", "", "LSP payer-bridge: the CALLER's OWN refund pubkey (33-byte compressed hex) to embed in the redeem script; when set, NO refund key is minted or returned here (the caller persisted its private key BEFORE broadcast). Mutually exclusive with -refund-priv.")

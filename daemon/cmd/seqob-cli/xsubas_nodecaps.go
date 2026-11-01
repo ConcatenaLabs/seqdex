@@ -28,7 +28,7 @@ import (
 
 func cmdXSubAsNodeCaps(args []string) {
 	fs := newFlagSet("xsubas-node-caps")
-	btcRPCURL := fs.String("btc-rpc", "", "bitcoind RPC URL http://user:pass@host:port (required)")
+	btcRPCURL := envString(fs, "btc-rpc", "SEQOB_BTC_RPC", "bitcoind RPC URL http://user:pass@host:port (required)")
 	btcWallet := fs.String("btc-wallet", "", "bitcoind wallet (optional; the capability check is node-level, not wallet-level)")
 	btcChainName := fs.String("btc-chain", "testnet4", "parent chain params: testnet4 | regtest")
 	_ = fs.Parse(args)

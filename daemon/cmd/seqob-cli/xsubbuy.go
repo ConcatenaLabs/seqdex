@@ -57,7 +57,7 @@ func cmdXSubBuy(args []string) {
 	offerID := fs.String("offer-id", "", "offer id to lift (empty: first verified REVERSE lightning offer for -asset)")
 	makerPub := fs.String("maker-pubkey", "", "maker pubkey of the offer (with -offer-id)")
 	priv := fs.String("priv", "", "DEPRECATED and ignored: the taker session key is minted fresh per run. A reused session key derives the same courier key with the same maker for every lift, which lets a relay replay one session's frames into another")
-	seqRPCURL := fs.String("seq-rpc", "", "Sequentia node RPC URL http://user:pass@host:port (required)")
+	seqRPCURL := envString(fs, "seq-rpc", "SEQOB_SEQ_RPC", "Sequentia node RPC URL http://user:pass@host:port (required)")
 	seqWallet := fs.String("seq-wallet", "", "Sequentia node wallet receiving the asset")
 	lnSocket := fs.String("ln-socket", "", "the taker's SeqLN-on-Bitcoin lightning-rpc unix socket (pays the invoice) (required)")
 	minAnchor := fs.Int64("min-anchor-depth", 3, "Bitcoin-anchor depth required on the maker's asset HTLC before we pay (>=2; the taker's cross-leg gate)")

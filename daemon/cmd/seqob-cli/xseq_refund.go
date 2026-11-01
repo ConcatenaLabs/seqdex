@@ -31,7 +31,7 @@ import (
 
 func cmdXSeqRefund(args []string) {
 	fs := newFlagSet("xseq-refund")
-	seqRPCURL := fs.String("seq-rpc", "", "Sequentia node RPC URL http://user:pass@host:port (required)")
+	seqRPCURL := envString(fs, "seq-rpc", "SEQOB_SEQ_RPC", "Sequentia node RPC URL http://user:pass@host:port (required)")
 	seqWallet := fs.String("seq-wallet", "", "Sequentia node wallet that RECEIVES the reclaimed asset (the funder's own wallet)")
 	txid := fs.String("txid", "", "the asset HTLC funding txid (required)")
 	vout := fs.Uint("vout", 0, "the asset HTLC funding vout")

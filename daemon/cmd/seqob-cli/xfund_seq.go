@@ -29,7 +29,7 @@ func cmdXFundSeq(args []string) {
 	hashHex := fs.String("hash", "", "the swap hash H (hex) = the maker's H from the handshake; the HTLC is locked on it (required)")
 	seqAmount := fs.Uint64("seq-amount", 0, "asset atoms to lock in the HTLC (the offer's base/want amount) (required)")
 	seqLocktime := fs.Uint("seq-locktime", 0, "T_seq: the CLTV height for the taker refund branch (from the handshake) (required)")
-	seqRPCURL := fs.String("seq-rpc", "", "Sequentia node RPC URL http://user:pass@host:port (required)")
+	seqRPCURL := envString(fs, "seq-rpc", "SEQOB_SEQ_RPC", "Sequentia node RPC URL http://user:pass@host:port (required)")
 	seqWallet := fs.String("seq-wallet", "", "Sequentia node wallet holding the asset that funds the HTLC (required)")
 	refundPrivHex := fs.String("refund-priv", "", "the taker's OWN asset refund privkey (32-byte hex); its pubkey MUST equal the taker_seq_refund_pub given to the LSP (required)")
 	noWait := fs.Bool("no-wait", false, "return as soon as the HTLC is broadcast (0-conf, empty block_hash) so the caller relays the leg to the maker immediately, before the LSP's courier session idles through a SEQ block; the maker polls VerifySEQLeg until it confirms")
