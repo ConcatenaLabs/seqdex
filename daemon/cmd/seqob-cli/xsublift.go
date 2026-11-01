@@ -67,7 +67,7 @@ func cmdXSubLift(args []string) {
 	offerID := fs.String("offer-id", "", "offer id to lift (empty: first verified NORMAL lightning offer for -asset)")
 	makerPub := fs.String("maker-pubkey", "", "maker pubkey of the offer (with -offer-id)")
 	priv := fs.String("priv", "", "taker SESSION secret key (32-byte hex, E2E only); generated if empty")
-	seqRPCURL := fs.String("seq-rpc", "", "Sequentia node RPC URL http://user:pass@host:port (required)")
+	seqRPCURL := envString(fs, "seq-rpc", "SEQOB_SEQ_RPC", "Sequentia node RPC URL http://user:pass@host:port (required)")
 	seqWallet := fs.String("seq-wallet", "", "Sequentia node wallet funding the asset leg")
 	lnSocket := fs.String("ln-socket", "", "the taker's SeqLN-on-Bitcoin lightning-rpc unix socket (receives the BTC-LN) (required)")
 	invoiceCltv := fs.Uint("invoice-cltv", 0, "min_final_cltv_expiry on the minted invoice (0 = node default)")

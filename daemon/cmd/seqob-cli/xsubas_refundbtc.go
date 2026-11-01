@@ -32,7 +32,7 @@ import (
 
 func cmdXSubAsRefundBTC(args []string) {
 	fs := newFlagSet("xsubas-refund-btc")
-	btcRPCURL := fs.String("btc-rpc", "", "bitcoind RPC URL http://user:pass@host:port (required)")
+	btcRPCURL := envString(fs, "btc-rpc", "SEQOB_BTC_RPC", "bitcoind RPC URL http://user:pass@host:port (required)")
 	btcWallet := fs.String("btc-wallet", "", "bitcoind wallet that RECEIVES the reclaimed BTC (the LSP's own recoup wallet)")
 	btcChainName := fs.String("btc-chain", "testnet4", "parent chain params: testnet4 | regtest")
 	txid := fs.String("txid", "", "the LSP-funded BTC HTLC funding txid (required)")

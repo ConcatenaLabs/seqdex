@@ -45,16 +45,16 @@ func main() {
 	minTTL := flag.Duration("min-ttl", 5*time.Minute, "drop offers expiring sooner than this (a leg must outlive its settlement)")
 
 	// Inventory / node wiring (the maker fleet's flag idiom).
-	seqRPC := flag.String("seq-rpc", "", "Sequentia node RPC URL http://user:pass@host:port (on-chain asset legs)")
+	seqRPC := envString(flag.CommandLine, "seq-rpc", "SEQOB_SEQ_RPC", "Sequentia node RPC URL http://user:pass@host:port (on-chain asset legs)")
 	seqWallet := flag.String("seq-wallet", "", "Sequentia node wallet holding the agent's on-chain asset inventory")
-	btcRPC := flag.String("btc-rpc", "", "bitcoind RPC URL (on-chain BTC legs)")
+	btcRPC := envString(flag.CommandLine, "btc-rpc", "SEQOB_BTC_RPC", "bitcoind RPC URL (on-chain BTC legs)")
 	btcWallet := flag.String("btc-wallet", "", "bitcoind wallet holding the agent's BTC inventory")
 	btcChain := flag.String("btc-chain", "testnet4", "parent chain params: testnet4 | regtest")
 	assetLN := flag.String("asset-ln-socket", "", "the agent's SeqLN-on-Sequentia lightning-rpc unix socket (asset-LN legs)")
 	btcLN := flag.String("btc-ln-socket", "", "the agent's SeqLN-on-Bitcoin lightning-rpc unix socket (BTC-LN legs)")
 	esplora := flag.String("esplora", "", "esplora API URL (enables same-chain lift legs)")
-	takerPriv := flag.String("taker-priv", "", "same-chain lift on-chain signing key (32-byte hex)")
-	takerBlinding := flag.String("taker-blinding", "", "same-chain lift blinding key (32-byte hex)")
+	takerPriv := envString(flag.CommandLine, "taker-priv", "SEQOB_TAKER_PRIV", "same-chain lift on-chain signing key (32-byte hex)")
+	takerBlinding := envString(flag.CommandLine, "taker-blinding", "SEQOB_TAKER_BLINDING", "same-chain lift blinding key (32-byte hex)")
 	takerKeyFile := flag.String("taker-key-file", "", "same-chain lift: a file holding the taker's two keys (seqob-cli taker-key makes one), passed on to seqob-cli by its path so no key is on a command line")
 
 	// Economics.
@@ -365,4 +365,14 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// envString defines a string flag whose value, when the flag is not given,
+// comes from the environment variable env. The value is never the flag's
+// printed default, so a usage text (which these programs write to their logs)
+// shows no secret held in it.
+func envString(fs *flag.FlagSet, name, env, usage string) *string {
+	p := fs.String(name, "", usage+" (env "+env+")")
+	*p = os.Getenv(env)
+	return p
 }

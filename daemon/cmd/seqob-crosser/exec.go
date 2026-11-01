@@ -32,6 +32,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -176,8 +177,8 @@ func (e *Executor) legCommand(n *NormOrder, take uint64) (args []string, stateFi
 	case n.Family == FamCross && n.Side == SideAsk: // buy the asset with on-chain BTC
 		stateFile = e.stateFile("xlift")
 		args = append([]string{"xlift", "-asset", n.Base,
-			"-btc-rpc", c.BtcRPC, "-btc-wallet", c.BtcWallet, "-btc-chain", c.BtcChain,
-			"-seq-rpc", c.SeqRPC, "-seq-wallet", c.SeqWallet,
+			"-btc-wallet", c.BtcWallet, "-btc-chain", c.BtcChain,
+			"-seq-wallet", c.SeqWallet,
 			"-min-btc-conf", fmt.Sprint(c.MinBTCConf),
 			"-amount", fmt.Sprint(amt), "-spend-fee", fmt.Sprint(c.SpendFee),
 			"-btc-fee-rate", fmt.Sprint(c.BtcFeeRate),
@@ -188,8 +189,8 @@ func (e *Executor) legCommand(n *NormOrder, take uint64) (args []string, stateFi
 	case n.Family == FamCross && n.Side == SideBid: // sell the asset for on-chain BTC
 		stateFile = e.stateFile("xsell")
 		args = append([]string{"xsell", "-asset", n.Base,
-			"-btc-rpc", c.BtcRPC, "-btc-wallet", c.BtcWallet, "-btc-chain", c.BtcChain,
-			"-seq-rpc", c.SeqRPC, "-seq-wallet", c.SeqWallet,
+			"-btc-wallet", c.BtcWallet, "-btc-chain", c.BtcChain,
+			"-seq-wallet", c.SeqWallet,
 			"-min-btc-conf", fmt.Sprint(c.MinBTCConf),
 			"-amount", fmt.Sprint(amt), "-spend-fee", fmt.Sprint(c.SpendFee),
 			"-btc-fee-rate", fmt.Sprint(c.BtcFeeRate),
@@ -200,7 +201,7 @@ func (e *Executor) legCommand(n *NormOrder, take uint64) (args []string, stateFi
 	case n.Family == FamSubmarine && n.Side == SideBid: // sell the asset on-chain, receive BTC-LN
 		stateFile = e.stateFile("xsublift")
 		args = append([]string{"xsublift", "-asset", n.Base,
-			"-seq-rpc", c.SeqRPC, "-seq-wallet", c.SeqWallet,
+			"-seq-wallet", c.SeqWallet,
 			"-ln-socket", c.BtcLNSocket,
 			"-spend-fee", fmt.Sprint(c.SpendFee),
 			"-state-file", stateFile}, common...)
@@ -209,7 +210,7 @@ func (e *Executor) legCommand(n *NormOrder, take uint64) (args []string, stateFi
 	case n.Family == FamSubmarine && n.Side == SideAsk: // buy the asset, pay BTC-LN
 		stateFile = e.stateFile("xsubbuy")
 		args = append([]string{"xsubbuy", "-asset", n.Base,
-			"-seq-rpc", c.SeqRPC, "-seq-wallet", c.SeqWallet,
+			"-seq-wallet", c.SeqWallet,
 			"-ln-socket", c.BtcLNSocket,
 			"-spend-fee", fmt.Sprint(c.SpendFee),
 			"-state-file", stateFile}, common...)
@@ -258,7 +259,7 @@ func (e *Executor) legCommand(n *NormOrder, take uint64) (args []string, stateFi
 		}
 		args = append([]string{"covfill",
 			"-base", n.Offer.GetPair().GetBaseAsset(), "-quote", n.Offer.GetPair().GetQuoteAsset(),
-			"-seq-rpc", c.SeqRPC, "-seq-wallet", c.SeqWallet,
+			"-seq-wallet", c.SeqWallet,
 			"-spend-fee", fmt.Sprint(c.SpendFee),
 			"-max-pay", fmt.Sprint(maxPay),
 			"-amount", fmt.Sprint(covAmt)}, common...)
@@ -279,7 +280,7 @@ func (e *Executor) legCommand(n *NormOrder, take uint64) (args []string, stateFi
 		if c.TakerKeyFile != "" {
 			args = append(args, "-taker-key-file", c.TakerKeyFile)
 		} else {
-			args = append(args, "-taker-priv", c.TakerPriv, "-taker-blinding", c.TakerBlinding)
+			// The two keys reach seqob-cli in its environment (childEnv), never on its command line.
 		}
 		resume = "same-chain lift is a single co-signed tx: nothing to refund on failure"
 
@@ -294,9 +295,9 @@ func (e *Executor) legCommand(n *NormOrder, take uint64) (args []string, stateFi
 func (e *Executor) appendSubAssetChain(args []string, n *NormOrder) []string {
 	c := &e.Caps
 	if n.Quote == offer.BTCSentinel {
-		return append(args, "-btc-rpc", c.BtcRPC, "-btc-wallet", c.BtcWallet, "-btc-chain", c.BtcChain)
+		return append(args, "-btc-wallet", c.BtcWallet, "-btc-chain", c.BtcChain)
 	}
-	return append(args, "-quote-asset", n.Quote, "-xseq-rpc", c.SeqRPC, "-xseq-wallet", c.SeqWallet)
+	return append(args, "-quote-asset", n.Quote, "-xseq-wallet", c.SeqWallet)
 }
 
 // runCLI executes seqob-cli, streaming its output into the crosser log. Settled
@@ -310,8 +311,26 @@ func (e *Executor) appendSubAssetChain(args []string, n *NormOrder) []string {
 // deadline and then a SIGTERM, which the CLIs handle by persisting and exiting.
 var committedMarkers = []string{"leg funded", "HTLC funded", "funds now committed", "paying ", "PAID"}
 
+// childEnv hands seqob-cli the node URLs (which carry their RPC passwords) and
+// the taker's keys in its environment rather than on its command line, where
+// `ps` and /proc/<pid>/cmdline show them to every user on the machine. seqob-cli
+// reads each of these as the default of its flag of the same name.
+func (c *Caps) childEnv() []string {
+	env := os.Environ()
+	for _, kv := range [][2]string{
+		{"SEQOB_SEQ_RPC", c.SeqRPC}, {"SEQOB_XSEQ_RPC", c.SeqRPC}, {"SEQOB_BTC_RPC", c.BtcRPC},
+		{"SEQOB_TAKER_PRIV", c.TakerPriv}, {"SEQOB_TAKER_BLINDING", c.TakerBlinding},
+	} {
+		if kv[1] != "" {
+			env = append(env, kv[0]+"="+kv[1])
+		}
+	}
+	return env
+}
+
 func (e *Executor) runCLI(args []string) (settled bool, err error) {
 	cmd := exec.Command(e.Caps.SeqobCli, args...)
+	cmd.Env = e.Caps.childEnv()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return false, err

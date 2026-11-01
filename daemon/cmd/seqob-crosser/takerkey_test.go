@@ -30,9 +30,25 @@ func TestSameChainLiftTakesTheKeyFileByPath(t *testing.T) {
 			t.Fatalf("lift args %v carry %s", args, a)
 		}
 	}
-	// the two keys as flags still work as before
-	args, _, _, _ = liftExecutor().legCommand(n, 10)
-	if _, f := argsMap(t, args); f["-taker-priv"] != "11" || f["-taker-blinding"] != "22" {
-		t.Fatalf("lift args with the key flags %v", args)
+	// the two keys given as flags reach seqob-cli in its environment, never its command line
+	le := liftExecutor()
+	args, _, _, _ = le.legCommand(n, 10)
+	for _, a := range args {
+		if a == "-taker-priv" || a == "-taker-blinding" {
+			t.Fatalf("lift args %v carry %s", args, a)
+		}
 	}
+	env := le.Caps.childEnv()
+	if !hasEnv(env, "SEQOB_TAKER_PRIV=11") || !hasEnv(env, "SEQOB_TAKER_BLINDING=22") {
+		t.Fatalf("child env lacks the taker keys")
+	}
+}
+
+func hasEnv(env []string, kv string) bool {
+	for _, e := range env {
+		if e == kv {
+			return true
+		}
+	}
+	return false
 }

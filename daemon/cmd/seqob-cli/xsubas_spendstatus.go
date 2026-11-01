@@ -46,7 +46,7 @@ import (
 
 func cmdXSubAsHtlcSpendStatus(args []string) {
 	fs := newFlagSet("xsubas-htlc-spend-status")
-	btcRPCURL := fs.String("btc-rpc", "", "bitcoind RPC URL http://user:pass@host:port (required)")
+	btcRPCURL := envString(fs, "btc-rpc", "SEQOB_BTC_RPC", "bitcoind RPC URL http://user:pass@host:port (required)")
 	btcWallet := fs.String("btc-wallet", "", "bitcoind wallet (the LSP's OWN; makes its own refund spend findable wallet-aware even on a pruned / non-txindex node)")
 	btcChainName := fs.String("btc-chain", "testnet4", "parent chain params: testnet4 | regtest")
 	txid := fs.String("txid", "", "the LSP-funded BTC HTLC funding txid (required)")

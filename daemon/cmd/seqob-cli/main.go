@@ -297,8 +297,8 @@ func cmdLift(args []string) {
 	// pkg/trade; otherwise it runs the in-memory StubWallet demo.
 	esploraURL := fs.String("esplora", "", "esplora API URL (enables a REAL on-chain lift)")
 	netName := fs.String("net", "testnet", "network: testnet|mainnet")
-	takerPriv := fs.String("taker-priv", "", "taker on-chain signing key (32-byte hex)")
-	takerBlinding := fs.String("taker-blinding", "", "taker on-chain blinding key (32-byte hex)")
+	takerPriv := envString(fs, "taker-priv", "SEQOB_TAKER_PRIV", "taker on-chain signing key (32-byte hex)")
+	takerBlinding := envString(fs, "taker-blinding", "SEQOB_TAKER_BLINDING", "taker on-chain blinding key (32-byte hex)")
 	takerKeyFile := fs.String("taker-key-file", "", "a file holding the taker's two keys (taker-key makes one): kept off the command line")
 	confidential := fs.Bool("confidential", false, "build a confidential (blinded) taker half; default explicit")
 	timeout := fs.Duration("timeout", 90*time.Second, "how long to await the maker co-sign")
@@ -664,4 +664,14 @@ func fatal(format string, a ...interface{}) {
 	fmt.Fprintf(os.Stderr, "error: "+format+"\n", a...)
 	settleBTC()
 	os.Exit(1)
+}
+
+// envString defines a string flag whose value, when the flag is not given,
+// comes from the environment variable env. The value is never the flag's
+// printed default, so a usage text (which these programs write to their logs)
+// shows no secret held in it.
+func envString(fs *flag.FlagSet, name, env, usage string) *string {
+	p := fs.String(name, "", usage+" (env "+env+")")
+	*p = os.Getenv(env)
+	return p
 }
