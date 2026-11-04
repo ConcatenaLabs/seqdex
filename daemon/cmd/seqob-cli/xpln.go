@@ -3,9 +3,10 @@ package main
 // xpln.go: the PURE-LN swap taker — trade a Sequentia issued asset against "BTC"
 // with BOTH legs over Lightning. There is no on-chain leg, so unlike xsublift
 // there is no asset HTLC to fund and no refund state file: a stalled swap is
-// unwound natively by the LN hold timeout. The taker runs TWO Lightning nodes —
-// a SeqLN-on-Sequentia node with asset channels (-asset-ln-socket) and a
-// SeqLN-on-Bitcoin node with BTC channels (-ln-socket) — mints an invoice on its
+// unwound natively by the LN hold timeout. The taker runs TWO Lightning legs —
+// the asset leg on a SeqLN-on-Sequentia node (-asset-ln-socket) and the counter
+// leg on -ln-socket: a SeqLN-on-Bitcoin node for a BTC quote, or the node holding
+// the quote asset's channels for an asset<->asset market — mints an invoice on its
 // INCOMING leg (a fresh preimage P), hands the maker H + that invoice, and pays
 // the maker's hold on its OUTGOING leg by bare hash. It drives
 // internal/seqob/client.RunTakerPureLN over the relay courier.
@@ -39,7 +40,7 @@ func cmdXPln(args []string) {
 	makerPub := fs.String("maker-pubkey", "", "maker pubkey of the offer (with -offer-id)")
 	priv := fs.String("priv", "", "taker SESSION secret key (32-byte hex, E2E only); generated if empty")
 	assetLnSocket := fs.String("asset-ln-socket", "", "the taker's SeqLN-on-Sequentia lightning-rpc unix socket (asset leg) (required)")
-	lnSocket := fs.String("ln-socket", "", "the taker's SeqLN-on-Bitcoin lightning-rpc unix socket (BTC leg) (required)")
+	lnSocket := fs.String("ln-socket", "", "the taker's lightning-rpc unix socket for the counter leg (required): its SeqLN-on-Bitcoin node for a BTC quote, or the node holding the quote asset's channels for an asset quote (the -asset-ln-socket again when one node holds both)")
 	btcAsset := fs.String("btc-asset", "", "counter-leg SETTLEMENT asset id (hex); empty = policy asset / real BTC-LN. Set to route the counter leg over a 2nd issued asset (asset<->asset). MUST match the maker")
 	quoteAssetFlag := fs.String("quote-asset", "", "QUOTE asset id (hex) of the market; empty = the BTC sentinel (asset<->BTC). Set to a real asset id for an asset<->asset market. Numeraire on the QUOTE side to match the maker + the wallet's canonicalPair (e.g. -asset OILX -quote-asset EURX, i.e. OILX priced in EURX); defaults -btc-asset to it")
 	takeSeq := fs.Uint64("take-asset-msat", 0, "PARTIAL FILL: asset-side slice to take, in msat. 0 = the whole offer (the classic lift). The BTC side is derived from the signed offer's ratio and required exactly, so the maker cannot re-price the slice")
@@ -56,7 +57,7 @@ func cmdXPln(args []string) {
 		fatal("xpln requires -asset (the hex asset id; the pair is <asset>/BTC)")
 	}
 	if *assetLnSocket == "" || *lnSocket == "" {
-		fatal("xpln requires -asset-ln-socket (asset leg) and -ln-socket (BTC leg)")
+		fatal("xpln requires -asset-ln-socket (asset leg) and -ln-socket (counter leg)")
 	}
 
 	// asset<->asset pure-LN: the market QUOTE is a real asset id and the settlement counter-leg routes
@@ -126,7 +127,7 @@ func cmdXPln(args []string) {
 		fatal("asset lightning-rpc %s unreachable: %v", *assetLnSocket, err)
 	}
 	if _, err := xchain.NewCLNLNLeg(*lnSocket).NodeID(); err != nil {
-		fatal("btc lightning-rpc %s unreachable: %v", *lnSocket, err)
+		fatal("counter-leg lightning-rpc %s unreachable: %v", *lnSocket, err)
 	}
 
 	// 3. Open the swap session; E2E key from the SIGNED offer.
@@ -175,17 +176,7 @@ func cmdXPln(args []string) {
 	// on-chain confirmation wait, so the session survives to the announce (see startCourierReader).
 	recv := startCourierReader(conn)
 
-	var btcLeg xchain.LNLeg = xchain.NewCLNLNLeg(*lnSocket)
-	if effBtcAsset != "" {
-		// an asset counter leg settles over that asset's channels, on the asset node: the
-		// bitcoin node knows no asset (it refuses an asset invoice, and the maker's asset node
-		// is not in its graph)
-		btcLeg = xchain.NewCLNAssetLNLeg(*assetLnSocket, effBtcAsset)
-	}
-	swap := xchain.NewPureLNSwap(
-		xchain.NewCLNAssetLNLeg(*assetLnSocket, *asset),
-		btcLeg,
-	)
+	swap := pureLNTakerSwap(*assetLnSocket, *lnSocket, *asset, effBtcAsset)
 	var ops client.PlnTakerOps
 	if side == "buy" {
 		ops = &client.LivePlnTakerBuyOps{Swap: swap} // receive the asset, pay BTC
@@ -221,4 +212,20 @@ func cmdXPln(args []string) {
 		fmt.Printf("  PARTIAL fill: %d of the offer's %d atoms; %d remain resting\n",
 			filledAtoms, assetAtoms, assetAtoms-filledAtoms)
 	}
+}
+
+// pureLNTakerSwap is the taker's swap over its legs: the asset leg on assetSock, and the
+// counter leg on lnSock whatever it settles in. For a BTC quote (counterAsset empty) that is
+// the taker's SeqLN-on-Bitcoin node. For an asset quote it is the node that holds the quote
+// asset's channels, and the leg names that asset. The maker (seqob-maker -ln-socket) reads the
+// flag the same way. A hosted wallet holds one asset per node, so the quote asset's node is not
+// its base asset's node; building the counter leg on assetSock asked the base node for the
+// quote asset's invoice, which it refuses ("This node holds no channel in asset ..."). A taker
+// whose one node holds both assets passes its socket as both.
+func pureLNTakerSwap(assetSock, lnSock, asset, counterAsset string) *xchain.PureLNSwap {
+	var counter xchain.LNLeg = xchain.NewCLNLNLeg(lnSock)
+	if counterAsset != "" {
+		counter = xchain.NewCLNAssetLNLeg(lnSock, counterAsset)
+	}
+	return xchain.NewPureLNSwap(xchain.NewCLNAssetLNLeg(assetSock, asset), counter)
 }
