@@ -328,11 +328,13 @@ one; the relay grants makers no special standing. Six settlement modes:
   maker requires on the taker's Sequentia funding before taking the
   irreversible Lightning action.
 - `-mode pureln`: both legs over Lightning, no on-chain leg and no anchor
-  wait. Needs `-ln-socket` (BTC leg) and `-asset-ln-socket` (the maker's
+  wait. Needs `-ln-socket` (counter leg) and `-asset-ln-socket` (the maker's
   SeqLN-on-Sequentia socket, asset leg). `-quote-asset` advertises an
   asset-for-asset market instead of the BTC sentinel and `-btc-asset` routes
-  the counter leg over that asset; `-hold-timeout` (default 2m) bounds the
-  wait for the taker's hold invoice.
+  the counter leg over that asset, on the `-ln-socket` node, which must then
+  hold that asset's channels (the `-asset-ln-socket` again when one node holds
+  both); `-hold-timeout` (default 2m) bounds the wait for the taker's hold
+  invoice.
 - `-mode subasset` / `-mode subasset-sell`: the submarine's mirror, the asset
   over Lightning against an on-chain BTC HTLC. `subasset`: the taker pays BTC
   on-chain and receives the asset over LN; `subasset-sell`: the reverse. Need
@@ -366,9 +368,11 @@ seqob-cli xrefund-seq  recover the asset leg of an aborted xsell after T_seq
 seqob-cli xsublift     sell an asset for BTC over Lightning (normal submarine)
 seqob-cli xsubbuy      buy an asset with BTC over Lightning (reverse submarine;
                        anchor-gates the maker's HTLC before paying)
-seqob-cli xpln         trade an asset against BTC with both legs over
-                       Lightning (pure-LN; -side buy|sell, -asset-ln-socket,
-                       -ln-socket)
+seqob-cli xpln         trade an asset against BTC or another asset with both
+                       legs over Lightning (pure-LN; -side buy|sell,
+                       -asset-ln-socket for the asset leg, -ln-socket for the
+                       counter leg: the BTC node, or the node holding the
+                       -quote-asset's channels)
 seqob-cli xsubas       buy an asset by paying BTC on-chain and receiving it
                        over Lightning (sub-asset; -taker-ln-node-id for a
                        non-custodial hold-invoice buy)
