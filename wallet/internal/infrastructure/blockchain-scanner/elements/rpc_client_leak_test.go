@@ -1,10 +1,13 @@
 package elements_scanner
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +26,43 @@ func openSockets(t *testing.T) int {
 	for _, e := range ents {
 		if l, err := os.Readlink("/proc/self/fd/" + e.Name()); err == nil && strings.HasPrefix(l, "socket:") {
 			n++
+		}
+	}
+	return n
+}
+
+// clientConns counts this process's TCP connections whose far end is the given port: the client's
+// side of its connections to the stand-in node and none of the node's own side, which outlives an
+// abandoned call by however long the server takes to notice and is not the client's to bound.
+func clientConns(t *testing.T, port string) int {
+	t.Helper()
+	ents, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Skip("no /proc/self/fd here")
+	}
+	mine := map[string]bool{}
+	for _, e := range ents {
+		if l, err := os.Readlink("/proc/self/fd/" + e.Name()); err == nil && strings.HasPrefix(l, "socket:[") {
+			mine[strings.TrimSuffix(strings.TrimPrefix(l, "socket:["), "]")] = true
+		}
+	}
+	p, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	far := fmt.Sprintf(":%04X", p)
+	n := 0
+	for _, f := range []string{"/proc/self/net/tcp", "/proc/self/net/tcp6"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		// sl local_address rem_address st tx:rx tr:when retrnsmt uid timeout inode ...
+		for _, line := range strings.Split(string(b), "\n")[1:] {
+			fs := strings.Fields(line)
+			if len(fs) > 9 && strings.HasSuffix(fs[2], far) && mine[fs[9]] {
+				n++
+			}
 		}
 	}
 	return n
@@ -50,10 +90,14 @@ func TestRpcClientHoldsNoConnectionAfterATimeout(t *testing.T) {
 	defer close(release)
 
 	c := &rpcClient{serverAddr: srv.URL, httpClient: newHTTPClient(false, 1), timeout: 1}
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	before, goBefore := openSockets(t), runtime.NumGoroutine()
 
 	var wg sync.WaitGroup
-	var maxOpen int64
+	var maxOpen, maxClient int64
 	for i := 0; i < 120; i++ {
 		wg.Add(1)
 		go func() {
@@ -61,6 +105,9 @@ func TestRpcClientHoldsNoConnectionAfterATimeout(t *testing.T) {
 			_, _ = c.call("getblockchaininfo", nil)
 			if n := int64(openSockets(t)); n > atomic.LoadInt64(&maxOpen) {
 				atomic.StoreInt64(&maxOpen, n)
+			}
+			if n := int64(clientConns(t, u.Port())); n > atomic.LoadInt64(&maxClient) {
+				atomic.StoreInt64(&maxClient, n)
 			}
 		}()
 	}
@@ -70,16 +117,15 @@ func TestRpcClientHoldsNoConnectionAfterATimeout(t *testing.T) {
 	c.httpClient.CloseIdleConnections()
 	time.Sleep(200 * time.Millisecond)
 	after, goAfter := openSockets(t), runtime.NumGoroutine()
-	t.Logf("sockets: %d before, at most %d during 120 calls (%d timed out), %d after; goroutines %d before, %d after",
-		before, maxOpen, atomic.LoadInt64(&calls)/3, after, goBefore, goAfter)
+	t.Logf("sockets: %d before, at most %d during 120 calls (%d timed out; at most %d of them the client's), %d after; goroutines %d before, %d after",
+		before, maxOpen, atomic.LoadInt64(&calls)/3, maxClient, after, goBefore, goAfter)
 	if after > before+2 {
 		t.Fatalf("%d sockets still open after the calls ended (%d before)", after, before)
 	}
 	if goAfter > goBefore+5 {
 		t.Fatalf("%d goroutines left behind (%d before)", goAfter, goBefore)
 	}
-	// the server's sockets count too: this process holds both ends
-	if maxOpen > int64(before)+2*rpcMaxConns+4 {
-		t.Fatalf("%d sockets open at once, past the client's bound of %d connections", maxOpen, rpcMaxConns)
+	if maxClient > rpcMaxConns {
+		t.Fatalf("%d connections to the node open at once, past the client's bound of %d", maxClient, rpcMaxConns)
 	}
 }
