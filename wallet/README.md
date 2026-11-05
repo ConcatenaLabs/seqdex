@@ -119,13 +119,12 @@ an address, fund it from the node, watch the balance sync.
 ## Tests
 
 ```sh
-go test ./pkg/...        # passes (wallet math, derivation, single-sig)
+go test ./...            # the storage tests also want Postgres: `make pg`
 ```
 
-The upstream suites under `internal/core/application` and
-`internal/core/domain` predate the Sequentia network adaptation and currently
-fail with "unknown network"; treat them as upstream-inherited, not as coverage
-of the Sequentia paths. End-to-end coverage of this wallet comes from the
+The suites under `internal/core/application` and `internal/core/domain` are
+upstream Ocean's, run on Sequentia's regtest parameters; they cover the
+service logic with mocks, not the Sequentia paths. End-to-end coverage of this wallet comes from the
 daemon module's swap flows and the regtest loops in
 [../docs/DEV.md](../docs/DEV.md).
 
