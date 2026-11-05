@@ -123,7 +123,8 @@ interruption and a stranded swap.
 
 ## Build and test
 
-There is **no CI**. Nothing runs unless you run it.
+CI (`.github/workflows/tests.yml`) builds both modules and runs their Go tests on every pull
+request and on `main`. The regtest-gated tests and `daemon/test/e2e` are not run there.
 
 ```sh
 cd daemon && go build ./...
