@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"github.com/vulpemventures/go-elements/network"
+	"github.com/aejkcs50/seqdex/wallet/pkg/seqnet"
 	"github.com/aejkcs50/seqdex/wallet/internal/core/application"
 	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
 	"github.com/aejkcs50/seqdex/wallet/internal/core/ports"
@@ -28,7 +28,7 @@ var (
 	password              = "password"
 	newPassword           = "newPassword"
 	rootPath              = "m/84'/1'"
-	regtest               = network.Regtest.Name
+	regtest               = seqnet.Regtest
 	birthdayBlock         = uint32(1)
 	ctx                   = context.Background()
 	errSomethingWentWrong = fmt.Errorf("something went wrong")

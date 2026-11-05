@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"github.com/vulpemventures/go-elements/network"
+	"github.com/aejkcs50/seqdex/wallet/pkg/seqnet"
 	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
 )
 
@@ -19,7 +19,7 @@ var (
 		"lunar", "account", "silver", "admit", "cheap", "fringe", "disorder", "trade",
 		"because", "trade", "steak", "clock", "grace", "video", "jacket", "equal",
 	}
-	regtest           = network.Regtest.Name
+	regtest           = seqnet.Regtest
 	rootPath          = "m/84'/1'"
 	password          = "password"
 	newPassword       = "newpassword"

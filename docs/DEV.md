@@ -77,9 +77,9 @@ Notes:
   [../test/regtest/README.md](../test/regtest/README.md).
 - The submarine/Lightning integration tests additionally want `SEQLN_SOCK1` /
   `SEQLN_SOCK2` (two SeqLN `lightning-rpc` sockets) and skip without them.
-- The upstream test suites under `wallet/internal/core/...` predate the
-  Sequentia network adaptation and currently fail with "unknown network"; they
-  are upstream Ocean tests, not a regression signal for the Sequentia paths.
+- The test suites under `wallet/internal/core/...` are upstream Ocean's, run on
+  Sequentia's regtest parameters with mocks; they are not a regression signal
+  for the Sequentia paths.
 - `daemon/test/e2e` (`make integrationtest`) is the inherited upstream TDEX
   docker loop against a Liquid regtest; it has not been adapted to Sequentia.
 

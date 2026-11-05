@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/vulpemventures/go-elements/network"
+	"github.com/aejkcs50/seqdex/wallet/pkg/seqnet"
 	"github.com/aejkcs50/seqdex/wallet/internal/core/application"
 	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
 	"github.com/aejkcs50/seqdex/wallet/internal/core/ports"
@@ -18,7 +19,7 @@ import (
 
 var (
 	rootPath    = "m/84'/1'"
-	regtest     = &network.Regtest
+	regtest     = regtestNetwork()
 	ctx         = context.Background()
 	password    = "password"
 	newPassword = "newpassword"
@@ -36,6 +37,15 @@ var (
 		Version: "test", Commit: "none", Date: "unknown",
 	}
 )
+
+// regtestNetwork is Sequentia's regtest as the services receive it at run time: a copy whose
+// AssetID the node supplied (seqnet leaves it empty). Any 32-byte asset id does; none is
+// privileged here.
+func regtestNetwork() *network.Network {
+	n, _ := seqnet.ByName(seqnet.Regtest)
+	n.AssetID = "5ac9f65c0efcc4775e0baec4ec03abdde22473cd3cf33c0419ca290e0751b225"
+	return &n
+}
 
 func TestMain(m *testing.M) {
 	mockedMnemonicCypher := &mockMnemonicCypher{}

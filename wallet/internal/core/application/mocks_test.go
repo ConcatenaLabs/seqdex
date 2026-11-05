@@ -8,9 +8,9 @@ import (
 	"sync"
 
 	"github.com/stretchr/testify/mock"
-	"github.com/vulpemventures/go-elements/address"
 	"github.com/aejkcs50/seqdex/wallet/internal/core/application"
 	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
+	"github.com/aejkcs50/seqdex/wallet/pkg/seqnet"
 )
 
 // ports.BlockchainScanner
@@ -251,7 +251,8 @@ func randomUtxos(accountName string, addresses []string) []*domain.Utxo {
 }
 
 func randomUtxo(accountName, addr string) *domain.Utxo {
-	script, _ := address.ToOutputScript(addr)
+	// The test wallet is on Sequentia's regtest, whose addresses go-elements cannot decode.
+	script, _ := seqnet.ToOutputScript(addr, &seqnet.SequentiaRegtest)
 	nonce := append([]byte{3}, randomBytes(32)...)
 	return &domain.Utxo{
 		UtxoKey: domain.UtxoKey{

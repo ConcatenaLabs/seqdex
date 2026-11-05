@@ -123,7 +123,8 @@ interruption and a stranded swap.
 
 ## Build and test
 
-There is **no CI**. Nothing runs unless you run it.
+CI (`.github/workflows/tests.yml`) builds both modules and runs their Go tests on every pull
+request and on `main`. The regtest-gated tests and `daemon/test/e2e` are not run there.
 
 ```sh
 cd daemon && go build ./...
@@ -142,8 +143,8 @@ cd ../wallet && go test ./pkg/...
 `daemon/Makefile` also offers `test` (`-race`), `cov`, `vet`, `lint` (golangci-lint), `proto`,
 `mock` and `integrationtest`.
 
-Known non-signals, per `main`'s `docs/DEV.md`: `wallet/internal/core/...` tests fail with "unknown
-network", and `daemon/test/e2e` (`make integrationtest`) has never been adapted to Sequentia.
+`daemon/test/e2e` (`make integrationtest`) has never been adapted to Sequentia (`docs/DEV.md`).
+The wallet's storage tests also run against Postgres (`make pg` in `wallet/`).
 
 `make run` is stale: it exports `TDEX_*`, but the config reader's env prefix is `SEQDEX`. The only
 remaining `TDEX_` consumer is the operator CLI's own datadir variable. The upstream
