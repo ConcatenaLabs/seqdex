@@ -39,6 +39,7 @@ func TestRpcClientHoldsNoConnectionAfterATimeout(t *testing.T) {
 		if atomic.AddInt64(&calls, 1)%3 == 0 {
 			select { // slower than the client's timeout
 			case <-release:
+			case <-r.Context().Done(): // the client gave up and closed its end
 			case <-time.After(5 * time.Second):
 			}
 		}
