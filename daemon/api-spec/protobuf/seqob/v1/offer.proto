@@ -118,6 +118,7 @@ message Offer {
     RestingLeafTerms resting_leaf = 26; // an order resting as a leaf in an operator's tree, filled there with its maker away
     PoolTerms       pool        = 27; // one side of a maker's two-sided pool under seqdex/pool, filled by anyone at its quote
     RoundOrderTerms round_order = 28; // an order under seqdex/round-order, filled only in a round its clearer signs
+    RestrictedTerms restricted  = 29; // an online maker's quote for a restricted asset, settled on the chain under its policy server
     GatedOrderTerms gated_order = 30; // a restricted asset's resting sell order, each fill co-signed by its policy server
   }
 
@@ -301,6 +302,33 @@ message GatedOrderTerms {
   bytes  maker_enclave_prog = 13; // the maker's enclave program (32 bytes): where the refund goes home
   string policy_server      = 14; // the policy server's base URL (https), where fills are posted
   string maker_aid          = 15; // the maker's account at that server (sender_aid of a fill)
+}
+
+// RestrictedTerms is an online maker's quote for a restricted (OpenAMP) asset:
+// the pair's base. Every transfer of the asset is judged by its policy server,
+// so both sides must hold accounts there that it approves, and the trade
+// settles on the chain only.
+//
+// With the BTC sentinel as the quote, the trade is a hash-locked swap for
+// on-chain bitcoin whose Sequentia side is the policy server's swap HTLC and
+// fee pot (openamp README, "Swap HTLCs"). The buyer of the asset, who pays the
+// bitcoin, holds the secret and locks first; every lock is a Unix time, with
+// T_btc at least 24 h after T_seq. TRADE_DIR_SELL: the maker sells the asset
+// (the taker pays BTC); TRADE_DIR_BUY: the maker buys it.
+//
+// With an asset as the quote, the trade is one transaction moving both legs
+// (delivery against payment), checked by the policy server before anyone signs
+// and broadcast by it once both have.
+//
+// The courier messages are pkg/restricted and internal/seqob/client
+// (xcourier.go, xdriver_restricted.go).
+message RestrictedTerms {
+  string policy_server      = 1; // the asset's policy server, its base URL (https)
+  bytes  policy_x           = 2; // the asset's policy key (32 bytes), as that server lists it
+  string maker_aid          = 3; // the maker's account at that server
+  string pot_asset          = 4; // BTC quote: the fee pot's asset (display hex), one producers accept
+  uint64 pot_amount         = 5; // BTC quote: the pot's atoms, which pay the buyer's claim
+  string maker_recv_address = 6; // asset quote: where the taker pays the other asset
 }
 
 // RoundOrderTerms is a FUNDED order under the Simplicity template

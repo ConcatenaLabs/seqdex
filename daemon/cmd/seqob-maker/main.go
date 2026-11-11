@@ -168,7 +168,7 @@ func main() {
 	levels := flag.Int("levels", 1, "samechain: ladder depth — quote this many price levels on this side from ONE process/account (level 0 = the configured price/size; each deeper level rests further from the touch and larger). Every level is a real co-signable offer of this maker")
 	levelBps := flag.Int("level-bps", 40, "samechain ladder: extra distance from the touch per level, in basis points of the quote amount")
 	levelGrowth := flag.Float64("level-growth", 1.12, "samechain ladder: size multiplier per level (deeper levels rest larger)")
-	mode := flag.String("mode", "samechain", "settlement mode: samechain | cross | lightning | pureln | subasset | subasset-sell (cross = BTC<->asset on-chain HTLC; lightning = asset<->BTC-over-LN submarine swap; pureln = BOTH legs over Lightning; subasset = the submarine's MIRROR: asset over Lightning + BTC on-chain HTLC, taker pays BTC on-chain and receives the asset over LN; subasset-sell = the same rails in the other direction, taker pays the asset over LN and receives BTC on-chain; base is the asset, quote is the BTC sentinel)")
+	mode := flag.String("mode", "samechain", "settlement mode: samechain | cross | restricted | lightning | pureln | subasset | subasset-sell (cross = BTC<->asset on-chain HTLC; restricted = a restricted (OpenAMP) asset<->BTC through its policy server's swap HTLC, base the asset, -quote-amount the sats; lightning = asset<->BTC-over-LN submarine swap; pureln = BOTH legs over Lightning; subasset = the submarine's MIRROR: asset over Lightning + BTC on-chain HTLC, taker pays BTC on-chain and receives the asset over LN; subasset-sell = the same rails in the other direction, taker pays the asset over LN and receives BTC on-chain; base is the asset, quote is the BTC sentinel)")
 	// Cross-mode settlement wiring (pkg/xchain, no Ocean needed): the SEQ leg is
 	// funded from the Sequentia NODE wallet and the BTC leg is claimed into the
 	// bitcoind wallet — the same reserves the RFQ maker uses.
@@ -193,6 +193,12 @@ func main() {
 	quoteAsset := flag.String("quote-asset", "", "pureln: QUOTE asset id (hex) the offer advertises; empty = the BTC sentinel (asset<->BTC). Set to a real asset id for a truthful asset<->asset market. Put the NUMERAIRE on the QUOTE side so the market key matches the wallet's canonicalPair (e.g. base=OILX -quote-asset=EURX, i.e. OILX priced in EURX) — the wallet queries <base>/<quote> in exactly that orientation, so a reversed pair rests in a market the wallet never reads. Defaults -btc-asset to the quote id so settlement routes over it")
 	holdTimeout := flag.Duration("hold-timeout", 2*time.Minute, "pureln: how long the maker waits for the taker to lock its hold and then fulfills before giving up")
 	requote := flag.Bool("requote", false, "cross/lightning/pureln: after each settled fill, reconnect dropped channel peers and re-post a FRESH offer (same offer id) instead of cancelling and exiting; keeps a live quote without a manual restart (default off = quote once then exit)")
+	policyServer := flag.String("policy-server", "", "restricted: the asset's policy server (openampd) base URL")
+	openampAID := flag.String("openamp-aid", "", "restricted: the maker's account at the policy server")
+	openampKey := flag.String("openamp-key", "", "restricted: the account's enclave key (32-byte hex); SEQOB_OPENAMP_KEY")
+	potAsset := flag.String("pot-asset", "", "restricted: the fee pot's asset (display hex), one the producers accept; it pays the pot and the Sequentia fees")
+	potAmount := flag.Uint64("pot-amount", 20000, "restricted: the fee pot's atoms (the buyer's claim fee)")
+	rfaPerVb := flag.Uint64("rfa-per-vb", 2, "restricted: the Sequentia fee rate in reference atoms per vbyte")
 	flag.Parse()
 	// Secrets and RPC URLs may come from the environment instead of the command line,
 	// where `ps` shows them to every user on the box: SEQOB_MAKER_PRIV, SEQOB_BTC_RPC,
@@ -201,6 +207,7 @@ func main() {
 	envDefault(btcRPCURL, "SEQOB_BTC_RPC")
 	envDefault(xseqRPCURL, "SEQOB_XSEQ_RPC")
 	envDefault(nodeRPC, "SEQOB_NODE_RPC")
+	envDefault(openampKey, "SEQOB_OPENAMP_KEY")
 	// A reprice must never kill this process mid-swap; drain first (see armGracefulShutdown).
 	armGracefulShutdown(15 * time.Minute)
 
@@ -216,6 +223,20 @@ func main() {
 		return
 	}
 
+	if strings.ToLower(*mode) == "restricted" {
+		mk := loadOrGenKey(*makerPriv)
+		runRestrictedMaker(restrictedMakerConfig{
+			cross: crossMakerConfig{relay: strings.TrimRight(*relay, "/"), makerKey: mk,
+				makerPubHex: hex.EncodeToString(mk.PubKey().SerializeCompressed()), asset: *base, side: *side,
+				assetAmt: *baseAmt, btcAmt: *quoteAmt, expiry: *expiry, offerID: *offerID,
+				btcRPCURL: *btcRPCURL, btcWallet: *btcWallet, btcChainName: *btcChainName,
+				seqRPCURL: *xseqRPCURL, seqWallet: *xseqWallet, minBTCConf: *minBTCConf, spendFee: *spendFee,
+				stateDir: *xstateDir, btcFeeRate: *btcFeeRate},
+			policyServer: strings.TrimRight(*policyServer, "/"), aid: *openampAID, enclaveKey: hexKey(*openampKey),
+			potAsset: *potAsset, potAmount: *potAmount, rfaPerVb: *rfaPerVb,
+		})
+		return
+	}
 	cross := strings.ToLower(*mode) == "cross"
 	lightning := strings.ToLower(*mode) == "lightning"
 	pureln := strings.ToLower(*mode) == "pureln"

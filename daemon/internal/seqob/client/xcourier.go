@@ -97,6 +97,15 @@ type XcMsg struct {
 	HoldCltv      uint32 `json:"hold_cltv,omitempty"`        // pure-LN hold_ready: final-hop timelock (hold-leg blocks) the taker must pay the hold with
 	TakerLNNodeID string `json:"taker_ln_node_id,omitempty"` // sub-asset BUY HODL: the taker's HOSTED asset node id; the MAKER pays the hold by BARE HASH to it (device holds P, no bolt11)
 
+	// Restricted-asset swap fields (RestrictedTerms with a BTC quote). The
+	// Sequentia leg is the policy server's swap HTLC with its fee pot; see
+	// xdriver_restricted.go.
+	TakerAID  string  `json:"taker_aid,omitempty"`  // terms_request: the taker's account at the asset's policy server
+	PotAsset  string  `json:"pot_asset,omitempty"`  // terms / btc_leg_locked: the pot's asset (display hex)
+	PotAmount uint64  `json:"pot_amount,omitempty"` // terms / btc_leg_locked: the pot's atoms
+	PotVout   *uint32 `json:"pot_vout,omitempty"`   // seq_leg_locked / seq_leg_funded: the pot's output in the lock
+	Payout    string  `json:"payout,omitempty"`     // seq_leg_locked / seq_leg_funded: the seller's v1 script the pot goes home to (hex)
+
 	Preimage string `json:"preimage,omitempty"` // XcSecretRevealed
 	Code     string `json:"code,omitempty"`     // XcFail
 	Message  string `json:"message,omitempty"`  // XcFail

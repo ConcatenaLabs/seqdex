@@ -108,6 +108,11 @@ func hasSettlementOwner(incoming, resting *seqobv1.Offer) bool {
 		offer.IsGatedOrder(incoming) || offer.IsGatedOrder(resting) {
 		return false
 	}
+	// A restricted asset's quote settles only under its policy server, which
+	// judges both parties at the trade: a taker lifts it through the courier.
+	if offer.IsRestricted(incoming) || offer.IsRestricted(resting) {
+		return false
+	}
 	return resting.GetCovenant() != nil
 }
 

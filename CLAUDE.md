@@ -66,7 +66,7 @@ over an `xchain` proto that no longer existed, and its file-existence guard hid 
 | Binary | Role |
 |---|---|
 | `seqobd` | The relay. Stores signed offers, serves the book over REST and WS, couriers opaque end-to-end-encrypted swap messages. **Holds no wallet, no keys and no funds.** The chain watcher runs as a goroutine inside it when given `-node-rpc`. |
-| `seqob-maker` | The maker. Modes: `samechain`, `cross`, `lightning`, `pureln`, `subasset`, `subasset-sell`. |
+| `seqob-maker` | The maker. Modes: `samechain`, `cross`, `restricted`, `lightning`, `pureln`, `subasset`, `subasset-sell`. |
 | `seqob-crosser` | Crossing agent; polls every relay and takes both sides. `-take` makes one market take and exits. |
 | `seqob-settler` | Always-online non-custodial settler for the passive covenant CLOB (`plan`, `run`). |
 | `seqob-bridge` | Cross-rail settlement bridge; the only seqob component holding its own inventory and LN node. |
@@ -103,7 +103,8 @@ covenant order and filled only in a clearing round its clearer signs. Neither is
 `/v1/rounds` serves each clearing round the relay has seen. A restricted asset's gated order
 (`GatedOrderTerms`) is listed and followed like a covenant order; only its policy server
 completes a fill (`pkg/covenant/gated.go`, whose script `gated_test.go` pins to openamp's
-vectors), so the matcher crosses none.
+vectors), so the matcher crosses none. A restricted quote (`RestrictedTerms`) is lifted through
+the courier and crossed by nobody (`xdriver_restricted.go`).
 
 Everything else in `cmd/` is a one-shot CLI or a regtest helper.
 
@@ -184,8 +185,8 @@ and `sequentia-cli`; `pkg/xchain/testdata/start-regtest.sh` falls back to the le
   `time_in_force`, a field protobuf-go writes before the settlement oneof), and `daemon/pkg/covenant/testdata/fill_vectors.json` (the
   multi-order fill layout) are copied into the web wallet, whose tests hold its code to them.
   The pool (`PoolTerms`), round order (`RoundOrderTerms`) and gated order (`GatedOrderTerms`)
-  members keep their coins outside the signed bytes too. The web wallet's `seqob.js` does not read them and cannot
-  verify an offer carrying any of them.
+  members keep their coins outside the signed bytes too. The web wallet's `seqob.js` does not read them, nor the
+  restricted quote (`RestrictedTerms`), and cannot verify an offer carrying any of them.
 - Byte order at the covenant boundary is display-vs-internal, and the wallet mirrors this repo's
   `reverseHex`/`displayHex` conventions. Golden vectors pin the two implementations together.
 

@@ -307,6 +307,9 @@ func (v *Validator) checkTerms(o *seqobv1.Offer) error {
 	if o.GetGatedOrder() != nil {
 		return checkGatedOrder(o)
 	}
+	if o.GetRestricted() != nil {
+		return checkRestricted(o)
+	}
 	if o.GetSimplicityCovenant() != nil {
 		return checkSimplicityCovenant(o)
 	}
@@ -595,6 +598,61 @@ func checkGatedOrder(o *seqobv1.Offer) error {
 	}
 	if _, err := g.Tree(); err != nil {
 		return fmt.Errorf("gated order: %w", err)
+	}
+	return nil
+}
+
+// checkRestricted checks an online maker's quote for a restricted asset (the
+// pair's base). The relay cannot judge the policy key or the account, which
+// only the policy server knows: every taker checks them there before it
+// commits anything. Here, the shape: a policy server URL, a 32-byte key, an
+// account id; for a BTC quote, a fee pot in an asset (never the restricted
+// one, which a fee output may not carry); and never confidential, because the
+// policy server reads every transaction it co-signs.
+func checkRestricted(o *seqobv1.Offer) error {
+	rt := o.GetRestricted()
+	p := o.GetPair()
+	if offer.IsBTCSentinel(p.GetBaseAsset()) {
+		return fmt.Errorf("a restricted quote's base is the restricted asset, never %s", offer.BTCSentinel)
+	}
+	base, ok := asset32(p.GetBaseAsset())
+	if !ok {
+		return fmt.Errorf("a restricted quote's base must be a 64-hex asset id")
+	}
+	if o.GetConfidential() {
+		return fmt.Errorf("a restricted quote is transparent: its policy server reads every transaction it co-signs")
+	}
+	u, err := url.Parse(rt.GetPolicyServer())
+	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopback(u.Hostname()))) {
+		return fmt.Errorf("restricted policy_server %q must be an https URL", rt.GetPolicyServer())
+	}
+	if len(rt.GetPolicyX()) != 32 {
+		return fmt.Errorf("restricted policy_x must be 32 bytes")
+	}
+	if b, err := hex.DecodeString(rt.GetMakerAid()); err != nil || len(b) != 20 {
+		return fmt.Errorf("restricted maker_aid must be a 20-byte account id in hex")
+	}
+	if offer.IsBTCSentinel(p.GetQuoteAsset()) {
+		pot, ok := asset32(rt.GetPotAsset())
+		if !ok || rt.GetPotAmount() == 0 {
+			return fmt.Errorf("a restricted quote for bitcoin names its fee pot: pot_asset (64 hex) and pot_amount > 0")
+		}
+		if pot == base {
+			return fmt.Errorf("the fee pot cannot be the restricted asset: a fee output may not carry it")
+		}
+		if rt.GetMakerRecvAddress() != "" {
+			return fmt.Errorf("a restricted quote for bitcoin has no maker_recv_address")
+		}
+		return nil
+	}
+	if _, ok := asset32(p.GetQuoteAsset()); !ok {
+		return fmt.Errorf("a restricted quote's quote must be %s or a 64-hex asset id", offer.BTCSentinel)
+	}
+	if rt.GetMakerRecvAddress() == "" {
+		return fmt.Errorf("a restricted quote for an asset names maker_recv_address")
+	}
+	if rt.GetPotAsset() != "" || rt.GetPotAmount() != 0 {
+		return fmt.Errorf("a restricted quote for an asset has no fee pot")
 	}
 	return nil
 }
