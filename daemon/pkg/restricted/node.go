@@ -267,6 +267,28 @@ func (n *Node) CoinAt(txid string, vout uint32) (*Coin, error) {
 	return &Coin{Txid: txid, Vout: vout, Asset: a, Value: v, Script: spk}, nil
 }
 
+// InMempool says whether the node's mempool holds txid.
+func (n *Node) InMempool(txid string) bool {
+	var e json.RawMessage
+	return n.rpc().Call(&e, "getmempoolentry", txid) == nil
+}
+
+// AnySpent says whether a block has spent an input of u, which then can no
+// longer be mined (short of a reorg).
+func (n *Node) AnySpent(u *Unsigned) (bool, error) {
+	for _, in := range u.Tx.Inputs {
+		op := InputOutpoint(in)
+		var o *json.RawMessage
+		if err := n.rpc().Call(&o, "gettxout", op.Txid, op.Vout, false); err != nil {
+			return false, err
+		}
+		if o == nil || string(*o) == "null" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // SpendWitness finds the transaction that spent an outpoint and returns its
 // id and that input's witness; "" while the outpoint is unspent.
 func (n *Node) SpendWitness(txid string, vout uint32) (string, [][]byte, error) {
@@ -344,10 +366,12 @@ func (n *Node) WalletOutpoints() (map[string]bool, error) {
 	return m, nil
 }
 
-// Respend spends a wallet coin back to the wallet, its fee in feeAsset, so a
-// transaction signed over it can never be mined.
-func (n *Node) Respend(c Coin, feeAsset string, rfaPerVb uint64) (string, error) {
-	fee, err := n.FeeAtoms(feeAsset, 500, rfaPerVb)
+// Respend spends a wallet coin back to the wallet, its fee in feeAsset
+// reckoned for vsize virtual bytes, so a transaction signed over it can never
+// be mined. A fee above a waiting transaction's lets it replace one that
+// signals BIP125.
+func (n *Node) Respend(c Coin, feeAsset string, rfaPerVb, vsize uint64) (string, error) {
+	fee, err := n.FeeAtoms(feeAsset, vsize, rfaPerVb)
 	if err != nil {
 		return "", err
 	}
