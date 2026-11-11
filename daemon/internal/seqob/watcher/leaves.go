@@ -18,6 +18,17 @@ import (
 
 // expect is the program the order's outpoint must pay, derived from its terms.
 func (c CovEntry) expect() (Expect, error) {
+	if c.Gated != nil {
+		o, err := offer.GatedOrderOf(c.Gated)
+		if err != nil {
+			return Expect{}, err
+		}
+		t, err := o.Tree()
+		if err != nil {
+			return Expect{}, err
+		}
+		return Expect{OrderSPKHex: hex.EncodeToString(t.ScriptPubKey), AssetADisplay: reverseHex(c.Gated.GetAssetA()), MinLot: o.MinLot}, nil
+	}
 	if c.Round != nil {
 		o, err := offer.RoundOrderOf(c.Round)
 		if err != nil {
@@ -45,6 +56,13 @@ func (c CovEntry) expect() (Expect, error) {
 
 // readFill reads what sp did to the order.
 func (c CovEntry) readFill(sp *SpenderTx, locked uint64) (FillReading, error) {
+	if c.Gated != nil {
+		o, err := offer.GatedOrderOf(c.Gated)
+		if err != nil {
+			return FillReading{}, err
+		}
+		return ReadGatedFill(o, sp, locked)
+	}
 	if c.Round != nil {
 		o, err := offer.RoundOrderOf(c.Round)
 		if err != nil {
@@ -146,6 +164,41 @@ func ReadRoundFill(o covenant.RoundOrder, sp *SpenderTx, locked uint64) (FillRea
 	}
 	if _, err := o.CheckFill(covenant.Explicit(o.AssetA, locked, spk), outs, sp.Input, partial); err != nil {
 		r.Disagrees = err.Error()
+	}
+	return r, nil
+}
+
+// ReadGatedFill reads what sp did to a gated order it spent, which held locked
+// atoms of asset A: a fill through the policy gate (the credit at 2k, a partial
+// fill's rest at 2k+1, at the order's own script), or anything else (the
+// keyless refund home, or a claw), which is no fill.
+func ReadGatedFill(o covenant.GatedOrder, sp *SpenderTx, locked uint64) (FillReading, error) {
+	r := FillReading{Input: sp.Input}
+	t, err := o.Tree()
+	if err != nil {
+		return r, err
+	}
+	if !covenant.GatedFillPath(sp.Witness, o.PolicyX) {
+		r.Refund = true
+		return r, nil
+	}
+	k := uint64(sp.Input)
+	outs := sp.Outputs
+	if 2*k >= uint64(len(outs)) {
+		return r, fmt.Errorf("spender %s has no output %d to credit the maker of input %d", sp.Txid, 2*k, k)
+	}
+	r.Credit = fillOutput(uint32(2*k), outs[2*k])
+	if 2*k+1 < uint64(len(outs)) {
+		at := outs[2*k+1]
+		fo := fillOutput(uint32(2*k+1), at)
+		if at.AssetExplicit && at.Asset == o.AssetA && bytes.Equal(at.Script, t.ScriptPubKey) {
+			r.Rest, r.Remainder, r.Partial = &fo, at.Value, true
+		} else {
+			r.Gap = &fo
+		}
+	}
+	if r.Remainder <= locked {
+		r.Filled = locked - r.Remainder
 	}
 	return r, nil
 }

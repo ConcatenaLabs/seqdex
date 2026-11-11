@@ -102,7 +102,10 @@ func hasSettlementOwner(incoming, resting *seqobv1.Offer) bool {
 	// A round order fills only in a round its clearer signs, and a pool is
 	// filled by a taker that builds the pool's own fill: no owner here
 	// settles a cross with either.
-	if offer.IsRoundOrder(incoming) || offer.IsRoundOrder(resting) || offer.IsPool(incoming) || offer.IsPool(resting) {
+	// A gated order's fill exists only once its policy server co-signs and
+	// broadcasts it, at a taker's request: no settler here can complete one.
+	if offer.IsRoundOrder(incoming) || offer.IsRoundOrder(resting) || offer.IsPool(incoming) || offer.IsPool(resting) ||
+		offer.IsGatedOrder(incoming) || offer.IsGatedOrder(resting) {
 		return false
 	}
 	return resting.GetCovenant() != nil

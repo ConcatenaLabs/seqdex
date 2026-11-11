@@ -21,7 +21,49 @@ import (
 // rests and re-rests at 2k+1 like them but fills only in a round its clearer
 // signs (IsRoundOrder). A pool is not one: it rests at two coins (pool.go).
 func IsCovenant(o *seqobv1.Offer) bool {
-	return o.GetCovenant() != nil || o.GetSimplicityCovenant() != nil || o.GetRoundOrder() != nil
+	return o.GetCovenant() != nil || o.GetSimplicityCovenant() != nil || o.GetRoundOrder() != nil || o.GetGatedOrder() != nil
+}
+
+// IsGatedOrder reports whether o is a restricted asset's gated order: it rests
+// and re-rests at 2k+1 like a covenant order, but only its policy server
+// completes a fill (with the taker's transaction, co-signed and broadcast in
+// one step), so no matcher crosses it and no settler fills it.
+func IsGatedOrder(o *seqobv1.Offer) bool { return o.GetGatedOrder() != nil }
+
+// GatedOrderOf is the gated order a GatedOrderTerms describes, its fixed-size
+// fields checked. Asset ids are internal-order hex.
+func GatedOrderOf(t *seqobv1.GatedOrderTerms) (covenant.GatedOrder, error) {
+	var o covenant.GatedOrder
+	if t == nil {
+		return o, fmt.Errorf("no gated order terms")
+	}
+	a, err := hex32(t.GetAssetA())
+	if err != nil {
+		return o, fmt.Errorf("asset_a: %w", err)
+	}
+	b, err := hex32(t.GetAssetB())
+	if err != nil {
+		return o, fmt.Errorf("asset_b: %w", err)
+	}
+	if len(t.GetMakerProg()) != 32 || t.GetMakerProgVer() != 1 {
+		return o, fmt.Errorf("maker_prog must be a 32-byte v1 program")
+	}
+	if len(t.GetPolicyX()) != 32 || len(t.GetMakerEnclaveProg()) != 32 {
+		return o, fmt.Errorf("policy_x and maker_enclave_prog must be 32 bytes")
+	}
+	if ix := t.GetIssuerX(); len(ix) != 0 && len(ix) != 32 {
+		return o, fmt.Errorf("issuer_x must be 32 bytes when present")
+	}
+	o = covenant.GatedOrder{AssetA: a, AssetB: b, RateNum: t.GetRateNum(), RateDen: t.GetRateDen(), MinLot: t.GetMinLot(),
+		MakerProg: append([]byte{}, t.GetMakerProg()...), Expiry: t.GetExpiry()}
+	copy(o.PolicyX[:], t.GetPolicyX())
+	copy(o.MakerEnclave[:], t.GetMakerEnclaveProg())
+	if ix := t.GetIssuerX(); len(ix) == 32 {
+		var x [32]byte
+		copy(x[:], ix)
+		o.IssuerX = &x
+	}
+	return o, nil
 }
 
 // IsRoundOrder reports whether o fills only in a clearing round its clearer
@@ -37,6 +79,9 @@ func CovenantOutpoint(o *seqobv1.Offer) (txid string, vout uint32, ok bool) {
 		return t.GetCovenantTxid(), t.GetCovenantVout(), true
 	}
 	if t := o.GetRoundOrder(); t != nil {
+		return t.GetCovenantTxid(), t.GetCovenantVout(), true
+	}
+	if t := o.GetGatedOrder(); t != nil {
 		return t.GetCovenantTxid(), t.GetCovenantVout(), true
 	}
 	return "", 0, false
@@ -58,6 +103,10 @@ func SetCovenantOutpoint(o *seqobv1.Offer, txid string, vout uint32) bool {
 		t.CovenantTxid, t.CovenantVout = txid, vout
 		return true
 	}
+	if t := o.GetGatedOrder(); t != nil {
+		t.CovenantTxid, t.CovenantVout = txid, vout
+		return true
+	}
 	return false
 }
 
@@ -67,6 +116,9 @@ func CovenantMinLot(o *seqobv1.Offer) uint64 {
 		return t.GetMinLot()
 	}
 	if t := o.GetRoundOrder(); t != nil {
+		return t.GetMinLot()
+	}
+	if t := o.GetGatedOrder(); t != nil {
 		return t.GetMinLot()
 	}
 	return o.GetSimplicityCovenant().GetMinLot()

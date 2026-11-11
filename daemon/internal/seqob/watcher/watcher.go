@@ -37,12 +37,16 @@ type CovEntry struct {
 	Terms    *seqobv1.CovenantTerms           // a tapscript order's terms, or nil
 	Sim      *seqobv1.SimplicityCovenantTerms // a Simplicity order's terms, or nil
 	Round    *seqobv1.RoundOrderTerms         // a round order's terms, or nil
+	Gated    *seqobv1.GatedOrderTerms         // a gated order's terms, or nil
 	Active   uint64                           // book's current active size (advisory; reconciled to chain)
 	ReRested bool                             // F3: current outpoint is a remainder from a prior partial fill, not the original funding
 }
 
 // outpoint is where the order rests.
 func (c CovEntry) outpoint() (string, uint32) {
+	if c.Gated != nil {
+		return c.Gated.GetCovenantTxid(), c.Gated.GetCovenantVout()
+	}
 	if c.Round != nil {
 		return c.Round.GetCovenantTxid(), c.Round.GetCovenantVout()
 	}
