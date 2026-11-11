@@ -80,6 +80,16 @@ func (e *nlEnv) mineBtc(t *testing.T, n int) []string {
 	return h
 }
 
+// mineBtcFresh mines to a new address, so a block mined after invalidateblock
+// is not the invalidated block again (same template, same address, same time).
+func (e *nlEnv) mineBtcFresh(t *testing.T, n int) []string {
+	var a string
+	nlMust(t, e.btc.WithWallet("w").Call(&a, "getnewaddress"))
+	var h []string
+	nlMust(t, e.btc.Call(&h, "generatetoaddress", n, a))
+	return h
+}
+
 func (e *nlEnv) mineSeq(t *testing.T, n int) []string {
 	var h []string
 	nlMust(t, e.seq.Call(&h, "generatetoaddress", n, e.minerS))
@@ -449,7 +459,7 @@ func (e *nlEnv) reorgDoubleSpendV(t *testing.T, s *nlSwap, fork int64, version i
 	nlMust(t, e.btc.Call(nil, "invalidateblock", bh))
 	d := wire.NewMsgTx(version)
 	d.AddTxIn(&wire.TxIn{PreviousOutPoint: s.c, Sequence: 0xffffffff})
-	d.AddTxOut(&wire.TxOut{Value: 199_990_000, PkScript: e.btcSPK(t, "taker")})
+	d.AddTxOut(&wire.TxOut{Value: 199_900_000, PkScript: e.btcSPK(t, "taker")}) // outbids F under full RBF
 	btcSign(t, d, s.pb, nlCoinSats)
 	did := d.TxHash().String()
 	if version >= 1 && version <= 3 {
@@ -719,7 +729,7 @@ func TestNamedLockRegtest(t *testing.T) {
 		var bh string
 		nlMust(t, e.btc.Call(&bh, "getblockhash", ga))
 		nlMust(t, e.btc.Call(nil, "invalidateblock", bh))
-		e.mineBtc(t, int(tip-ga+2))
+		e.mineBtcFresh(t, int(tip-ga+2))
 		var fc struct {
 			Confirmations int64 `json:"confirmations"`
 		}
@@ -798,7 +808,7 @@ func TestNamedLockRegtest(t *testing.T) {
 		var did string
 		nlMust(t, e.btc.Call(&did, "sendrawtransaction", signed.Hex))
 		t.Logf("C's block %d invalidated; C's parent double-spent by %s: no Pb signature exists", s.cHeight, did)
-		e.mineBtc(t, int(tip-s.cHeight+2))
+		e.mineBtcFresh(t, int(tip-s.cHeight+2))
 		var out interface{}
 		if err := e.btc.Call(&out, "gettxout", s.c.Hash.String(), s.c.Index, true); err == nil && out != nil {
 			t.Logf("C still exists after the reorganization (the parent was mined again)")
