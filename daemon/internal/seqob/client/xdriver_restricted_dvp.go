@@ -17,13 +17,21 @@ package client
 // anything (restricted.CheckTrade): no lock time and no relative lock, so no
 // time-gated refund shares the trade; every input of its own one it offered;
 // each output it counts its own and counted once; per asset, what it gives and
-// gets as agreed; the fee at or above its floor. A side signs only the inputs
-// it offered. The seller's signatures carry an expiry the server enforces
-// before it broadcasts. The payer's do not, so a payer whose trade is not
-// mined in time replaces it (the trade signals BIP125) by spending its coin
-// elsewhere. A trade still in the mempool, or broadcast and not yet
-// contradicted by a spend of its inputs, may still be mined: it is reported
-// pending (ErrDvPPending), never failed.
+// gets as agreed; the fee at or above its floor; no input signalling
+// replacement. A side's wallet signs only the inputs that spend the coins it
+// offered (restricted.Node.SignOffered): a wallet that would sign any other
+// input refuses the trade, because the wallet's list of its own coins is not
+// complete enough to check against.
+//
+// The trade signals no replacement (restricted.Sequence): a reorg that
+// un-mines it returns it to the mempool, and it is mined again as agreed.
+// The seller's signatures carry an expiry the server enforces before it
+// broadcasts. The payer's do not, so a payer whose trade is not mined in time
+// spends its coin home; the trade can then never be mined. That spend is
+// refused while the payer's own mempool holds the trade, which may then
+// still be mined: the trade is reported pending (ErrDvPPending), never
+// failed. So is a trade broadcast and not yet contradicted by a spend of its
+// inputs in a block.
 
 import (
 	"bytes"
@@ -262,7 +270,8 @@ func RunMakerRestrictedDvP(d *RestrictedDvP, sell bool, recv []byte, in <-chan [
 			return "", err
 		}
 	} else {
-		if err := p.Node.SignWallet(u); err != nil {
+		if err := p.Node.SignOffered(u, mine); err != nil {
+			sendXcFail(d.Crypter, send, "bad_tx", err.Error())
 			return "", err
 		}
 		raw, _ := u.Hex()
@@ -274,19 +283,20 @@ func RunMakerRestrictedDvP(d *RestrictedDvP, sell bool, recv []byte, in <-chan [
 	return d.awaitTrade(u, txid, sell, mine)
 }
 
-// awaitTrade waits for a signed trade. Past the wait, a payer replaces a
-// trade that is not mined by spending its coin elsewhere; a trade that may
-// still be mined is reported pending, never failed.
+// awaitTrade waits for a signed trade. Past the wait, a payer ends a trade
+// that is not mined by spending its coin home, and reports whichever of the
+// two is mined; a trade that may still be mined is reported pending, never
+// failed.
 func (d *RestrictedDvP) awaitTrade(u *restricted.Unsigned, txid string, sell bool, mine []restricted.Coin) (string, error) {
 	p := d.Party
-	mined := func() bool {
-		bh, err := p.Node.Chain.BlockHashOfTx(txid)
+	mined := func(id string) bool {
+		bh, err := p.Node.Chain.BlockHashOfTx(id)
 		return err == nil && bh != ""
 	}
 	seen := false
 	deadline := time.Now().Add(d.Wait)
 	for time.Now().Before(deadline) {
-		if mined() {
+		if mined(txid) {
 			return txid, nil
 		}
 		if p.Node.InMempool(txid) {
@@ -295,15 +305,28 @@ func (d *RestrictedDvP) awaitTrade(u *restricted.Unsigned, txid string, sell boo
 		time.Sleep(d.Timing.Poll)
 	}
 	if !sell {
-		// The payer's signatures do not expire: spend its coin elsewhere, at
-		// a fee that replaces the trade if it waits in a mempool.
-		rt, rerr := p.Node.Respend(mine[0], d.FeeAsset, d.RfaPerVb, 2*dvpFeeVBytes)
+		// The payer's signatures do not expire: spend its coin home, so the
+		// trade can never be mined. The trade signals no replacement, so the
+		// spend is refused while this node's mempool holds the trade, and the
+		// trade stays pending. Another node may still hold the trade and mine
+		// it first: report only what a block shows.
+		rt, rerr := p.Node.Respend(mine[0], d.FeeAsset, d.RfaPerVb, dvpFeeVBytes)
 		if rerr == nil {
-			return "", fmt.Errorf("the trade %s was not mined; its coin was respent in %s, which replaces it", txid, rt)
+			end := time.Now().Add(d.Wait)
+			for time.Now().Before(end) {
+				if mined(txid) {
+					return txid, nil
+				}
+				if mined(rt) {
+					return "", fmt.Errorf("the trade %s was not mined; its coin was respent home in %s, so it never can be", txid, rt)
+				}
+				time.Sleep(d.Timing.Poll)
+			}
+			return "", fmt.Errorf("%w: the trade %s was not mined, nor yet the respend %s of its coin; either may be", ErrDvPPending, txid, rt)
 		}
 		d.logf("respending the coin of trade %s failed: %v", txid, rerr)
 	}
-	if mined() {
+	if mined(txid) {
 		return txid, nil
 	}
 	if p.Node.InMempool(txid) || seen {
@@ -475,8 +498,9 @@ func RunTakerRestrictedDvP(d *RestrictedDvP, makerAID string, makerSells bool, m
 		if sm.ExpiresAt <= p.Node.Now().Unix() {
 			return "", fmt.Errorf("%w: the maker's signatures have already expired", ErrXcBadTerms)
 		}
-		if err := p.Node.SignWallet(u); err != nil {
-			return "", err
+		if err := p.Node.SignOffered(u, side.Offered); err != nil {
+			sendXcFail(d.Crypter, send, "bad_terms", err.Error())
+			return "", fmt.Errorf("%w: %v", ErrXcBadTerms, err)
 		}
 		txid, err = p.Policy.BroadcastDvP(u, p.Asset, seller, sellerIns, sm.UserSigs, sm.ExpiresAt, sm.ExpirySig)
 	} else {
@@ -484,14 +508,13 @@ func RunTakerRestrictedDvP(d *RestrictedDvP, makerAID string, makerSells bool, m
 		if perr != nil || signed.Txid() != u.Txid() {
 			return "", fmt.Errorf("%w: the maker signed another transaction", ErrXcBadTerms)
 		}
-		for i := range u.Tx.Inputs {
+		// The maker's witnesses are taken on the maker's inputs only.
+		for _, i := range restricted.OfferedInputs(u, theirs) {
 			u.Tx.Inputs[i].Witness = signed.Tx.Inputs[i].Witness
 		}
-		for _, i := range sellerIns {
-			u.Tx.Inputs[i].Witness = nil
-		}
-		if err := p.Node.SignWallet(u); err != nil {
-			return "", err
+		if err := p.Node.SignOffered(u, side.Offered); err != nil {
+			sendXcFail(d.Crypter, send, "bad_terms", err.Error())
+			return "", fmt.Errorf("%w: %v", ErrXcBadTerms, err)
 		}
 		exp := p.Node.Now().Add(d.Expiry).Unix()
 		sigs, es, serr := p.SellerSigs(u, sellerIns, exp)

@@ -103,9 +103,15 @@ func BuildDvP(d DvP) (*Unsigned, error) {
 	return u, nil
 }
 
-// Sequence is every input's sequence in a trade: replaceable (BIP125), and
-// with BIP68's disable flag set, so no relative lock is met.
-const Sequence uint32 = 0xfffffffd
+// Sequence is every input's sequence in a trade: final, so the trade signals
+// no replacement (BIP125) and meets no relative lock (BIP68's disable flag is
+// set). A trade moves both legs at once and depends on nothing outside
+// itself, so a reorg that un-mines it returns it whole to the mempool and the
+// next block mines it again. Were it replaceable, either side could cancel a
+// trade the other already counted as done, by spending one of its own inputs
+// elsewhere, and the other side's wallet would still count its coin as spent
+// by the cancelled trade.
+const Sequence uint32 = 0xffffffff
 
 // TradeSide is what one side of a trade agreed to and holds: the whole of
 // what it checks of the transaction before it signs anything of it.
@@ -135,6 +141,8 @@ type TradeSide struct {
 //     path gated by a time sits in the trade: a gated order's or an HTLC's
 //     keyless refund pays an enclave at its output 0, and that output would
 //     otherwise count as ours twice (as the refund and as the trade);
+//   - no input signals replacement (BIP125), so neither side can cancel the
+//     trade once the other counts it done (see Sequence);
 //   - every input that is ours, by the wallet or by a script of ours, is one
 //     we offered, and every coin we offered is spent;
 //   - every output is explicit; each of Gets is paid by its own output, at a
@@ -166,6 +174,9 @@ func CheckTrade(u *Unsigned, s TradeSide) error {
 	for i, ti := range u.Tx.Inputs {
 		if ti.Sequence&(1<<31) == 0 {
 			return fmt.Errorf("input %d has sequence %#x, which can meet a relative lock", i, ti.Sequence)
+		}
+		if ti.Sequence < 0xfffffffe {
+			return fmt.Errorf("input %d has sequence %#x, which signals replacement", i, ti.Sequence)
 		}
 		h, err := chainhash.NewHash(ti.Hash)
 		if err != nil {

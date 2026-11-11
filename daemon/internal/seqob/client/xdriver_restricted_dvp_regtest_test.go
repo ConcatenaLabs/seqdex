@@ -8,6 +8,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -132,7 +133,7 @@ func TestRestrictedDvPRegtest(t *testing.T) {
 		td := dvp(taker, tc, 100, 20000000)
 		td.BeforeBroadcast = func() { <-done }
 		_, err := RunTakerRestrictedDvP(td, makerAID, false, nil, tSend, tRecv)
-		if merr == nil || !strings.Contains(merr.Error(), "respent") {
+		if merr == nil || errors.Is(merr, ErrDvPPending) || !strings.Contains(merr.Error(), "respent home") {
 			t.Fatalf("the maker did not respend its coin: %v", merr)
 		}
 		if err == nil {

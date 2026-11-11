@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -716,6 +717,14 @@ func TestDvPAttackHeldAndReorg(t *testing.T) {
 		tSend, tRecv, mIn, mSend, tc, mc := pipe(t)
 		md := w.dvp(maker, mc, 100, 20000000)
 		md.Wait = 15 * time.Second
+		var mlog strings.Builder
+		var mlogMu sync.Mutex
+		md.Log = func(f string, a ...interface{}) {
+			mlogMu.Lock()
+			defer mlogMu.Unlock()
+			fmt.Fprintf(&mlog, f+"\n", a...)
+			fmt.Printf("    "+f+"\n", a...)
+		}
 		done := make(chan error, 1)
 		go func() { _, err := RunMakerRestrictedDvP(md, false, nil, mIn, mSend); done <- err }()
 		td := w.dvp(taker, tc, 100, 20000000)
@@ -730,19 +739,17 @@ func TestDvPAttackHeldAndReorg(t *testing.T) {
 		time.Sleep(5 * time.Second)
 		still := inBlock(txid)
 		_ = e.seq.Call(&ok, "prioritisetransaction", txid, 0, 100000000)
-		if merr != nil && strings.Contains(merr.Error(), "replaces it") {
-			// The respend replaced the trade: it must never be mined now.
-			for i := 0; i < 15; i++ {
-				if inBlock(txid) != "" {
-					t.Fatalf("H1: the maker reported the trade replaced, and it was mined: %v", merr)
-				}
-				time.Sleep(time.Second)
-			}
-			e.rec(t, "H1_buy_respend_blocked", map[string]interface{}{"txid": txid, "maker_err": merr.Error(), "replaced": true})
-			return
-		}
+		// The trade signals no replacement: the maker's respend of its coin is
+		// refused while the trade waits in the mempool, and the trade is
+		// reported pending, never failed.
 		if !errors.Is(merr, ErrDvPPending) {
 			t.Fatalf("H1: the maker reported a failure while its signed payment could still be mined: %v", merr)
+		}
+		mlogMu.Lock()
+		respend := mlog.String()
+		mlogMu.Unlock()
+		if !strings.Contains(respend, "txn-mempool-conflict") {
+			t.Fatalf("H1: the maker's respend was not refused for the trade in the mempool: %s", respend)
 		}
 		bh := w.minedIn(t, txid)
 		e.rec(t, "H1_buy_respend_blocked", map[string]interface{}{"txid": txid, "maker_err": fmt.Sprint(merr), "maker_gave_up_at": mErrAt,
