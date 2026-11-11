@@ -260,6 +260,9 @@ with the gated fill leaf, paying the asset to its own enclave, and posts the
 transaction to that server (`POST /v1/cosign` with `order_inputs` and
 `"broadcast": true`), which co-signs and broadcasts it if the asset's rules
 admit the taker. The matcher crosses no gated order and no settler fills one.
+`seqob-maker -mode gated` places one and posts it (`pkg/restricted/gated.go`
+builds the placement and the refund; `TestGatedPlacementRegtest` runs both,
+with a fill, against a node and openampd).
 
 A restricted quote (`RestrictedTerms`) is an online maker's offer of a
 restricted asset, the pair's base, for on-chain bitcoin. A taker lifts it
@@ -318,7 +321,7 @@ markets); one `seqobd` process per mount.
 ### `cmd/seqob-maker`: the maker participant
 
 Posts one signed resting offer and serves lifts until stopped. Anyone can run
-one; the relay grants makers no special standing. Six settlement modes:
+one; the relay grants makers no special standing. Its settlement modes:
 
 - `-mode samechain` (default): asset-for-asset atomic swap, settled through the
   Ocean wallet's blind-aware `CompleteSwap`. Needs `-ocean` + `-account` (the
@@ -329,7 +332,8 @@ one; the relay grants makers no special standing. Six settlement modes:
   its policy server's swap HTLC (offer member 29). Needs what `-mode cross`
   needs, plus `-policy-server`, `-openamp-aid` and `-openamp-key` (the maker's
   account and enclave key there; `SEQOB_OPENAMP_KEY`), and `-pot-asset` (the
-  fee pot's asset, held in `-xseq-wallet`, which pays the pot and the
+  fee pot's asset, held in `-xseq-wallet` (a descriptor wallet: the pot goes
+  home to a fresh v1 address of it), which pays the pot and the
   Sequentia fees, at `-rfa-per-vb`). `-side sell` sells the asset held at the
   enclave; `-side buy` buys it with BTC. Whole fills, one lift at a time; it
   posts only when the enclave is its key's and holds what it sells, and
@@ -341,6 +345,20 @@ one; the relay grants makers no special standing. Six settlement modes:
   claims the asset before the cut-off, or refunds its bitcoin once Bitcoin's
   median time passes `T_btc`. It exits non-zero while something is still owed
   (a refund opens only at its lock time), so run it again until it does not.
+- `-mode gated`: a resting offer to sell a restricted (OpenAMP) asset while
+  the maker is away (offer member 30). It moves `-base-amount` of `-base` from
+  the maker's enclave into a gated order through the policy server, priced at
+  `-quote-amount` of `-quote-asset` for the whole, in fills of at least
+  `-min-lot` (default: the whole order), expiring after `-expiry` (between an
+  hour and 30 days). Needs `-xseq-rpc` and `-xseq-wallet` (a descriptor wallet:
+  fills pay a fresh v1 address of it), `-policy-server`, `-openamp-aid`,
+  `-openamp-key`, and `-pot-asset`, the asset that pays the placement's fee
+  and sets aside the refund's. It waits for the placement to confirm, posts
+  the signed offer, and exits; buyers fill it through the policy server. The
+  placement is written to `-xstate-dir/gated-<txid>.json`; with `-resume`, every
+  saved order past its expiry is sent home to the enclave, following it through
+  partial fills, and it exits non-zero while an order still waits for its
+  expiry.
 - `-mode cross`: BTC-for-asset on-chain HTLC swaps. Funds legs from node
   wallets directly: needs `-btc-rpc`/`-btc-wallet`/`-btc-chain`
   (testnet4|regtest) and `-xseq-rpc`/`-xseq-wallet`. Pair is always
