@@ -66,7 +66,7 @@ over an `xchain` proto that no longer existed, and its file-existence guard hid 
 | Binary | Role |
 |---|---|
 | `seqobd` | The relay. Stores signed offers, serves the book over REST and WS, couriers opaque end-to-end-encrypted swap messages. **Holds no wallet, no keys and no funds.** The chain watcher runs as a goroutine inside it when given `-node-rpc`. |
-| `seqob-maker` | The maker. Modes: `samechain`, `cross`, `lightning`, `pureln`, `subasset`, `subasset-sell`. |
+| `seqob-maker` | The maker. Modes: `samechain`, `cross`, `restricted`, `lightning`, `pureln`, `subasset`, `subasset-sell`. |
 | `seqob-crosser` | Crossing agent; polls every relay and takes both sides. `-take` makes one market take and exits. |
 | `seqob-settler` | Always-online non-custodial settler for the passive covenant CLOB (`plan`, `run`). |
 | `seqob-bridge` | Cross-rail settlement bridge; the only seqob component holding its own inventory and LN node. |

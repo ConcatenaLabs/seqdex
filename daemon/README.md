@@ -325,6 +325,16 @@ one; the relay grants makers no special standing. Six settlement modes:
   account holding the offered asset) and `-node-rpc` for the open fee market.
   `-confidential=false` (default: Sequentia is transparent by default) settles
   explicit; `-confidential=true` publishes a blinding pubkey and settles blinded.
+- `-mode restricted`: a restricted (OpenAMP) asset for on-chain BTC, through
+  its policy server's swap HTLC (offer member 29). Needs what `-mode cross`
+  needs, plus `-policy-server`, `-openamp-aid` and `-openamp-key` (the maker's
+  account and enclave key there; `SEQOB_OPENAMP_KEY`), and `-pot-asset` (the
+  fee pot's asset, held in `-xseq-wallet`, which pays the pot and the
+  Sequentia fees, at `-rfa-per-vb`). `-side sell` sells the asset held at the
+  enclave; `-side buy` buys it with BTC. Whole fills, one lift at a time; it
+  posts only when the enclave is its key's and holds what it sells, and
+  retires after a fill. Each lift's state (keys, secret, legs, the lock) is
+  written to `-xstate-dir/restricted-<session>.json`.
 - `-mode cross`: BTC-for-asset on-chain HTLC swaps. Funds legs from node
   wallets directly: needs `-btc-rpc`/`-btc-wallet`/`-btc-chain`
   (testnet4|regtest) and `-xseq-rpc`/`-xseq-wallet`. Pair is always
