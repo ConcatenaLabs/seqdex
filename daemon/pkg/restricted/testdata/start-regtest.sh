@@ -10,13 +10,23 @@
 # Every process's PID is written to $DIR/pids, and `stop` stops those only.
 set -euo pipefail
 DIR="${RESTRICTED_E2E_DIR:?a fresh directory for the run}"
+# stop needs nothing but the directory.
+if [ "${1:-up}" = stop ]; then
+  if [ -f "$DIR/pids" ]; then
+    while read -r pid; do kill "$pid" 2>/dev/null || true; done < "$DIR/pids"
+  fi
+  exit 0
+fi
 SEQD="${SEQUENTIAD:?sequentiad}"
 SEQC="$(dirname "$SEQD")/sequentia-cli"
 BTCD="${BITCOIND:-bitcoind}"
 BTCC="$(dirname "$(command -v "$BTCD")")/bitcoin-cli"
 AMPD="${OPENAMPD:?openampd}"
 TOOL="${TOKEN_COVENANTS:?token-covenants}"
-BTC_RPC=28443; BTC_P2P=28444; SEQ_RPC=28501; SEQ_P2P=28502; AMP=28600
+# RESTRICTED_PORTS moves every port by its leading digits (28 by default:
+# 28443 to 28600), for a run beside another.
+P="${RESTRICTED_PORTS:-28}"
+BTC_RPC=${P}443; BTC_P2P=${P}444; SEQ_RPC=${P}501; SEQ_P2P=${P}502; AMP=${P}600
 btc() { "$BTCC" -datadir="$DIR/btc" -regtest -rpcport=$BTC_RPC "$@"; }
 sq() { "$SEQC" -datadir="$DIR/seq" -chain=elementsregtest -rpcport=$SEQ_RPC "$@"; }
 
