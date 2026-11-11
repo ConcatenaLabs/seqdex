@@ -90,11 +90,24 @@ type RestrictedResult struct {
 	BtcKeyHex    string // this side's BTC key: the buyer's refund key, the seller's claim key
 	Terms        *restricted.SwapTerms
 	Locked       *restricted.Locked // the seller's lock
-	SeqClaimTxid string
-	BtcClaimTxid string
-	Refunds      []string
-	Settled      bool
+	// HTLCAt and PotAt are the lock's outputs, as the buyer learnt them.
+	HTLCAt, PotAt *restricted.Outpoint
+	SeqClaimTxid  string
+	BtcClaimTxid  string
+	Refunds       []string
+	Settled       bool
+	// Role is this side's part: "seller" (it locks the asset and claims the
+	// BTC) or "buyer" (it locks the BTC and claims the asset).
+	Role string
+	// Asset is the restricted asset traded (display hex).
+	Asset string
+	// Ended says why a swap that did not settle needs nothing more: every
+	// coin it locked is home. ResumeRestricted skips it.
+	Ended string
 }
+
+// Pending reports whether a saved swap may still need this side to act.
+func (res *RestrictedResult) Pending() bool { return !res.Settled && res.Ended == "" }
 
 func (r *RestrictedSwap) logf(f string, a ...interface{}) {
 	if r.Log != nil {
@@ -103,6 +116,9 @@ func (r *RestrictedSwap) logf(f string, a ...interface{}) {
 }
 
 func (r *RestrictedSwap) update(res *RestrictedResult) {
+	if res.Asset == "" && r.Party != nil {
+		res.Asset = r.Party.Asset
+	}
 	if r.OnUpdate != nil {
 		r.OnUpdate(res)
 	}
@@ -231,6 +247,9 @@ func (r *RestrictedSwap) buyerClaim(res *RestrictedResult, terms restricted.Swap
 func (r *RestrictedSwap) sellerSettle(res *RestrictedResult, btcKey *xchain.Key, hint <-chan []byte) error {
 	l := res.Locked
 	for {
+		if err := r.Ctx.Err(); err != nil {
+			return fmt.Errorf("%w: the lock %s is unsettled; resume this swap's state to finish it", ErrXcCanceled, l.Txid)
+		}
 		var secret []byte
 		select {
 		case s := <-hint:
@@ -267,6 +286,9 @@ func (r *RestrictedSwap) sellerSettle(res *RestrictedResult, btcKey *xchain.Key,
 				if btcMTP, e := r.BtcMedianTime(); e == nil && btcMTP >= int64(res.TBtc) {
 					return fmt.Errorf("the BTC refund has opened before the claim landed: %w", err)
 				}
+				if r.Ctx.Err() != nil {
+					return fmt.Errorf("%w: the BTC claim is unmade; resume this swap's state to finish it", ErrXcCanceled)
+				}
 				time.Sleep(r.Timing.Poll)
 			}
 		}
@@ -280,6 +302,8 @@ func (r *RestrictedSwap) sellerSettle(res *RestrictedResult, btcKey *xchain.Key,
 					continue
 				}
 				r.logf("no claim by T_seq: the HTLC and the pot went home (%v)", txids)
+				res.Ended = "refunded after T_seq"
+				r.update(res)
 				return fmt.Errorf("no claim by T_seq; refunded %v", txids)
 			}
 			r.logf("refund: %v; retrying", err)
@@ -323,7 +347,7 @@ func RunTakerRestrictedBuy(r *RestrictedSwap, makerAID string, secret []byte, bt
 		return nil, errors.New("restricted buy: a 32-byte secret and a refund key")
 	}
 	h := sha256.Sum256(secret)
-	res := &RestrictedResult{HashH: hex.EncodeToString(h[:]), Secret: hex.EncodeToString(secret), BtcKeyHex: hex.EncodeToString(btcRefund.Bytes())}
+	res := &RestrictedResult{Role: "buyer", HashH: hex.EncodeToString(h[:]), Secret: hex.EncodeToString(secret), BtcKeyHex: hex.EncodeToString(btcRefund.Bytes())}
 	// Approved before anything moves: never lock BTC for an asset we could not receive.
 	if err := r.eligible(r.Party.AID, makerAID); err != nil {
 		return res, err
@@ -392,9 +416,10 @@ func RunTakerRestrictedBuy(r *RestrictedSwap, makerAID string, secret []byte, bt
 	st := restricted.SwapTerms{Hash: h, SellerAID: makerAID, BuyerAID: r.Party.AID, TSeq: locked.Leg.Locktime,
 		Value: r.Value, PotAsset: r.PotAsset, PotValue: r.PotAmount, Payout: payout}
 	res.TSeq, res.Terms = st.TSeq, &st
+	res.HTLCAt = &restricted.Outpoint{Txid: locked.Leg.Txid, Vout: locked.Leg.Vout}
+	res.PotAt = &restricted.Outpoint{Txid: locked.Leg.Txid, Vout: *locked.PotVout}
 	r.update(res)
-	if err := r.buyerClaim(res, st, restricted.Outpoint{Txid: locked.Leg.Txid, Vout: locked.Leg.Vout},
-		restricted.Outpoint{Txid: locked.Leg.Txid, Vout: *locked.PotVout}, hp, secret); err != nil {
+	if err := r.buyerClaim(res, st, *res.HTLCAt, *res.PotAt, hp, secret); err != nil {
 		return res, err
 	}
 	res.Settled = true
@@ -414,7 +439,7 @@ func RunMakerRestrictedSell(r *RestrictedSwap, newOps func(hashH []byte) (XcOps,
 		return nil, err
 	}
 	recv := chanRecv(in)
-	res := &RestrictedResult{}
+	res := &RestrictedResult{Role: "seller"}
 	req, err := recvXcType(recv, r.Crypter, XcTermsRequest, r.Timing.TermsReqWait)
 	if err != nil {
 		return res, err
@@ -496,7 +521,7 @@ func RunTakerRestrictedSell(r *RestrictedSwap, makerAID string, send XcSend, rec
 	if err != nil {
 		return nil, err
 	}
-	res := &RestrictedResult{BtcKeyHex: hex.EncodeToString(claimKey.Bytes())}
+	res := &RestrictedResult{Role: "seller", BtcKeyHex: hex.EncodeToString(claimKey.Bytes())}
 	r.update(res)
 	if err := r.eligible(makerAID, r.Party.AID); err != nil {
 		return res, err
@@ -599,7 +624,7 @@ func RunMakerRestrictedBuy(r *RestrictedSwap, newOps func(hashH []byte) (XcOps, 
 	if err != nil {
 		return nil, err
 	}
-	res := &RestrictedResult{HashH: hex.EncodeToString(h[:]), Secret: hex.EncodeToString(secret), BtcKeyHex: hex.EncodeToString(refundKey.Bytes()),
+	res := &RestrictedResult{Role: "buyer", HashH: hex.EncodeToString(h[:]), Secret: hex.EncodeToString(secret), BtcKeyHex: hex.EncodeToString(refundKey.Bytes()),
 		TBtc: uint32(r.Party.Node.Now().Add(restricted.TBtcAhead).Unix())}
 	r.update(res)
 	ops, err := newOps(h[:])
@@ -651,9 +676,10 @@ func RunMakerRestrictedBuy(r *RestrictedSwap, newOps func(hashH []byte) (XcOps, 
 	st := restricted.SwapTerms{Hash: h, SellerAID: req.TakerAID, BuyerAID: r.Party.AID, TSeq: funded.Leg.Locktime,
 		Value: r.Value, PotAsset: r.PotAsset, PotValue: r.PotAmount, Payout: payout}
 	res.TSeq, res.Terms = st.TSeq, &st
+	res.HTLCAt = &restricted.Outpoint{Txid: funded.Leg.Txid, Vout: funded.Leg.Vout}
+	res.PotAt = &restricted.Outpoint{Txid: funded.Leg.Txid, Vout: *funded.PotVout}
 	r.update(res)
-	if err := r.buyerClaim(res, st, restricted.Outpoint{Txid: funded.Leg.Txid, Vout: funded.Leg.Vout},
-		restricted.Outpoint{Txid: funded.Leg.Txid, Vout: *funded.PotVout}, hp, secret); err != nil {
+	if err := r.buyerClaim(res, st, *res.HTLCAt, *res.PotAt, hp, secret); err != nil {
 		return res, err
 	}
 	_ = sendXc(&XcMsg{Type: XcSecretRevealed, Preimage: res.Secret}, r.Crypter, send)

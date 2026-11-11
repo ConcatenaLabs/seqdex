@@ -39,6 +39,7 @@ type restrictedMakerConfig struct {
 	potAsset     string
 	potAmount    uint64
 	rfaPerVb     uint64
+	resume       bool
 }
 
 func buildRestrictedOffer(cfg restrictedMakerConfig, policyX [32]byte) *seqobv1.Offer {
@@ -86,7 +87,7 @@ func writeRestrictedState(dir, sid string, r *client.RestrictedResult) {
 func runRestrictedMaker(cfg restrictedMakerConfig) {
 	c := cfg.cross
 	side := strings.ToLower(c.side)
-	if side != "sell" && side != "buy" {
+	if side != "sell" && side != "buy" && !cfg.resume {
 		fatal("-mode restricted -side must be sell (taker pays BTC) or buy (the maker pays BTC)")
 	}
 	if c.btcRPCURL == "" || c.seqRPCURL == "" || cfg.policyServer == "" || cfg.aid == "" || cfg.enclaveKey == nil ||
@@ -116,6 +117,21 @@ func runRestrictedMaker(cfg restrictedMakerConfig) {
 	notPosted := func(f string, a ...interface{}) {
 		time.Sleep(time.Minute) // a supervisor's retry loop must not spin
 		fatal("not posted: "+f, a...)
+	}
+	btcMTP := func() (int64, error) {
+		var i struct {
+			MedianTime int64 `json:"mediantime"`
+		}
+		return i.MedianTime, btcRPC.Call(&i, "getblockchaininfo")
+	}
+	newOps := func(h []byte) (client.XcOps, error) {
+		return &client.LiveXcOps{Swap: xchain.NewSwapBitcoin(btcChain, seqChain, xchain.NewHashLockFromHash(h)), BTC: btcChain, SEQ: seqChain}, nil
+	}
+	if cfg.resume {
+		if resumeRestricted(cfg, party, btcMTP, newOps) > 0 {
+			os.Exit(1)
+		}
+		return
 	}
 	if err := btcChain.EnsureWalletLoaded(); err != nil {
 		notPosted("%v", err)
@@ -165,16 +181,6 @@ func runRestrictedMaker(cfg restrictedMakerConfig) {
 	}
 	fmt.Printf("seqob-maker up (RESTRICTED): posted %s offer %s: %d %s for %d BTC sats, account %s at %s\n",
 		side, o.GetOfferId(), c.assetAmt, c.asset, c.btcAmt, cfg.aid, cfg.policyServer)
-
-	btcMTP := func() (int64, error) {
-		var i struct {
-			MedianTime int64 `json:"mediantime"`
-		}
-		return i.MedianTime, btcRPC.Call(&i, "getblockchaininfo")
-	}
-	newOps := func(h []byte) (client.XcOps, error) {
-		return &client.LiveXcOps{Swap: xchain.NewSwapBitcoin(btcChain, seqChain, xchain.NewHashLockFromHash(h)), BTC: btcChain, SEQ: seqChain}, nil
-	}
 
 	var mu sync.Mutex
 	inboxes := map[string]chan []byte{}
@@ -294,6 +300,56 @@ func runRestrictedMaker(cfg restrictedMakerConfig) {
 			releaseDetachedSession(from.GetError(), &mu, inboxes)
 		}
 	}
+}
+
+// resumeRestricted finishes every unsettled swap saved under -xstate-dir, in
+// turn, and returns how many still owe something (run it again later: a
+// refund opens only at its lock time).
+func resumeRestricted(cfg restrictedMakerConfig, party *restricted.Party, btcMTP func() (int64, error),
+	newOps func([]byte) (client.XcOps, error)) int {
+	c := cfg.cross
+	paths, err := filepath.Glob(filepath.Join(c.stateDir, "restricted-*.json"))
+	if err != nil {
+		fatal("-xstate-dir %s: %v", c.stateDir, err)
+	}
+	owed := 0
+	for _, p := range paths {
+		sid := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), "restricted-"), ".json")
+		b, err := os.ReadFile(p)
+		if err != nil {
+			fmt.Printf("resume %s: %v\n", sid, err)
+			owed++
+			continue
+		}
+		var res client.RestrictedResult
+		if err := json.Unmarshal(b, &res); err != nil {
+			fmt.Printf("resume %s: the state does not read: %v\n", sid, err)
+			owed++
+			continue
+		}
+		if !res.Pending() {
+			continue
+		}
+		r := &client.RestrictedSwap{Party: party, BtcMedianTime: btcMTP, RfaPerVb: cfg.rfaPerVb, BtcFee: c.spendFee,
+			MinBTCConf: c.minBTCConf,
+			Log:        func(f string, a ...interface{}) { fmt.Printf("resume "+sid+": "+f+"\n", a...) },
+			OnUpdate:   func(x *client.RestrictedResult) { writeRestrictedState(c.stateDir, sid, x) }}
+		out, err := client.ResumeRestricted(r, &res, newOps)
+		if out != nil {
+			writeRestrictedState(c.stateDir, sid, out)
+		}
+		switch {
+		case err != nil:
+			fmt.Printf("resume %s: still owed: %v\n", sid, err)
+			owed++
+		case out.Settled:
+			fmt.Printf("resume %s: settled\n", sid)
+		default:
+			fmt.Printf("resume %s: ended: %s\n", sid, out.Ended)
+		}
+	}
+	fmt.Printf("resume: %d swap(s) still owe something\n", owed)
+	return owed
 }
 
 func hexKey(h string) *btcec.PrivateKey {

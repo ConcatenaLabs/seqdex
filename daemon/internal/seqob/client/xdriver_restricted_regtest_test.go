@@ -348,6 +348,116 @@ func TestRestrictedSwapRegtest(t *testing.T) {
 			"claim": mres.SeqClaimTxid, "btc_claim": tres.BtcClaimTxid})
 	})
 
+	// -- 2b. the maker stops after its lock; its saved state claims the BTC ----
+	// The maker (seller) stops once its HTLC is locked, as if its process died.
+	// The taker claims the asset; ResumeRestricted, from the state as written
+	// to disk, reads s from the pot's claim and takes the BTC.
+	t.Run("resume-seller-claims-btc", func(t *testing.T) {
+		tSend, tRecv, mIn, mSend, tc, mc := pipe(t)
+		secret := make([]byte, 32)
+		_, _ = rand.Read(secret)
+		refund, _ := xchain.NewKey()
+		ts := taker.swap(e, tc, 100, 30000, nil)
+		ts.Ops = taker.ops(secret, true)
+		mctx, crash := context.WithCancel(ctx)
+		var saved []byte
+		ms := maker.swap(e, mc, 100, 30000, func(r *RestrictedResult) {
+			saved, _ = json.Marshal(r)
+			if r.Locked != nil {
+				crash()
+			}
+		})
+		ms.Ctx = mctx
+		var merr error
+		done := make(chan struct{})
+		go func() { _, merr = RunMakerRestrictedSell(ms, maker.newOps(), mIn, mSend); close(done) }()
+		tres, err := RunTakerRestrictedBuy(ts, makerAID, secret, refund, tSend, tRecv)
+		if err != nil {
+			t.Fatalf("taker: %v", err)
+		}
+		<-done
+		if merr == nil || !strings.Contains(merr.Error(), "resume this swap") {
+			t.Fatalf("the maker did not stop unsettled: %v", merr)
+		}
+		var st RestrictedResult
+		must(t, json.Unmarshal(saved, &st))
+		if st.BtcClaimTxid != "" || !st.Pending() || st.Role != "seller" {
+			t.Fatalf("the saved state is not an unsettled seller's: %+v", st)
+		}
+		rs := maker.swap(e, nil, 0, 0, nil)
+		out, err := ResumeRestricted(rs, &st, maker.newOps())
+		if err != nil || !out.Settled || out.BtcClaimTxid == "" || out.Secret != hex.EncodeToString(secret) {
+			t.Fatalf("resume did not claim the BTC with the taker's secret: %v %+v", err, out)
+		}
+		e.rec(t, "resume_seller", map[string]interface{}{"lock": st.Locked.Txid, "taker_claim": tres.SeqClaimTxid,
+			"btc_claim_on_resume": out.BtcClaimTxid})
+	})
+
+	// -- 2c. the maker stops before its claim; its saved state claims the asset -
+	// The maker (buyer, holding s) stops once it knows the HTLC, before its
+	// claim. The taker waits for s. ResumeRestricted claims the asset, and the
+	// taker takes the BTC with the s it reveals.
+	t.Run("resume-buyer-claims-asset", func(t *testing.T) {
+		tSend, tRecv, mIn, mSend, tc, mc := pipe(t)
+		before := maker.holding(t)
+		ts := taker.swap(e, tc, 100, 30000, nil)
+		ts.Ops = taker.ops(make([]byte, 32), false)
+		mctx, crash := context.WithCancel(ctx)
+		var saved []byte
+		ms := maker.swap(e, mc, 100, 30000, func(r *RestrictedResult) {
+			saved, _ = json.Marshal(r)
+			if r.HTLCAt != nil {
+				crash()
+			}
+		})
+		ms.Ctx = mctx
+		var merr error
+		done := make(chan struct{})
+		go func() { _, merr = RunMakerRestrictedBuy(ms, maker.newOps(), mIn, mSend); close(done) }()
+		rebind := func(timeout time.Duration) ([]byte, error) {
+			b, err := tRecv(timeout)
+			if err == nil {
+				if m, oerr := OpenXcMsg(b, tc); oerr == nil && m.Type == XcBtcLegLocked {
+					if h, herr := hex.DecodeString(m.HashH); herr == nil {
+						ts.Ops = taker.ops(h, false)
+					}
+				}
+			}
+			return b, err
+		}
+		var tres *RestrictedResult
+		var terr error
+		tdone := make(chan struct{})
+		go func() { tres, terr = RunTakerRestrictedSell(ts, makerAID, tSend, rebind); close(tdone) }()
+		<-done
+		if merr == nil {
+			t.Fatal("the maker claimed although it stopped")
+		}
+		var st RestrictedResult
+		must(t, json.Unmarshal(saved, &st))
+		if st.SeqClaimTxid != "" || !st.Pending() || st.Role != "buyer" || st.HTLCAt == nil {
+			t.Fatalf("the saved state is not an unsettled buyer's: %+v", st)
+		}
+		rs := maker.swap(e, nil, 0, 0, nil)
+		out, err := ResumeRestricted(rs, &st, maker.newOps())
+		if err != nil || !out.Settled || out.SeqClaimTxid == "" {
+			t.Fatalf("resume did not claim the asset: %v %+v", err, out)
+		}
+		if got := maker.holdingReaches(t, before+100); got != before+100 {
+			t.Fatalf("the maker's enclave holds %d, want %d", got, before+100)
+		}
+		<-tdone
+		if terr != nil || tres.BtcClaimTxid == "" {
+			t.Fatalf("the taker did not take the BTC after the resumed claim: %v %+v", terr, tres)
+		}
+		// Resuming a settled state does nothing.
+		again, err := ResumeRestricted(rs, out, maker.newOps())
+		if err != nil || again.SeqClaimTxid != out.SeqClaimTxid {
+			t.Fatalf("a second resume acted: %v %+v", err, again)
+		}
+		e.rec(t, "resume_buyer", map[string]interface{}{"claim_on_resume": out.SeqClaimTxid, "taker_btc_claim": tres.BtcClaimTxid})
+	})
+
 	// -- 3. a claim the policy server refuses: nobody loses a coin --------------
 	// The buyer is frozen once the HTLC is locked, so its claim is refused and s
 	// is never revealed. A refund before T_seq is refused in a block; after it,
@@ -434,8 +544,15 @@ func TestRestrictedSwapRegtest(t *testing.T) {
 		for i := 0; i < 12; i++ {
 			e.mine(t)
 		}
-		btxid, err := RefundRestrictedBTC(ts, tres.BtcLeg, refund, tres.TBtc, false)
-		must(t, err)
-		e.rec(t, "btc_refund_at_t_btc", btxid)
+		// The buyer's saved state finishes it: the HTLC went home without s, so
+		// its BTC comes home.
+		var st RestrictedResult
+		b, _ := json.Marshal(tres)
+		must(t, json.Unmarshal(b, &st))
+		out, err := ResumeRestricted(taker.swap(e, nil, 0, 0, nil), &st, taker.newOps())
+		if err != nil || out.Settled || !strings.Contains(out.Ended, "BTC went home") {
+			t.Fatalf("resume did not refund the buyer's BTC: %v %+v", err, out)
+		}
+		e.rec(t, "btc_refund_at_t_btc_on_resume", out.Ended)
 	})
 }

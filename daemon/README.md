@@ -334,7 +334,13 @@ one; the relay grants makers no special standing. Six settlement modes:
   enclave; `-side buy` buys it with BTC. Whole fills, one lift at a time; it
   posts only when the enclave is its key's and holds what it sells, and
   retires after a fill. Each lift's state (keys, secret, legs, the lock) is
-  written to `-xstate-dir/restricted-<session>.json`.
+  written to `-xstate-dir/restricted-<session>.json`. With `-resume`, the same
+  flags finish every saved swap that is still unsettled, with no relay and no
+  counterparty: as seller, it claims the bitcoin with the secret read from the
+  pot's claim, or sends the HTLC and the pot home after `T_seq`; as buyer, it
+  claims the asset before the cut-off, or refunds its bitcoin once Bitcoin's
+  median time passes `T_btc`. It exits non-zero while something is still owed
+  (a refund opens only at its lock time), so run it again until it does not.
 - `-mode cross`: BTC-for-asset on-chain HTLC swaps. Funds legs from node
   wallets directly: needs `-btc-rpc`/`-btc-wallet`/`-btc-chain`
   (testnet4|regtest) and `-xseq-rpc`/`-xseq-wallet`. Pair is always

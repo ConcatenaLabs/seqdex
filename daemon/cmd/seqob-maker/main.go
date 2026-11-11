@@ -183,7 +183,7 @@ func main() {
 	spendFee := flag.Uint64("spend-fee", 1000, "cross: HTLC spend fee target in native sats (converted per-asset via the fee market)")
 	btcFeeRate := flag.Float64("btc-fee-rate", 0, "cross: the least sat/vB a BTC HTLC funding, claim or refund pays; it pays the live going rate, never under this (0: the chain's floor)")
 	xstateDir := flag.String("xstate-dir", "xmaker-sessions", "cross: directory for per-lift session state (keys/legs; the recovery material)")
-	resume := flag.Bool("resume", false, "instead of serving, finish every non-terminal session in -xstate-dir (post-restart on-chain claim/refund: cross, submarine, submarine-reverse, subasset, subasset-sell) and exit; pass -maker-priv for sub-asset BUY claims")
+	resume := flag.Bool("resume", false, "instead of serving, finish every non-terminal session in -xstate-dir (post-restart on-chain claim/refund: cross, submarine, submarine-reverse, subasset, subasset-sell) and exit; pass -maker-priv for sub-asset BUY claims. With -mode restricted and its flags, finish its saved swaps instead: claim the BTC with a secret read from the chain, claim the asset, or send the coins home once their refunds open; it exits non-zero while something is still owed, so run it again")
 	lnSocket := flag.String("ln-socket", "", "lightning/pureln: the maker's SeqLN-on-Bitcoin lightning-rpc unix socket (BTC leg; required for -mode lightning and -mode pureln)")
 	subAnchor := flag.Int64("sub-anchor-depth", 3, "lightning: Bitcoin-anchor depth the maker requires on the taker's asset funding before it pays the invoice (>=2; the submarine cross-leg safety gate)")
 	max0conf := flag.Uint64("max-0conf", 0, "lightning: 0-conf LP-fronting cap (asset atoms). Trades whose on-chain asset leg is <= this settle INSTANTLY (skip the anchor-bury wait); the maker/taker fronts the Bitcoin-reorg risk. Advertised in the offer's LightningTerms. 0 = disabled (always anchor-gate).")
@@ -213,7 +213,7 @@ func main() {
 
 	// Cross resume needs no maker key or offer: it drives on-chain settlement
 	// from persisted per-session keys. Handle it before the key/offer setup.
-	if *resume {
+	if *resume && strings.ToLower(*mode) != "restricted" {
 		// The sub-asset BUY claim key is the identity key; a refund key is persisted
 		// per session. Only a key given explicitly is used here, never a generated one.
 		if *makerPriv != "" {
@@ -233,7 +233,7 @@ func main() {
 				seqRPCURL: *xseqRPCURL, seqWallet: *xseqWallet, minBTCConf: *minBTCConf, spendFee: *spendFee,
 				stateDir: *xstateDir, btcFeeRate: *btcFeeRate},
 			policyServer: strings.TrimRight(*policyServer, "/"), aid: *openampAID, enclaveKey: hexKey(*openampKey),
-			potAsset: *potAsset, potAmount: *potAmount, rfaPerVb: *rfaPerVb,
+			potAsset: *potAsset, potAmount: *potAmount, rfaPerVb: *rfaPerVb, resume: *resume,
 		})
 		return
 	}
