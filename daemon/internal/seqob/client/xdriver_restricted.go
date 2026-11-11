@@ -55,6 +55,15 @@ import (
 	"github.com/aejkcs50/seqdex/daemon/pkg/xchain"
 )
 
+// MinBTCLegDepth is the least burial of the BTC leg before the seller locks
+// the asset. At 0 the payer can replace its lock in the mempool after the
+// seller locks; at 1 a one-block reorg, the common orphan, can remove it.
+// Deeper reorgs are rarer, and the seller re-verifies the leg in the best
+// chain after every wait and just before its lock, whose block anchors to a
+// Bitcoin block at or above the leg's: a Bitcoin reorg that removes the leg
+// reorgs that lock out with it.
+const MinBTCLegDepth = 2
+
 // RestrictedSwap is what a restricted swap's driver needs on either side.
 type RestrictedSwap struct {
 	Ops     XcOps             // the BTC leg and the anchor reads
@@ -122,8 +131,8 @@ func (r *RestrictedSwap) defaults() error {
 	if r.BtcFee == 0 {
 		r.BtcFee = 1000
 	}
-	if r.MinBTCConf < 0 {
-		r.MinBTCConf = 0
+	if r.MinBTCConf < MinBTCLegDepth {
+		r.MinBTCConf = MinBTCLegDepth
 	}
 	return nil
 }
@@ -163,11 +172,28 @@ func (r *RestrictedSwap) fundDeadline(tBtc uint32) (context.Context, context.Can
 
 // sellerLock waits until our node's anchor reaches the BTC leg's height, then
 // locks the HTLC and pot, and waits for the lock's confirmation.
-func (r *RestrictedSwap) sellerLock(res *RestrictedResult, terms restricted.SwapTerms, hp int64) (*restricted.Locked, string, error) {
+//
+// reverify checks the BTC leg again in the best chain (same outpoint, script
+// and amount, buried MinBTCConf deep) and returns its height: it runs after
+// every anchor wait, so the asset is never locked against a leg a reorg or a
+// replacement removed meanwhile.
+func (r *RestrictedSwap) sellerLock(res *RestrictedResult, terms restricted.SwapTerms, hp int64, reverify func() (int64, error)) (*restricted.Locked, string, error) {
 	ctx, cancel := r.fundDeadline(res.TBtc)
 	defer cancel()
-	if err := waitSeqAnchorReachesBTCLeg(ctx, r.Ops, hp, fundWindow{}, r.Timing, r.logf); err != nil {
-		return nil, "", fmt.Errorf("asset not locked: %w", err)
+	for {
+		if err := waitSeqAnchorReachesBTCLeg(ctx, r.Ops, hp, fundWindow{}, r.Timing, r.logf); err != nil {
+			return nil, "", fmt.Errorf("asset not locked: %w", err)
+		}
+		h, err := reverify()
+		if err != nil {
+			return nil, "", fmt.Errorf("asset not locked: the BTC leg no longer verifies: %w", err)
+		}
+		if h == hp {
+			break
+		}
+		r.logf("the BTC leg moved from height %d to %d: waiting for the anchor again", hp, h)
+		hp, res.BtcLegHeight = h, h
+		r.update(res)
 	}
 	tSeq, err := restricted.PickTSeq(r.Party.Node.Now(), res.TBtc)
 	if err != nil {
@@ -288,6 +314,19 @@ func (r *RestrictedSwap) sellerSettle(res *RestrictedResult, btcKey *xchain.Key,
 	}
 }
 
+// verifyBuried retries the seller's first verification of the BTC leg while
+// it is only too shallow, until BtcConfWait: every other failure is final.
+func (r *RestrictedSwap) verifyBuried(verify func() (*xchain.VerifiedBTCLeg, error)) (*xchain.VerifiedBTCLeg, error) {
+	deadline := time.Now().Add(r.Timing.BtcConfWait)
+	for {
+		v, err := verify()
+		if err == nil || !errors.Is(err, xchain.ErrBTCLegUnconfirmed) || time.Now().After(deadline) {
+			return v, err
+		}
+		time.Sleep(r.Timing.Poll)
+	}
+}
+
 func btcLegHeight(r *RestrictedSwap, txid string) (int64, error) {
 	deadline := time.Now().Add(r.Timing.BtcConfWait)
 	for {
@@ -355,7 +394,7 @@ func RunTakerRestrictedBuy(r *RestrictedSwap, makerAID string, secret []byte, bt
 	}
 	res.BtcLeg = leg
 	r.update(res)
-	if hp <= 0 {
+	{ // buried MinBTCConf deep before the seller is told: it locks against nothing shallower
 		if hp, err = btcLegHeight(r, leg.Funded.TxID); err != nil {
 			sendXcFail(r.Crypter, send, "btc_conf_timeout", err.Error())
 			return res, err
@@ -456,7 +495,9 @@ func RunMakerRestrictedSell(r *RestrictedSwap, newOps func(hashH []byte) (XcOps,
 	if err != nil {
 		return res, err
 	}
-	v, err := ops.VerifyBTCLeg(hb, claimKey.PubKey(), refundPub, script, res.TBtc, funded.Leg.Txid, funded.Leg.Vout, r.BtcAmount, r.MinBTCConf)
+	v, err := r.verifyBuried(func() (*xchain.VerifiedBTCLeg, error) {
+		return ops.VerifyBTCLeg(hb, claimKey.PubKey(), refundPub, script, res.TBtc, funded.Leg.Txid, funded.Leg.Vout, r.BtcAmount, r.MinBTCConf)
+	})
 	if err != nil {
 		sendXcFail(r.Crypter, send, "btc_leg_invalid", err.Error())
 		return res, err
@@ -465,8 +506,15 @@ func RunMakerRestrictedSell(r *RestrictedSwap, newOps func(hashH []byte) (XcOps,
 	r.update(res)
 	var h [32]byte
 	copy(h[:], hb)
+	reverify := func() (int64, error) {
+		v, err := ops.VerifyBTCLeg(hb, claimKey.PubKey(), refundPub, script, res.TBtc, funded.Leg.Txid, funded.Leg.Vout, r.BtcAmount, r.MinBTCConf)
+		if err != nil {
+			return 0, err
+		}
+		return v.Height, nil
+	}
 	locked, blockHash, err := r.sellerLock(res, restricted.SwapTerms{Hash: h, SellerAID: r.Party.AID, BuyerAID: req.TakerAID,
-		Value: r.Value, PotAsset: r.PotAsset, PotValue: r.PotAmount}, v.Height)
+		Value: r.Value, PotAsset: r.PotAsset, PotValue: r.PotAmount}, v.Height, reverify)
 	if err != nil {
 		sendXcFail(r.Crypter, send, "lock_failed", err.Error())
 		if locked == nil {
@@ -528,7 +576,9 @@ func RunTakerRestrictedSell(r *RestrictedSwap, makerAID string, send XcSend, rec
 	if err != nil {
 		return res, err
 	}
-	v, err := r.Ops.VerifyBTCLeg(hb, claimKey.PubKey(), refundPub, script, m.BtcLocktime, m.Leg.Txid, m.Leg.Vout, r.BtcAmount, r.MinBTCConf)
+	v, err := r.verifyBuried(func() (*xchain.VerifiedBTCLeg, error) {
+		return r.Ops.VerifyBTCLeg(hb, claimKey.PubKey(), refundPub, script, m.BtcLocktime, m.Leg.Txid, m.Leg.Vout, r.BtcAmount, r.MinBTCConf)
+	})
 	if err != nil {
 		sendXcFail(r.Crypter, send, "btc_leg_invalid", err.Error())
 		return res, err
@@ -537,8 +587,15 @@ func RunTakerRestrictedSell(r *RestrictedSwap, makerAID string, send XcSend, rec
 	r.update(res)
 	var h [32]byte
 	copy(h[:], hb)
+	reverify := func() (int64, error) {
+		v, err := r.Ops.VerifyBTCLeg(hb, claimKey.PubKey(), refundPub, script, m.BtcLocktime, m.Leg.Txid, m.Leg.Vout, r.BtcAmount, r.MinBTCConf)
+		if err != nil {
+			return 0, err
+		}
+		return v.Height, nil
+	}
 	locked, blockHash, err := r.sellerLock(res, restricted.SwapTerms{Hash: h, SellerAID: r.Party.AID, BuyerAID: makerAID,
-		Value: r.Value, PotAsset: r.PotAsset, PotValue: r.PotAmount}, v.Height)
+		Value: r.Value, PotAsset: r.PotAsset, PotValue: r.PotAmount}, v.Height, reverify)
 	if err != nil {
 		sendXcFail(r.Crypter, send, "lock_failed", err.Error())
 		if locked == nil {
@@ -614,7 +671,7 @@ func RunMakerRestrictedBuy(r *RestrictedSwap, newOps func(hashH []byte) (XcOps, 
 	}
 	res.BtcLeg = leg
 	r.update(res)
-	if hp <= 0 {
+	{ // buried MinBTCConf deep before the seller is told: it locks against nothing shallower
 		if hp, err = btcLegHeight(r, leg.Funded.TxID); err != nil {
 			sendXcFail(r.Crypter, send, "btc_conf_timeout", err.Error())
 			return res, err
