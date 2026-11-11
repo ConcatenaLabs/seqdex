@@ -351,19 +351,37 @@ func (p *Party) Refund(l *Locked, rfaPerVb uint64) ([]string, error) {
 	return txids, nil
 }
 
-// WatchSecret reads s from the pot's claim once the buyer has made it. It
-// returns "" while the pot is unspent, and an error if the pot went home
-// (refunded) instead.
+// ErrWentHome is a swap whose HTLC went home without the secret: refunded
+// (or clawed) after T_seq, never claimed.
+var ErrWentHome = errors.New("the HTLC went home without the secret")
+
+// WatchSecret reads s from whatever spent the HTLC or the pot: the buyer may
+// claim the HTLC alone and leave the pot, so the HTLC's own spend is read
+// first. It returns nil while neither spend carries s, and ErrWentHome once
+// the HTLC was spent without it.
 func (p *Party) WatchSecret(l *Locked) (secret []byte, claimTxid string, err error) {
-	txid, w, err := p.Node.SpendWitness(l.Txid, l.PotVout)
-	if err != nil || txid == "" {
+	htlcSpender, w, err := p.Node.SpendWitness(l.Txid, l.HTLCVout)
+	if err != nil {
 		return nil, "", err
 	}
-	s, ok := covenant.PotSecret(w, l.Terms.Hash)
-	if !ok {
-		return nil, txid, fmt.Errorf("the pot was spent by %s without the secret: it went home", txid)
+	if htlcSpender != "" {
+		if s, ok := covenant.PotSecret(w, l.Terms.Hash); ok {
+			return s, htlcSpender, nil
+		}
 	}
-	return s, txid, nil
+	potSpender, pw, err := p.Node.SpendWitness(l.Txid, l.PotVout)
+	if err != nil {
+		return nil, "", err
+	}
+	if potSpender != "" {
+		if s, ok := covenant.PotSecret(pw, l.Terms.Hash); ok {
+			return s, potSpender, nil
+		}
+	}
+	if htlcSpender != "" {
+		return nil, htlcSpender, fmt.Errorf("%w (%s)", ErrWentHome, htlcSpender)
+	}
+	return nil, "", nil
 }
 
 // Claim takes the HTLC and the pot with s: the policy server co-signs the
