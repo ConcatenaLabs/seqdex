@@ -206,12 +206,19 @@ func (c *Chain) locateFundedHTLC(p2sh, spkHex string) (*FundedHTLC, error) {
 // fee asset"). Every maker that funds the Sequentia leg holds the asset it locks,
 // which the node prices like any other, so that asset pays its own fee and none is
 // privileged. "" is the chain's pegged "bitcoin" asset, which then pays its fee.
+//
+// The funding is sent final (replaceable false). A swap's lock is mined again
+// from the mempool after a Bitcoin reorganization drops its block; by then the
+// secret may be public and the funder may have claimed the other side. A lock
+// that signals replaceability lets its funder replace it in every honest
+// mempool at that moment, which drops the counterparty's claim and keeps both
+// sides of the swap (proof review PV9, runs 18 and 20).
 func htlcSendArgs(p2sh, amountCoins, assetLabel string) map[string]interface{} {
 	asset := assetLabel
 	if asset == "" {
 		asset = "bitcoin"
 	}
-	named := map[string]interface{}{"address": p2sh, "amount": amountCoins, "fee_asset_label": asset}
+	named := map[string]interface{}{"address": p2sh, "amount": amountCoins, "fee_asset_label": asset, "replaceable": false}
 	if assetLabel != "" {
 		named["assetlabel"] = assetLabel
 	}
