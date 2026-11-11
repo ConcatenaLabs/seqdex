@@ -168,7 +168,7 @@ func main() {
 	levels := flag.Int("levels", 1, "samechain: ladder depth — quote this many price levels on this side from ONE process/account (level 0 = the configured price/size; each deeper level rests further from the touch and larger). Every level is a real co-signable offer of this maker")
 	levelBps := flag.Int("level-bps", 40, "samechain ladder: extra distance from the touch per level, in basis points of the quote amount")
 	levelGrowth := flag.Float64("level-growth", 1.12, "samechain ladder: size multiplier per level (deeper levels rest larger)")
-	mode := flag.String("mode", "samechain", "settlement mode: samechain | cross | restricted | lightning | pureln | subasset | subasset-sell (cross = BTC<->asset on-chain HTLC; restricted = a restricted (OpenAMP) asset<->BTC through its policy server's swap HTLC, base the asset, -quote-amount the sats; lightning = asset<->BTC-over-LN submarine swap; pureln = BOTH legs over Lightning; subasset = the submarine's MIRROR: asset over Lightning + BTC on-chain HTLC, taker pays BTC on-chain and receives the asset over LN; subasset-sell = the same rails in the other direction, taker pays the asset over LN and receives BTC on-chain; base is the asset, quote is the BTC sentinel)")
+	mode := flag.String("mode", "samechain", "settlement mode: samechain | cross | restricted | gated | lightning | pureln | subasset | subasset-sell (cross = BTC<->asset on-chain HTLC; restricted = a restricted (OpenAMP) asset<->BTC through its policy server's swap HTLC, base the asset, -quote-amount the sats; gated = place a restricted asset in a gated order (a resting sell for -quote-asset, filled through its policy server with the maker away) and post it; lightning = asset<->BTC-over-LN submarine swap; pureln = BOTH legs over Lightning; subasset = the submarine's MIRROR: asset over Lightning + BTC on-chain HTLC, taker pays BTC on-chain and receives the asset over LN; subasset-sell = the same rails in the other direction, taker pays the asset over LN and receives BTC on-chain; base is the asset, quote is the BTC sentinel)")
 	// Cross-mode settlement wiring (pkg/xchain, no Ocean needed): the SEQ leg is
 	// funded from the Sequentia NODE wallet and the BTC leg is claimed into the
 	// bitcoind wallet — the same reserves the RFQ maker uses.
@@ -199,6 +199,7 @@ func main() {
 	potAsset := flag.String("pot-asset", "", "restricted: the fee pot's asset (display hex), one the producers accept; it pays the pot and the Sequentia fees")
 	potAmount := flag.Uint64("pot-amount", 20000, "restricted: the fee pot's atoms (the buyer's claim fee)")
 	rfaPerVb := flag.Uint64("rfa-per-vb", 2, "restricted: the Sequentia fee rate in reference atoms per vbyte")
+	minLot := flag.Uint64("min-lot", 0, "gated: the least a fill takes, in base atoms (0 = the whole order)")
 	flag.Parse()
 	// Secrets and RPC URLs may come from the environment instead of the command line,
 	// where `ps` shows them to every user on the box: SEQOB_MAKER_PRIV, SEQOB_BTC_RPC,
@@ -213,7 +214,7 @@ func main() {
 
 	// Cross resume needs no maker key or offer: it drives on-chain settlement
 	// from persisted per-session keys. Handle it before the key/offer setup.
-	if *resume {
+	if *resume && strings.ToLower(*mode) != "gated" {
 		// The sub-asset BUY claim key is the identity key; a refund key is persisted
 		// per session. Only a key given explicitly is used here, never a generated one.
 		if *makerPriv != "" {
@@ -223,6 +224,18 @@ func main() {
 		return
 	}
 
+	if strings.ToLower(*mode) == "gated" {
+		var ek *btcec.PrivateKey
+		if *openampKey != "" {
+			ek = hexKey(*openampKey)
+		}
+		runGatedMaker(gatedMakerConfig{relay: strings.TrimRight(*relay, "/"), makerKey: loadOrGenKey(*makerPriv),
+			offerID: *offerID, seqRPCURL: *xseqRPCURL, seqWallet: *xseqWallet, stateDir: *xstateDir,
+			policyServer: strings.TrimRight(*policyServer, "/"), aid: *openampAID, enclaveKey: ek,
+			asset: *base, assetB: *quoteAsset, value: *baseAmt, want: *quoteAmt, minLot: *minLot, expiry: *expiry,
+			feeAsset: *potAsset, rfaPerVb: *rfaPerVb, resume: *resume})
+		return
+	}
 	if strings.ToLower(*mode) == "restricted" {
 		mk := loadOrGenKey(*makerPriv)
 		runRestrictedMaker(restrictedMakerConfig{
