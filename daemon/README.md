@@ -287,15 +287,20 @@ With an asset as the quote, the quote names `maker_recv_address` and the trade
 is one transaction moving both legs (delivery against payment;
 `pkg/restricted/dvp.go`, `internal/seqob/client/xdriver_restricted_dvp.go`):
 the maker names the coins it puts in, the taker builds the trade and has the
-policy server check it (`POST /v1/check`), each side checks it against what it
-agreed (its own coins spent only as offered, what it gives bounded, what it is
-paid), the seller of the asset signs its inputs with an expiry the server
-enforces, and the taker has the server co-sign and broadcast it in one step.
-A paying maker whose signed trade is not mined in time spends its coin
-elsewhere, so the trade can never land later. `seqob-cli rlift` is the taker
-for both quotes.
+policy server check it (`POST /v1/check`), and each side runs the same check on
+the whole transaction before it signs (`restricted.CheckTrade`): lock time 0
+and no relative lock, so no time-gated refund can share it; every input of its
+own one it offered, by wallet or by script; each payment it is owed its own
+output; per asset, what it gives and gets as agreed, each output counted once;
+one fee asset at or above its own floor. A side signs only the inputs it
+offered. The seller of the asset signs with an expiry the server enforces, and
+the taker has the server co-sign and broadcast it in one step. The trade
+signals BIP125: a paying maker whose signed trade is not mined in time respends
+its coin at a fee that replaces it, and a trade that may still be mined is
+reported pending, never failed. `seqob-cli rlift` is the taker for both quotes.
 `pkg/restricted/testdata/start-regtest.sh` brings up a bitcoind, a Sequentia
-node anchored to it and openampd, for `TestRestrictedSwapRegtest`.
+node anchored to it and openampd, for `TestRestrictedSwapRegtest` and the trade
+suites (`up` or `stop`; `RESTRICTED_PORTS` moves its ports).
 
 **The book across a restart.** The relay keeps its covenant orders, both sides
 of each maker's pool, and the orders resting in operators' trees, and only
