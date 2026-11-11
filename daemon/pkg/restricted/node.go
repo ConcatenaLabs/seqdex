@@ -1,6 +1,7 @@
 package restricted
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -223,6 +224,63 @@ func (n *Node) SignWallet(u *Unsigned) error {
 		}
 	}
 	return nil
+}
+
+// SignOffered signs, with the wallet, the inputs of a trade that spend the
+// coins offered, and no other. A wallet signs every input it can, and its
+// own list of its coins is never complete: a coin whose trade a reorg
+// un-mined, and a conflicting spend then cancelled, is unspent on the chain
+// while the wallet, still counting the cancelled trade as its spend, lists
+// it nowhere. So the inputs to sign are named by the coins offered, never by
+// what the wallet lists, and a wallet that would sign any other input refuses
+// the trade: that input is a coin of ours that we never offered.
+func (n *Node) SignOffered(u *Unsigned, offered []Coin) error {
+	raw, err := u.Hex()
+	if err != nil {
+		return err
+	}
+	var res struct {
+		Hex string `json:"hex"`
+	}
+	if err := n.rpc().Call(&res, "signrawtransactionwithwallet", raw); err != nil {
+		return err
+	}
+	signed, err := txFromHex(res.Hex)
+	if err != nil {
+		return err
+	}
+	if len(signed.Inputs) != len(u.Tx.Inputs) {
+		return fmt.Errorf("the wallet returned %d inputs for %d", len(signed.Inputs), len(u.Tx.Inputs))
+	}
+	mine := map[int]bool{}
+	for _, i := range OfferedInputs(u, offered) {
+		mine[i] = true
+	}
+	for i, in := range signed.Inputs {
+		if !mine[i] && !sameWitness(in.Witness, u.Tx.Inputs[i].Witness) {
+			op := InputOutpoint(u.Tx.Inputs[i])
+			return fmt.Errorf("the wallet would sign input %d, %s:%d, a coin of ours not offered", i, op.Txid, op.Vout)
+		}
+	}
+	for i := range mine {
+		if len(signed.Inputs[i].Witness) == 0 {
+			continue
+		}
+		u.Tx.Inputs[i].Witness = signed.Inputs[i].Witness
+	}
+	return nil
+}
+
+func sameWitness(a, b [][]byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !bytes.Equal(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // Broadcast sends a transaction.

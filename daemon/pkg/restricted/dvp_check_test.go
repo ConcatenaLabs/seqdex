@@ -118,6 +118,21 @@ func TestCheckTradeRefusesALockTime(t *testing.T) {
 	wantRefused(t, CheckTrade(u, sellerSide()), "lock time 1794440523")
 }
 
+// A trade that signals replacement (BIP125) on any input, its own or the
+// other side's: either side could cancel it after the other counts it done.
+func TestCheckTradeRefusesReplaceability(t *testing.T) {
+	for _, i := range []int{0, 1} {
+		u, _ := BuildDvP(plan())
+		u.Tx.Inputs[i].Sequence = 0xfffffffd
+		wantRefused(t, CheckTrade(u, sellerSide()), "signals replacement")
+	}
+	u, _ := BuildDvP(plan())
+	u.Tx.Inputs[1].Sequence = 0xfffffffe
+	if err := CheckTrade(u, sellerSide()); err != nil {
+		t.Fatalf("a final sequence without the BIP125 signal: %v", err)
+	}
+}
+
 // A CSV path: an input whose sequence can meet a relative lock.
 func TestCheckTradeRefusesARelativeLock(t *testing.T) {
 	u, _ := BuildDvP(plan())
