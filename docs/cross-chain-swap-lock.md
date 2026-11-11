@@ -1,8 +1,12 @@
 # A cross-chain swap lock that dies with its bitcoin payment
 
-This is the specification of the lock SeqDEX uses for a swap of a Sequentia asset against
-on-chain bitcoin (swap version 2). Every implementation of that swap follows it: SeqDEX's
-cross-chain drivers, the node wallet's convert, the wallet kit and the web wallet.
+This is the proven design for a swap lock without a rule change. It is kept as a record and is
+not built: the chosen design is a node-checked proof of the bitcoin payment.
+
+It specifies a lock for a swap of a Sequentia asset against on-chain bitcoin (swap version 2)
+that every implementation of that swap could follow: SeqDEX's cross-chain drivers, the node
+wallet's convert, the wallet kit and the web wallet. Its scripts and their attacks are proven
+on regtest by `daemon/pkg/xchain/namedlock_regtest_test.go`.
 
 ## The problem it solves
 
