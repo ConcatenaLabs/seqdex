@@ -51,6 +51,8 @@ func main() {
 		cmdCovFill(os.Args[2:])
 	case "xlift":
 		cmdXLift(os.Args[2:])
+	case "rlift":
+		cmdRLift(os.Args[2:])
 	case "xrefund":
 		cmdXRefund(os.Args[2:])
 	case "xsell":
@@ -126,6 +128,7 @@ commands:
           (flags: -relay -offer-id -maker-pubkey -amount(asset-A atoms, 0=whole; each a comma list) -seq-rpc -seq-wallet [-base -quote -fee-asset -spend-fee])
   xlift   lift a CROSS-CHAIN offer: buy the asset with real BTC over the HTLC courier
           (flags: -relay -asset -offer-id -maker-pubkey -btc-rpc -btc-wallet -btc-chain -seq-rpc -seq-wallet -state-file)
+  rlift   lift a RESTRICTED asset's quote (member 29): for an asset in one trade through its policy server, or for BTC by its swap HTLC (flags: -asset -quote -side -aid -key -seq-rpc -seq-wallet -fee-asset; BTC: -btc-rpc -btc-wallet -btc-chain -state-file)
   xrefund recover the BTC leg of an aborted xlift after T_btc (flags: -state-file -btc-rpc -btc-wallet -btc-chain -wait)
   xsell   sell the asset for real BTC over a REVERSE cross offer (maker holds the secret, funds BTC first)
           (flags: -relay -asset -offer-id -maker-pubkey -btc-rpc -btc-wallet -btc-chain -seq-rpc -seq-wallet -state-file)

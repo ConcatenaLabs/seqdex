@@ -283,6 +283,17 @@ whatever spent the HTLC or the pot (a buyer may claim the HTLC alone), or
 sends both coins home after `T_seq` with fee coins its lock set aside
 (`internal/seqob/client/xdriver_restricted.go`). Both parties' accounts are
 judged by the policy server before anything moves (`GET /v1/eligibility`).
+With an asset as the quote, the quote names `maker_recv_address` and the trade
+is one transaction moving both legs (delivery against payment;
+`pkg/restricted/dvp.go`, `internal/seqob/client/xdriver_restricted_dvp.go`):
+the maker names the coins it puts in, the taker builds the trade and has the
+policy server check it (`POST /v1/check`), each side checks it against what it
+agreed (its own coins spent only as offered, what it gives bounded, what it is
+paid), the seller of the asset signs its inputs with an expiry the server
+enforces, and the taker has the server co-sign and broadcast it in one step.
+A paying maker whose signed trade is not mined in time spends its coin
+elsewhere, so the trade can never land later. `seqob-cli rlift` is the taker
+for both quotes.
 `pkg/restricted/testdata/start-regtest.sh` brings up a bitcoind, a Sequentia
 node anchored to it and openampd, for `TestRestrictedSwapRegtest`.
 
@@ -340,8 +351,12 @@ one; the relay grants makers no special standing. Its settlement modes:
   Sequentia fees, at `-rfa-per-vb`). `-side sell` sells the asset held at the
   enclave; `-side buy` buys it with BTC. Whole fills, one lift at a time; it
   posts only when the enclave is its key's and holds what it sells, and
-  retires after a fill. Each lift's state (keys, secret, legs, the lock) is
-  written to `-xstate-dir/restricted-<session>.json`.
+  retires after a fill. With `-quote-asset` an asset instead of the bitcoin
+  sentinel, `-quote-amount` is that asset's atoms and each lift is one
+  transaction through the policy server; then only `-xseq-rpc`,
+  `-xseq-wallet`, the account flags and `-pot-asset` (the fee asset a held
+  trade's respend pays in) are needed. Each lift's state (keys, secret, legs,
+  the lock) is written to `-xstate-dir/restricted-<session>.json`.
 - `-mode gated`: a resting offer to sell a restricted (OpenAMP) asset while
   the maker is away (offer member 30). It moves `-base-amount` of `-base` from
   the maker's enclave into a gated order through the policy server, priced at
@@ -424,6 +439,7 @@ seqob-cli lift         lift a same-chain offer (real settlement with
 seqob-cli taker-key    make a taker key file (mode 600) and print the
                        address to fund; the keys stay in the file
 seqob-cli xlift        buy an asset with on-chain BTC (forward cross-chain)
+seqob-cli rlift        buy or sell a restricted asset quoted by a maker (member 29), for an asset or for BTC
 seqob-cli xsell        sell an asset for on-chain BTC (reverse cross-chain)
 seqob-cli xrefund      recover the BTC leg of an aborted xlift after T_btc
 seqob-cli xrefund-seq  recover the asset leg of an aborted xsell after T_seq

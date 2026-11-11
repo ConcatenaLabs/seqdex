@@ -319,3 +319,100 @@ func (n *Node) FeeAtoms(asset string, vsize, rfaPerVb uint64) (uint64, error) {
 	}
 	return fee, nil
 }
+
+// WalletOutpoints lists every outpoint the wallet would sign: its unspent
+// coins, confirmed or not, and the ones it has locked.
+func (n *Node) WalletOutpoints() (map[string]bool, error) {
+	var us []struct {
+		Txid string `json:"txid"`
+		Vout uint32 `json:"vout"`
+	}
+	if err := n.rpc().Call(&us, "listunspent", 0); err != nil {
+		return nil, err
+	}
+	var locked []struct {
+		Txid string `json:"txid"`
+		Vout uint32 `json:"vout"`
+	}
+	if err := n.rpc().Call(&locked, "listlockunspent"); err != nil {
+		return nil, err
+	}
+	m := map[string]bool{}
+	for _, u := range append(us, locked...) {
+		m[outpointKey(u.Txid, u.Vout)] = true
+	}
+	return m, nil
+}
+
+// Respend spends a wallet coin back to the wallet, its fee in feeAsset, so a
+// transaction signed over it can never be mined.
+func (n *Node) Respend(c Coin, feeAsset string, rfaPerVb uint64) (string, error) {
+	fee, err := n.FeeAtoms(feeAsset, 500, rfaPerVb)
+	if err != nil {
+		return "", err
+	}
+	fa, err := ReverseHex(feeAsset)
+	if err != nil {
+		return "", err
+	}
+	dest, err := n.NewScript()
+	if err != nil {
+		return "", err
+	}
+	coins := []Coin{c}
+	outs := []Out{}
+	if c.Asset == fa {
+		if c.Value <= fee {
+			return "", fmt.Errorf("the coin does not cover the fee")
+		}
+		outs = append(outs, Out{c.Asset, c.Value - fee, dest}, Out{fa, fee, nil})
+	} else {
+		fc, err := n.WalletCoins(feeAsset, fee)
+		if err != nil {
+			return "", err
+		}
+		var sum uint64
+		for _, x := range fc {
+			sum += x.Value
+		}
+		coins = append(coins, fc...)
+		outs = append(outs, Out{c.Asset, c.Value, dest})
+		if sum > fee {
+			outs = append(outs, Out{fa, sum - fee, dest})
+		}
+		outs = append(outs, Out{fa, fee, nil})
+	}
+	u, err := Build(coins, outs, 0)
+	if err != nil {
+		return "", err
+	}
+	if err := n.SignWallet(u); err != nil {
+		return "", err
+	}
+	return n.Broadcast(u)
+}
+
+// NewAddress is a fresh wallet address and its script: where a quote is paid.
+func (n *Node) NewAddress() (string, []byte, error) {
+	var addr string
+	if err := n.rpc().Call(&addr, "getnewaddress"); err != nil {
+		return "", nil, err
+	}
+	spk, err := n.ScriptOf(addr)
+	return addr, spk, err
+}
+
+// ScriptOf is an address's scriptPubKey, as the node reads it.
+func (n *Node) ScriptOf(addr string) ([]byte, error) {
+	var v struct {
+		IsValid      bool   `json:"isvalid"`
+		ScriptPubKey string `json:"scriptPubKey"`
+	}
+	if err := n.rpc().Call(&v, "validateaddress", addr); err != nil {
+		return nil, err
+	}
+	if !v.IsValid {
+		return nil, fmt.Errorf("%q is not an address of this chain", addr)
+	}
+	return hex.DecodeString(v.ScriptPubKey)
+}
