@@ -558,7 +558,7 @@ func (s *Server) openLift(sl *seqobv1.StartLift) (*session.Session, error) {
 	// A cross-chain lift spans a real parent-chain confirmation between courier
 	// rounds; give it the longer settlement-type deadline. The relay stays blind
 	// to the couriered bytes — this reads only the offer's settlement TYPE.
-	if s.crossDeadline > 0 && e.Offer.GetCrossChain() != nil {
+	if s.crossDeadline > 0 && (e.Offer.GetCrossChain() != nil || offer.RestrictedForBTC(e.Offer)) {
 		s.sessions.ExtendDeadline(sess.ID, s.crossDeadline)
 	}
 	return sess, nil
@@ -719,5 +719,5 @@ const ghostGraceSecs = 90
 // Only a plain interactive same-chain offer does: everything else either settles without the maker
 // (covenant) or is served by an agent that reconnects (cross-chain, Lightning/sub-asset).
 func needsLiveMaker(o *seqobv1.Offer) bool {
-	return !offer.FilledWithoutMaker(o) && o.GetLightning() == nil && o.GetCrossChain() == nil
+	return !offer.FilledWithoutMaker(o) && o.GetLightning() == nil && o.GetCrossChain() == nil && !offer.RestrictedForBTC(o)
 }
