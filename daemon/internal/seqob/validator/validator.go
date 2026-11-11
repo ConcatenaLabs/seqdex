@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -303,6 +304,9 @@ func (v *Validator) checkTerms(o *seqobv1.Offer) error {
 	if o.GetCovenant() != nil {
 		return checkCovenant(o)
 	}
+	if o.GetGatedOrder() != nil {
+		return checkGatedOrder(o)
+	}
 	if o.GetSimplicityCovenant() != nil {
 		return checkSimplicityCovenant(o)
 	}
@@ -527,6 +531,76 @@ func checkCovenant(o *seqobv1.Offer) error {
 		}
 	}
 	return nil
+}
+
+// checkGatedOrder is checkCovenant for a restricted asset's gated order: the
+// same fill covenant behind the asset's policy key, a keyless refund home after
+// a time, and the policy server where takers post fills. Its terms must build a
+// tree (openamp's script), be tied to the price the offer advertises, and name
+// a server and an account a taker can reach.
+func checkGatedOrder(o *seqobv1.Offer) error {
+	gt := o.GetGatedOrder()
+	if b, err := hex.DecodeString(gt.GetCovenantTxid()); err != nil || len(b) != 32 {
+		return fmt.Errorf("gated order covenant_txid must be 32-byte hex")
+	}
+	g, err := offer.GatedOrderOf(gt)
+	if err != nil {
+		return fmt.Errorf("gated order: %w", err)
+	}
+	if gt.GetExpiry() < 500_000_000 {
+		return fmt.Errorf("gated order expiry %d is a height: it must be a time", gt.GetExpiry())
+	}
+	// The policy server refuses every fill from the order's expiry: the offer
+	// must stop resting before then, so takers never see an order no one can fill.
+	if exp := o.GetExpiresAtUnix(); exp == 0 || int64(exp) > offer.GatedDelistAt(gt) {
+		return fmt.Errorf("gated order expires_at_unix %d is after its expiry %d less %d s (or unset): the policy server refuses every fill from the expiry",
+			exp, gt.GetExpiry(), offer.GatedDelistMargin)
+	}
+	if gt.GetRateNum() < 1 || gt.GetRateDen() < 1 || gt.GetMinLot() < 1 {
+		return fmt.Errorf("gated order rate_num, rate_den and min_lot must be >= 1")
+	}
+	if err := (covenant.Order{RateNum: gt.GetRateNum(), RateDen: gt.GetRateDen(), MinLot: gt.GetMinLot()}).CheckTerms(); err != nil {
+		return fmt.Errorf("gated order: %w", err)
+	}
+	if o.GetTradeDir() != seqobv1.TradeDir_TRADE_DIR_SELL {
+		return fmt.Errorf("gated order offers must be TRADE_DIR_SELL (the restricted asset is the offered base)")
+	}
+	if gt.GetMinLot() > o.GetOfferAmount() {
+		return fmt.Errorf("gated order min_lot %d exceeds the locked amount %d", gt.GetMinLot(), o.GetOfferAmount())
+	}
+	lhs := new(big.Int).Mul(new(big.Int).SetUint64(gt.GetRateNum()), new(big.Int).SetUint64(o.GetOfferAmount()))
+	rhs := new(big.Int).Mul(new(big.Int).SetUint64(gt.GetRateDen()), new(big.Int).SetUint64(o.GetWantAmount()))
+	if lhs.Cmp(rhs) != 0 {
+		return fmt.Errorf("gated order rate %d/%d does not equal the offer's want/offer %d/%d", gt.GetRateNum(), gt.GetRateDen(), o.GetWantAmount(), o.GetOfferAmount())
+	}
+	if err := (covenant.Order{RateNum: gt.GetRateNum(), RateDen: gt.GetRateDen()}).CheckArithmetic(o.GetOfferAmount()); err != nil {
+		return fmt.Errorf("gated order: %w", err)
+	}
+	if a, ok := internalToDisplay(gt.GetAssetA()); ok {
+		if off, ok := asset32(o.GetOfferAsset()); !ok || a != off {
+			return fmt.Errorf("gated order asset_a %s is not the offer_asset %s", a, o.GetOfferAsset())
+		}
+	}
+	if b, ok := internalToDisplay(gt.GetAssetB()); ok {
+		if want, ok := asset32(o.GetWantAsset()); !ok || b != want {
+			return fmt.Errorf("gated order asset_b %s is not the want_asset %s", b, o.GetWantAsset())
+		}
+	}
+	u, err := url.Parse(gt.GetPolicyServer())
+	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopback(u.Hostname()))) {
+		return fmt.Errorf("gated order policy_server %q must be an https URL", gt.GetPolicyServer())
+	}
+	if b, err := hex.DecodeString(gt.GetMakerAid()); err != nil || len(b) != 20 {
+		return fmt.Errorf("gated order maker_aid must be a 20-byte account id in hex")
+	}
+	if _, err := g.Tree(); err != nil {
+		return fmt.Errorf("gated order: %w", err)
+	}
+	return nil
+}
+
+func isLoopback(host string) bool {
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 // asset32 normalises a 32-byte display-order asset id; ok=false for anything else.

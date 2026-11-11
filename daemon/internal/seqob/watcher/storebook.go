@@ -18,7 +18,7 @@ func (b *storeBook) SnapshotCovenants() []CovEntry {
 	src := b.s.SnapshotCovenants()
 	out := make([]CovEntry, 0, len(src))
 	for _, c := range src {
-		out = append(out, CovEntry{Key: c.Key, Offer: c.Offer, Terms: c.Terms, Sim: c.Sim, Round: c.Round, Active: c.Active, ReRested: c.ReRested})
+		out = append(out, CovEntry{Key: c.Key, Offer: c.Offer, Terms: c.Terms, Sim: c.Sim, Round: c.Round, Gated: c.Gated, Active: c.Active, ReRested: c.ReRested})
 	}
 	return out
 }
@@ -81,3 +81,6 @@ func (b *storeBook) RemovePool(k offerstore.Key, status seqobv1.OfferStatus) err
 func (b *storeBook) RecordPoolMove(m offerstore.PoolMove) { b.s.RecordPoolMove(m) }
 
 var _ PoolBook = (*storeBook)(nil)
+
+// RemoveGatedExpired delists a gated order at its expiry.
+func (b *storeBook) RemoveGatedExpired(k offerstore.Key) error { return b.s.RemoveGatedExpired(k) }

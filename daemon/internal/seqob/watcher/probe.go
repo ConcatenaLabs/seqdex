@@ -56,7 +56,7 @@ func ProbeCovenant(chain ChainView, o *seqobv1.Offer) (uint64, error) {
 	if !offer.IsCovenant(o) || chain == nil {
 		return 0, nil
 	}
-	c := CovEntry{Offer: o, Terms: o.GetCovenant(), Sim: o.GetSimplicityCovenant(), Round: o.GetRoundOrder()}
+	c := CovEntry{Offer: o, Terms: o.GetCovenant(), Sim: o.GetSimplicityCovenant(), Round: o.GetRoundOrder(), Gated: o.GetGatedOrder()}
 	exp, err := c.expect()
 	if err != nil {
 		return 0, fmt.Errorf("covenant terms: %w", err)

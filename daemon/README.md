@@ -249,6 +249,18 @@ buried, `undone` when the round's block leaves the chain, and recorded again
 when it comes back. `seqob-covenant round` lays a round out from these
 listings.
 
+A gated order (`GatedOrderTerms`) is a restricted asset's resting offer to
+sell: the tapscript fill covenant behind the asset's policy key, and a keyless
+refund home to the maker's enclave after its expiry (openamp, "Gated orders").
+The relay lists it like a covenant order, at what its coin holds and at its
+price, and follows it to its remainder at `2k+1`; it checks that its terms build
+its script, match the offer's price and assets, and name the policy server
+(https) and the maker's account there. A taker fills it as a covenant order,
+with the gated fill leaf, paying the asset to its own enclave, and posts the
+transaction to that server (`POST /v1/cosign` with `order_inputs` and
+`"broadcast": true`), which co-signs and broadcasts it if the asset's rules
+admit the taker. The matcher crosses no gated order and no settler fills one.
+
 **The book across a restart.** The relay keeps its covenant orders, both sides
 of each maker's pool, and the orders resting in operators' trees, and only
 those, when given `-covenant-book`; a resting order is checked again against its operator's

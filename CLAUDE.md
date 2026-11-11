@@ -100,7 +100,10 @@ it is filled through the operator, never by a lift. A maker's pool (`PoolTerms`)
 two offers, its ask and its bid, each at what its own coin holds above its reserve, and followed
 from fill to fill (`watcher/pools.go`); a round order (`RoundOrderTerms`) is listed like a
 covenant order and filled only in a clearing round its clearer signs. Neither is lifted, and
-`/v1/rounds` serves each clearing round the relay has seen.
+`/v1/rounds` serves each clearing round the relay has seen. A restricted asset's gated order
+(`GatedOrderTerms`) is listed and followed like a covenant order; only its policy server
+completes a fill (`pkg/covenant/gated.go`, whose script `gated_test.go` pins to openamp's
+vectors), so the matcher crosses none.
 
 Everything else in `cmd/` is a one-shot CLI or a regtest helper.
 
@@ -180,9 +183,9 @@ and `sequentia-cli`; `pkg/xchain/testdata/start-regtest.sh` falls back to the le
   holds, is outside the signed bytes and whose order id is inside), `time_in_force_offer_vectors.json` (an offer signed with each
   `time_in_force`, a field protobuf-go writes before the settlement oneof), and `daemon/pkg/covenant/testdata/fill_vectors.json` (the
   multi-order fill layout) are copied into the web wallet, whose tests hold its code to them.
-  The pool (`PoolTerms`) and round order (`RoundOrderTerms`) members keep their coins
-  outside the signed bytes too. The web wallet's `seqob.js` does not read them and cannot
-  verify an offer carrying either.
+  The pool (`PoolTerms`), round order (`RoundOrderTerms`) and gated order (`GatedOrderTerms`)
+  members keep their coins outside the signed bytes too. The web wallet's `seqob.js` does not read them and cannot
+  verify an offer carrying any of them.
 - Byte order at the covenant boundary is display-vs-internal, and the wallet mirrors this repo's
   `reverseHex`/`displayHex` conventions. Golden vectors pin the two implementations together.
 

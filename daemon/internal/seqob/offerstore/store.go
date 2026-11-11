@@ -776,6 +776,10 @@ func (s *Store) SweepExpired() int {
 		exp := e.Offer.GetExpiresAtUnix()
 		if exp != 0 && exp <= now {
 			expired = append(expired, k)
+		} else if gt := e.Offer.GetGatedOrder(); gt != nil && offer.GatedDelistAt(gt) <= int64(now) {
+			// A gated order no one can fill any more (its policy server
+			// refuses from the expiry), whatever its offer says.
+			expired = append(expired, k)
 		}
 	}
 	type ev struct {
@@ -930,6 +934,7 @@ type CovenantEntry struct {
 	Terms    *seqobv1.CovenantTerms           // the tapscript order's terms, or nil
 	Sim      *seqobv1.SimplicityCovenantTerms // the Simplicity order's terms, or nil
 	Round    *seqobv1.RoundOrderTerms         // a round order's terms, or nil
+	Gated    *seqobv1.GatedOrderTerms         // a gated order's terms, or nil
 	Active   uint64
 	ReRested bool // F3: the current outpoint is a remainder from a prior partial fill, not the original funding
 }
@@ -942,7 +947,8 @@ func (s *Store) SnapshotCovenants() []CovenantEntry {
 	for k, e := range s.entries {
 		if offer.IsCovenant(e.Offer) {
 			out = append(out, CovenantEntry{Key: k, Offer: e.Offer, Terms: e.Offer.GetCovenant(),
-				Sim: e.Offer.GetSimplicityCovenant(), Round: e.Offer.GetRoundOrder(), Active: e.ActiveAmount, ReRested: e.reRested})
+				Sim: e.Offer.GetSimplicityCovenant(), Round: e.Offer.GetRoundOrder(), Gated: e.Offer.GetGatedOrder(),
+				Active: e.ActiveAmount, ReRested: e.reRested})
 		}
 	}
 	return out

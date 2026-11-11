@@ -118,6 +118,7 @@ message Offer {
     RestingLeafTerms resting_leaf = 26; // an order resting as a leaf in an operator's tree, filled there with its maker away
     PoolTerms       pool        = 27; // one side of a maker's two-sided pool under seqdex/pool, filled by anyone at its quote
     RoundOrderTerms round_order = 28; // an order under seqdex/round-order, filled only in a round its clearer signs
+    GatedOrderTerms gated_order = 30; // a restricted asset's resting sell order, each fill co-signed by its policy server
   }
 
   // secp256k1 signature by maker_pubkey over the canonical serialization of all
@@ -271,6 +272,35 @@ message PoolTerms {
   uint64 reserve_quote = 13; // what a fill paying quote out must leave
   bytes  maker_key     = 14; // 32-byte x-only key, the only one that withdraws
   string template_hash = 15; // the template the terms are for (hex)
+}
+
+// A gated order: a holder's resting offer to sell a restricted (OpenAMP)
+// asset, whose every fill the asset's policy server co-signs and broadcasts
+// (openamp, "Gated orders"). Its script is P2TR(NUMS, [fill, [refund, claw]]):
+// fill is <policy_x> OP_CHECKSIGVERIFY followed by the tapscript FILL leaf these
+// terms build (the same as CovenantTerms'); refund is keyless after expiry, the
+// order at input 0 and output 0 carrying its whole value to maker_enclave_prog;
+// claw is <issuer_x> OP_CHECKSIGVERIFY <policy_x> OP_CHECKSIG when issuer_x is
+// set. A taker builds the fill as for a covenant order, pays asset A to its own
+// enclave, signs its own inputs and posts the transaction to policy_server's
+// POST /v1/cosign with order_inputs and "broadcast": true. No matcher crosses
+// it; the outpoint is outside the signed bytes.
+message GatedOrderTerms {
+  string covenant_txid      = 1;  // the funded output (display txid hex)
+  uint32 covenant_vout      = 2;
+  string asset_a            = 3;  // 32-byte internal-order asset id hex: the restricted asset sold
+  string asset_b            = 4;  // 32-byte internal-order asset id hex: the asset paid for it
+  uint64 rate_num           = 5;  // required_B = ceil(filled * rate_num / rate_den), as CovenantTerms
+  uint64 rate_den           = 6;
+  bytes  maker_prog         = 7;  // maker credit witness program (32 bytes, v1)
+  uint32 maker_prog_ver     = 8;  // 1
+  uint64 min_lot            = 9;
+  uint32 expiry             = 10; // Unix time the refund opens and fills end (at least 500,000,000)
+  bytes  policy_x           = 11; // the asset's policy key (32 bytes)
+  bytes  issuer_x           = 12; // the asset's clawback key (32 bytes), empty when it has none
+  bytes  maker_enclave_prog = 13; // the maker's enclave program (32 bytes): where the refund goes home
+  string policy_server      = 14; // the policy server's base URL (https), where fills are posted
+  string maker_aid          = 15; // the maker's account at that server (sender_aid of a fill)
 }
 
 // RoundOrderTerms is a FUNDED order under the Simplicity template

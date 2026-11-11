@@ -77,6 +77,11 @@ func CanonicalOfferBytes(o *seqobv1.Offer) ([]byte, error) {
 	if pt := c.GetPool(); pt != nil {
 		pt.BaseTxid, pt.BaseVout, pt.QuoteTxid, pt.QuoteVout = "", 0, "", 0
 	}
+	// A gated order re-rests at every part fill like a covenant order.
+	if gt := c.GetGatedOrder(); gt != nil {
+		gt.CovenantTxid = ""
+		gt.CovenantVout = 0
+	}
 	return deterministic(c)
 }
 
