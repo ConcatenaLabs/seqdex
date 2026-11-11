@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -456,6 +457,78 @@ func TestRestrictedSwapRegtest(t *testing.T) {
 			t.Fatalf("a second resume acted: %v %+v", err, again)
 		}
 		e.rec(t, "resume_buyer", map[string]interface{}{"claim_on_resume": out.SeqClaimTxid, "taker_btc_claim": tres.BtcClaimTxid})
+	})
+
+	// -- 2n. N1: the buyer claims the HTLC alone, leaving the pot -------------
+	// openampd co-signs a claim of the HTLC without the pot; it is forced into
+	// a block. The seller must read s from the HTLC's own spend.
+	t.Run("htlc-claimed-without-pot", func(t *testing.T) {
+		secret := make([]byte, 32)
+		_, _ = rand.Read(secret)
+		h := sha256.Sum256(secret)
+		l, err := maker.party.Lock(restricted.SwapTerms{Hash: h, SellerAID: makerAID, BuyerAID: takerAID,
+			TSeq: uint32(maker.party.Node.Now().Add(3 * time.Hour).Unix()), Value: 50, PotAsset: e.feeAsset, PotValue: 20000}, 2)
+		must(t, err)
+		var hc *restricted.Coin
+		for i := 0; i < 30 && hc == nil; i++ {
+			if bh, _ := maker.seq.BlockHashOfTx(l.Txid); bh != "" {
+				hc, err = taker.party.Node.CoinAt(l.Txid, l.HTLCVout)
+				must(t, err)
+			}
+			time.Sleep(time.Second)
+		}
+		if hc == nil {
+			t.Fatal("the lock was not mined")
+		}
+		sw, err := taker.party.Rebuild(l.Terms)
+		must(t, err)
+		htlc, _, err := sw.Trees()
+		must(t, err)
+		enc, _, _, err := taker.party.Enclave()
+		must(t, err)
+		fee, err := taker.party.Node.FeeAtoms(e.feeAsset, 600, 2)
+		must(t, err)
+		fees, err := taker.party.Node.WalletCoins(e.feeAsset, fee)
+		must(t, err)
+		var have uint64
+		for _, c := range fees {
+			have += c.Value
+		}
+		ch, err := taker.party.Node.NewScript()
+		must(t, err)
+		fa, _ := restricted.ReverseHex(e.feeAsset)
+		u, err := restricted.Build(append([]restricted.Coin{*hc}, fees...), []restricted.Out{
+			{Asset: sw.Asset, Value: 50, Script: enc}, {Asset: fa, Value: have - fee, Script: ch}, {Asset: fa, Value: fee}}, 0)
+		must(t, err)
+		raw, _ := u.Hex()
+		resp, err := taker.party.Policy.Cosign(restricted.CosignRequest{Tx: raw, Asset: asset, SenderAID: makerAID,
+			HTLCInputs: []restricted.HTLCInput{{Input: 0}}})
+		must(t, err)
+		gen, err := taker.party.Node.Genesis()
+		must(t, err)
+		cl := htlc.Leaves["claim"]
+		psig, sh, err := u.CheckedPolicySig(resp, 0, cl.Script, cl.Control, sw.PolicyX, gen)
+		must(t, err)
+		bsig, err := restricted.Sign(taker.party.Key, sh)
+		must(t, err)
+		u.Tx.Inputs[0].Witness = [][]byte{psig, bsig, secret, cl.Script, cl.Control}
+		must(t, taker.party.Node.SignWallet(u))
+		craw, _ := u.Hex()
+		var addr string
+		must(t, e.seq.WithWallet("w").Call(&addr, "getnewaddress"))
+		e.mineMu.Lock()
+		var gb interface{}
+		gerr := e.seq.WithWallet("w").Call(&gb, "generateblock", addr, []string{craw})
+		e.mineMu.Unlock()
+		must(t, gerr)
+		if pc, _ := maker.party.Node.CoinAt(l.Txid, l.PotVout); pc == nil {
+			t.Fatal("the pot was spent; this case leaves it behind")
+		}
+		got, txid, err := maker.party.WatchSecret(l)
+		if err != nil || !bytes.Equal(got, secret) || txid != u.Txid() {
+			t.Fatalf("the seller did not read s from the HTLC's claim %s: %x %s %v", u.Txid(), got, txid, err)
+		}
+		e.rec(t, "n1_htlc_claim_without_pot_mined", map[string]string{"claim": txid, "pot_left": fmt.Sprintf("%s:%d", l.Txid, l.PotVout)})
 	})
 
 	// -- 3. a claim the policy server refuses: nobody loses a coin --------------

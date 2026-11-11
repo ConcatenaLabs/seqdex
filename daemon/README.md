@@ -273,10 +273,13 @@ side is the policy server's swap HTLC with its fee pot (openamp, "Swap HTLCs";
 `pkg/covenant/htlc.go` pinned to its vectors, `pkg/restricted` for the policy
 server's client and the lock, claim and refund transactions). Whoever buys the
 asset pays the bitcoin, holds the secret and locks first; both locks are Unix
-times, with `T_btc` at least a day after `T_seq`. The seller locks only once its
-anchor reaches the BTC leg's height; the buyer claims after the anchor gate and
+times, with `T_btc` at least a day after `T_seq`. The seller locks only once the
+BTC leg is buried at least two blocks deep (whatever `-min-btc-conf` says) and
+its anchor reaches the leg's height, and it verifies the leg again in the best
+chain after every wait and just before the lock; the buyer claims after the anchor gate and
 never after `T_seq` − 1 h or within 12 h of `T_btc` by Bitcoin's median time;
-the seller claims the bitcoin as soon as the secret is in the pot's witness, or
+the seller claims the bitcoin as soon as the secret is in the witness of
+whatever spent the HTLC or the pot (a buyer may claim the HTLC alone), or
 sends both coins home after `T_seq` with fee coins its lock set aside
 (`internal/seqob/client/xdriver_restricted.go`). Both parties' accounts are
 judged by the policy server before anything moves (`GET /v1/eligibility`).
