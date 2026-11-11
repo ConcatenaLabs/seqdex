@@ -69,7 +69,12 @@ type Unsigned struct {
 	Coins []Coin
 }
 
-// Build lays out a version-2 transaction with final sequences.
+// Build lays out a version-2 transaction with final sequences, or one below
+// final with a lock time (CLTV needs a non-final input). Neither signals
+// BIP125, and a swap's lock, claim and refunds must never: the claim carries
+// the secret, and a lock that could be replaced would, after an anchor reorg,
+// take the buyer's claim (its child) out of a mempool with it once the secret
+// is public, leaving the seller free to claim the bitcoin and keep the asset.
 func Build(coins []Coin, outs []Out, locktime uint32) (*Unsigned, error) {
 	tx := transaction.NewTx(2)
 	tx.Locktime = locktime

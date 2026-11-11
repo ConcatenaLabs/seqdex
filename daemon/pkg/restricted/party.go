@@ -351,6 +351,28 @@ func (p *Party) Refund(l *Locked, rfaPerVb uint64) ([]string, error) {
 	return txids, nil
 }
 
+// RefundDepth is how deep both spends of a lock are buried before the seller
+// writes the swap ended: until then a claim co-signed before the cut-off and
+// held back can still be mined in place of a refund, and its secret claims
+// the bitcoin.
+const RefundDepth = 6
+
+// LockHome reports whether both coins of the lock are spent in blocks at
+// least depth deep (by the refunds, or by anything else WatchSecret has read).
+func (p *Party) LockHome(l *Locked, depth int64) (bool, error) {
+	for _, v := range []uint32{l.HTLCVout, l.PotVout} {
+		spender, _, err := p.Node.SpendWitness(l.Txid, v)
+		if err != nil || spender == "" {
+			return false, err
+		}
+		conf, err := p.Node.Confirmations(spender)
+		if err != nil || conf < depth {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
 // ErrWentHome is a swap whose HTLC went home without the secret: refunded
 // (or clawed) after T_seq, never claimed.
 var ErrWentHome = errors.New("the HTLC went home without the secret")

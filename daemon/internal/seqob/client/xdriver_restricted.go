@@ -323,16 +323,26 @@ func (r *RestrictedSwap) sellerSettle(res *RestrictedResult, btcKey *xchain.Key,
 			res.Refunds = append(res.Refunds, txids...)
 			r.update(res)
 			if err == nil {
-				// One last look: a claim mined in the same moment wins.
+				// A claim mined in the same moment, or held back and mined
+				// in place of a refund, wins: the loop reads it above.
 				if s, _, _ := r.Party.WatchSecret(l); s != nil {
 					continue
 				}
-				r.logf("no claim by T_seq: the HTLC and the pot went home (%v)", txids)
-				res.Ended = "refunded after T_seq"
-				r.update(res)
-				return fmt.Errorf("no claim by T_seq; refunded %v", txids)
+				// Ended only once both coins are home and buried: until
+				// then a withheld claim can still land.
+				home, herr := r.Party.LockHome(l, restricted.RefundDepth)
+				if herr == nil && home {
+					r.logf("no claim by T_seq: the HTLC and the pot went home (%v)", res.Refunds)
+					res.Ended = "refunded after T_seq"
+					r.update(res)
+					return fmt.Errorf("no claim by T_seq; refunded %v", res.Refunds)
+				}
+				if herr != nil {
+					r.logf("the refunds: %v; watching", herr)
+				}
+			} else {
+				r.logf("refund: %v; retrying", err)
 			}
-			r.logf("refund: %v; retrying", err)
 		}
 		time.Sleep(r.Timing.Poll)
 	}

@@ -404,7 +404,8 @@ func (c *Chain) AddressScriptPubKey(addr string) (string, error) {
 // SEQ-leg output is spent, the spender's scriptSig carries the preimage.
 //
 // It uses gettxout (which returns null once an outpoint is spent) to learn that
-// a spend happened, then scans the mempool + recent blocks for the spender.
+// a spend happened, then scans the mempool and every block from the one that
+// made the outpoint to the tip for the spender.
 func (c *Chain) SpenderOf(txid string, vout uint32) (string, error) {
 	// gettxout returns null for spent (and unknown) outputs; a non-null result
 	// means the outpoint is still in the UTXO set, i.e. NOT yet claimed.
@@ -448,32 +449,60 @@ func (c *Chain) SpenderOf(txid string, vout uint32) (string, error) {
 		}
 	}
 
-	// 2) recent blocks (most recent first). The claim is expected within a few
-	// blocks on regtest; scan a bounded window.
+	// 2) the blocks from the one that made the outpoint to the tip: a spend
+	// comes after its coin, however long ago. Only when the coin's own block
+	// cannot be read (no transaction index) is the search a window back from
+	// the tip.
 	height, err := c.BlockCount()
 	if err != nil {
 		return "", err
 	}
-	const scanWindow = 50
-	for h := height; h >= 0 && h > height-scanWindow; h-- {
+	from, window := height-scanWindow+1, true
+	if bh, err := c.BlockHashOfTx(txid); err == nil {
+		var hdr struct {
+			Height int64 `json:"height"`
+		}
+		if err := c.rpc.Call(&hdr, "getblockheader", bh); err == nil {
+			from, window = hdr.Height, false
+		}
+	}
+	if from < 0 {
+		from = 0
+	}
+	for h := from; h <= height; h++ {
 		var bh string
 		if err := c.rpc.Call(&bh, "getblockhash", h); err != nil {
 			break
 		}
 		var blk struct {
-			Tx []string `json:"tx"`
+			Tx []struct {
+				TxID string `json:"txid"`
+				Vin  []struct {
+					TxID string `json:"txid"`
+					Vout uint32 `json:"vout"`
+				} `json:"vin"`
+			} `json:"tx"`
 		}
-		if err := c.rpc.Call(&blk, "getblock", bh); err != nil {
-			continue
+		if err := c.rpc.Call(&blk, "getblock", bh, 2); err != nil {
+			return "", fmt.Errorf("reading block %d for the spender of %s:%d: %w", h, txid, vout, err)
 		}
 		for _, bt := range blk.Tx {
-			if ok, _ := spends(bt); ok {
-				return bt, nil
+			for _, in := range bt.Vin {
+				if in.TxID == txid && in.Vout == vout {
+					return bt.TxID, nil
+				}
 			}
 		}
 	}
-	return "", fmt.Errorf("outpoint %s:%d is spent but spender not found in mempool or last %d blocks", txid, vout, scanWindow)
+	if window {
+		return "", fmt.Errorf("outpoint %s:%d is spent but spender not found in mempool or last %d blocks", txid, vout, scanWindow)
+	}
+	return "", fmt.Errorf("outpoint %s:%d is spent but spender not found in mempool or the blocks since its own (%d to %d)", txid, vout, from, height)
 }
+
+// scanWindow is how far back from the tip a spender is searched when the
+// spent coin's own block cannot be read.
+const scanWindow = 50
 
 // RedeemScriptSigContains reports whether the given on-chain spend's input 0
 // scriptSig asm contains the hex needle (used to prove the preimage was

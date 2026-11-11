@@ -267,6 +267,17 @@ func (n *Node) CoinAt(txid string, vout uint32) (*Coin, error) {
 	return &Coin{Txid: txid, Vout: vout, Asset: a, Value: v, Script: spk}, nil
 }
 
+// Confirmations is how many blocks bury txid; 0 while it is unmined.
+func (n *Node) Confirmations(txid string) (int64, error) {
+	var tx struct {
+		Confirmations int64 `json:"confirmations"`
+	}
+	if err := n.rpc().Call(&tx, "getrawtransaction", txid, true); err != nil {
+		return 0, err
+	}
+	return tx.Confirmations, nil
+}
+
 // SpendWitness finds the transaction that spent an outpoint and returns its
 // id and that input's witness; "" while the outpoint is unspent.
 func (n *Node) SpendWitness(txid string, vout uint32) (string, [][]byte, error) {
