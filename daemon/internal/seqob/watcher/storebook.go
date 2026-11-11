@@ -81,3 +81,6 @@ func (b *storeBook) RemovePool(k offerstore.Key, status seqobv1.OfferStatus) err
 func (b *storeBook) RecordPoolMove(m offerstore.PoolMove) { b.s.RecordPoolMove(m) }
 
 var _ PoolBook = (*storeBook)(nil)
+
+// RemoveGatedExpired delists a gated order at its expiry.
+func (b *storeBook) RemoveGatedExpired(k offerstore.Key) error { return b.s.RemoveGatedExpired(k) }

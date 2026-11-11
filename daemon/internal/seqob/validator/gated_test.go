@@ -19,7 +19,7 @@ func gatedOffer(o *seqobv1.Offer) {
 	o.Settlement = &seqobv1.Offer_GatedOrder{GatedOrder: &seqobv1.GatedOrderTerms{
 		CovenantTxid: strings.Repeat("ab", 32), AssetA: "ff" + strings.Repeat("01", 31), AssetB: "ee" + strings.Repeat("02", 31),
 		RateNum: 45, RateDen: 100, MinLot: 1, MakerProg: bytes.Repeat([]byte{0xc3}, 32), MakerProgVer: 1,
-		Expiry: 1_800_000_000, PolicyX: bytes.Repeat([]byte{0x02}, 32), MakerEnclaveProg: bytes.Repeat([]byte{0xe5}, 32),
+		Expiry: uint32(o.ExpiresAtUnix) + 3600, PolicyX: bytes.Repeat([]byte{0x02}, 32), MakerEnclaveProg: bytes.Repeat([]byte{0xe5}, 32),
 		PolicyServer: "https://policy.example/openamp", MakerAid: strings.Repeat("aa", 20),
 	}}
 }
@@ -56,5 +56,13 @@ func TestGatedOrderTerms(t *testing.T) {
 	check("no server", func(g *seqobv1.GatedOrderTerms, _ *seqobv1.Offer) { g.PolicyServer = "" }, "https")
 	check("bad account", func(g *seqobv1.GatedOrderTerms, _ *seqobv1.Offer) { g.MakerAid = "zz" }, "maker_aid")
 	check("a buy", func(_ *seqobv1.GatedOrderTerms, o *seqobv1.Offer) { o.TradeDir = seqobv1.TradeDir_TRADE_DIR_BUY }, "BUY")
+	// PV5 Q1: the offer must stop resting before the order's expiry.
+	check("offer outlives the order", func(g *seqobv1.GatedOrderTerms, o *seqobv1.Offer) {
+		o.ExpiresAtUnix = uint64(g.Expiry) - 59
+	}, "is after its expiry")
+	check("offer ends at the margin", func(g *seqobv1.GatedOrderTerms, o *seqobv1.Offer) {
+		o.ExpiresAtUnix = uint64(g.Expiry) - 60
+	}, "")
+	check("offer with no end", func(_ *seqobv1.GatedOrderTerms, o *seqobv1.Offer) { o.ExpiresAtUnix = 0 }, "after its expiry")
 	check("min_lot above lock", func(g *seqobv1.GatedOrderTerms, _ *seqobv1.Offer) { g.MinLot = 101 }, "exceeds the locked amount")
 }

@@ -776,6 +776,10 @@ func (s *Store) SweepExpired() int {
 		exp := e.Offer.GetExpiresAtUnix()
 		if exp != 0 && exp <= now {
 			expired = append(expired, k)
+		} else if gt := e.Offer.GetGatedOrder(); gt != nil && offer.GatedDelistAt(gt) <= int64(now) {
+			// A gated order no one can fill any more (its policy server
+			// refuses from the expiry), whatever its offer says.
+			expired = append(expired, k)
 		}
 	}
 	type ev struct {

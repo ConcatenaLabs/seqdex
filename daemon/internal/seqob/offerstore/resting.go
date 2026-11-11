@@ -115,3 +115,18 @@ func (s *Store) RemoveResting(k Key, status seqobv1.OfferStatus) error {
 	s.mu.Unlock()
 	return s.dropWithStatus(k, status)
 }
+
+// RemoveGatedExpired delists a gated order whose expiry, less the margin, has
+// passed by the chain's median time: its policy server refuses every fill from
+// then. The watcher calls it; SweepExpired does the same by the clock alone.
+func (s *Store) RemoveGatedExpired(k Key) error {
+	s.mu.Lock()
+	e, ok := s.entries[k]
+	if !ok || !offer.IsGatedOrder(e.Offer) {
+		s.mu.Unlock()
+		return nil
+	}
+	e.ActiveAmount = 0
+	s.mu.Unlock()
+	return s.dropWithStatus(k, seqobv1.OfferStatus_OFFER_STATUS_EXPIRED)
+}

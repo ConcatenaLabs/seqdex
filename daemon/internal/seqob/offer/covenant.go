@@ -30,6 +30,16 @@ func IsCovenant(o *seqobv1.Offer) bool {
 // one step), so no matcher crosses it and no settler fills it.
 func IsGatedOrder(o *seqobv1.Offer) bool { return o.GetGatedOrder() != nil }
 
+// GatedDelistMargin: the relay stops listing a gated order this many seconds
+// before its expiry, from which its policy server refuses every fill. An
+// offer's own expires_at_unix may be no later than that.
+const GatedDelistMargin = 60
+
+// GatedDelistAt is when the relay stops listing a gated order (Unix seconds).
+func GatedDelistAt(t *seqobv1.GatedOrderTerms) int64 {
+	return int64(t.GetExpiry()) - GatedDelistMargin
+}
+
 // GatedOrderOf is the gated order a GatedOrderTerms describes, its fixed-size
 // fields checked. Asset ids are internal-order hex.
 func GatedOrderOf(t *seqobv1.GatedOrderTerms) (covenant.GatedOrder, error) {

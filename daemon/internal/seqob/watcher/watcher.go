@@ -6,6 +6,7 @@ import (
 	"time"
 
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
+	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offer"
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offerstore"
 	"github.com/aejkcs50/seqdex/daemon/pkg/covenant"
 )
@@ -240,6 +241,18 @@ func (w *Watcher) ReconcileOnce() (Stats, error) {
 	for _, c := range covs {
 		if tr := w.tracks[c.Key]; tr != nil && len(tr.steps) > 0 && !tr.steps[len(tr.steps)-1].partial {
 			continue // spent whole; held until that spend is final, and watched in step 1
+		}
+		// A gated order stops resting at its expiry less the margin, by the
+		// later of the clock and the chain's median time: its policy server
+		// refuses every fill from then (judged the same way).
+		if c.Gated != nil && medianNow(w.chain, time.Now()) >= offer.GatedDelistAt(c.Gated) {
+			if gb, ok := w.book.(interface{ RemoveGatedExpired(offerstore.Key) error }); ok {
+				if err := gb.RemoveGatedExpired(c.Key); err != nil {
+					st.Errors++
+					w.log.Printf("watcher: %s/%s: delist the expired gated order: %v", c.Key.MakerPubkey, c.Key.OfferID, err)
+				}
+			}
+			continue
 		}
 		exp, err := c.expect()
 		if err != nil {

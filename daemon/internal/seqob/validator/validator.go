@@ -550,6 +550,12 @@ func checkGatedOrder(o *seqobv1.Offer) error {
 	if gt.GetExpiry() < 500_000_000 {
 		return fmt.Errorf("gated order expiry %d is a height: it must be a time", gt.GetExpiry())
 	}
+	// The policy server refuses every fill from the order's expiry: the offer
+	// must stop resting before then, so takers never see an order no one can fill.
+	if exp := o.GetExpiresAtUnix(); exp == 0 || int64(exp) > offer.GatedDelistAt(gt) {
+		return fmt.Errorf("gated order expires_at_unix %d is after its expiry %d less %d s (or unset): the policy server refuses every fill from the expiry",
+			exp, gt.GetExpiry(), offer.GatedDelistMargin)
+	}
 	if gt.GetRateNum() < 1 || gt.GetRateDen() < 1 || gt.GetMinLot() < 1 {
 		return fmt.Errorf("gated order rate_num, rate_den and min_lot must be >= 1")
 	}

@@ -7,6 +7,7 @@ import (
 
 	seqobv1 "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/seqob/v1"
 	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offer"
+	"github.com/aejkcs50/seqdex/daemon/internal/seqob/offerstore"
 	"github.com/aejkcs50/seqdex/daemon/pkg/covenant"
 )
 
@@ -62,4 +63,51 @@ func hexOf(b []byte) string {
 		out = append(out, digits[c>>4], digits[c&15])
 	}
 	return string(out)
+}
+
+// mtpChain is a fake chain whose tip carries a median time past.
+type mtpChain struct {
+	*fakeChain
+	mtp int64
+}
+
+func (c mtpChain) TipMedianTime() (int64, error) { return c.mtp, nil }
+
+// gatedBook records the gated orders the watcher delists.
+type gatedBook struct {
+	*fakeBook
+	delisted []offerstore.Key
+}
+
+func (b *gatedBook) RemoveGatedExpired(k offerstore.Key) error {
+	b.delisted = append(b.delisted, k)
+	return nil
+}
+
+// PV5 Q1: a gated order stops resting at its expiry less the margin, by the
+// later of the clock and the chain's median time, even while its coin is
+// unspent: its policy server refuses every fill from then.
+func TestGatedOrderDelistedAtItsExpiry(t *testing.T) {
+	terms := gatedTerms()
+	o := &seqobv1.Offer{OfferId: "G", Settlement: &seqobv1.Offer_GatedOrder{GatedOrder: terms}}
+	k := offerstore.Key{MakerPubkey: "m", OfferID: "G"}
+	for _, c := range []struct {
+		name   string
+		mtp    int64
+		delist bool
+	}{
+		{"a day before", int64(terms.GetExpiry()) - 86400, false},
+		{"the median time a minute short of the margin", offer.GatedDelistAt(terms) - 60, false},
+		{"the median time at the margin, the clock long before", offer.GatedDelistAt(terms), true},
+		{"after the expiry", int64(terms.GetExpiry()) + 6, true},
+	} {
+		book := &gatedBook{fakeBook: newFakeBook(CovEntry{Key: k, Offer: o, Gated: terms, Active: 500})}
+		w := New(mtpChain{newFakeChain(), c.mtp}, book, nil)
+		if _, err := w.ReconcileOnce(); err != nil {
+			t.Fatal(err)
+		}
+		if got := len(book.delisted) == 1; got != c.delist {
+			t.Fatalf("%s: delisted %v, want %v", c.name, got, c.delist)
+		}
+	}
 }
