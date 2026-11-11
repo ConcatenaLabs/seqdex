@@ -292,12 +292,18 @@ the whole transaction before it signs (`restricted.CheckTrade`): lock time 0
 and no relative lock, so no time-gated refund can share it; every input of its
 own one it offered, by wallet or by script; each payment it is owed its own
 output; per asset, what it gives and gets as agreed, each output counted once;
-one fee asset at or above its own floor. A side signs only the inputs it
-offered. The seller of the asset signs with an expiry the server enforces, and
-the taker has the server co-sign and broadcast it in one step. The trade
-signals BIP125: a paying maker whose signed trade is not mined in time respends
-its coin at a fee that replaces it, and a trade that may still be mined is
-reported pending, never failed. `seqob-cli rlift` is the taker for both quotes.
+one fee asset at or above its own floor; no input signalling replacement. A
+side's wallet signs only the inputs spending the coins it offered, and refuses
+a trade in which it would sign any other (`restricted.Node.SignOffered`): a
+wallet's list of its own coins misses a coin whose trade a reorg un-mined and
+something then cancelled. The seller of the asset signs with an expiry the
+server enforces, and the taker has the server co-sign and broadcast it in one
+step. The trade signals no replacement (BIP125), so a reorg that un-mines it
+returns it to the mempool and it is mined again as agreed. A paying maker
+whose signed trade is not mined in time spends its coin home, so the trade can
+never be mined; that spend is refused while its own mempool holds the trade,
+and a trade that may still be mined is reported pending, never failed.
+`seqob-cli rlift` is the taker for both quotes.
 `pkg/restricted/testdata/start-regtest.sh` brings up a bitcoind, a Sequentia
 node anchored to it and openampd, for `TestRestrictedSwapRegtest` and the trade
 suites (`up` or `stop`; `RESTRICTED_PORTS` moves its ports).
