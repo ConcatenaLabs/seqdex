@@ -177,8 +177,8 @@ func TestRestrictedDvPRegtest(t *testing.T) {
 		check := func(p restricted.DvP, price uint64) error {
 			u, err := restricted.BuildDvP(p)
 			must(t, err)
-			return restricted.CheckDvP(u, coins[:1], owns, [][]byte{enclave, recv}, map[[32]byte]uint64{a: 100},
-				[]restricted.Out{{Asset: b, Value: price, Script: recv}})
+			return restricted.CheckTrade(u, restricted.TradeSide{Offered: coins[:1], WalletOwns: owns, Ours: [][]byte{enclave, recv},
+				Gives: map[[32]byte]uint64{a: 100}, Gets: []restricted.Out{{Asset: b, Value: price, Script: recv}}})
 		}
 		if err := check(plan, 10000000); err != nil {
 			t.Fatalf("the agreed trade was refused: %v", err)

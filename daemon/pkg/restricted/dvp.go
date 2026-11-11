@@ -93,75 +93,183 @@ func BuildDvP(d DvP) (*Unsigned, error) {
 	}
 	outs = append(outs, Out{d.FeeAsset, d.Fee, nil})
 	coins := append(append(append([]Coin{}, d.SellerCoins...), d.BuyerCoins...), d.FeeCoins...)
-	return Build(coins, outs, 0)
+	u, err := Build(coins, outs, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, in := range u.Tx.Inputs {
+		in.Sequence = Sequence
+	}
+	return u, nil
 }
 
-// CheckDvP is what a side checks of a trade before it signs, from the
-// transaction itself. mine are the coins it offered; walletOwns are every
-// outpoint its wallet would sign, none of which may be spent unless offered
-// (a wallet signs every input it owns). ours are the scripts it controls: what
-// the trade pays to them comes back to it. Per asset, it gives at most
-// maxGive (what it offered beyond that must come back), and it receives each
-// of gets.
-func CheckDvP(u *Unsigned, mine []Coin, walletOwns map[string]bool, ours [][]byte, maxGive map[[32]byte]uint64, gets []Out) error {
-	offered := map[string]bool{}
-	in := map[[32]byte]uint64{}
-	for _, c := range mine {
-		offered[outpointKey(c.Txid, c.Vout)] = true
-		in[c.Asset] += c.Value
+// Sequence is every input's sequence in a trade: replaceable (BIP125), and
+// with BIP68's disable flag set, so no relative lock is met.
+const Sequence uint32 = 0xfffffffd
+
+// TradeSide is what one side of a trade agreed to and holds: the whole of
+// what it checks of the transaction before it signs anything of it.
+type TradeSide struct {
+	// Offered are the coins it puts in, wallet or enclave.
+	Offered []Coin
+	// WalletOwns are every outpoint its wallet would sign (a wallet signs
+	// every input it owns).
+	WalletOwns map[string]bool
+	// Ours are the scripts it controls: its enclave and the scripts it named
+	// for this trade. What the trade pays to them comes back to it.
+	Ours [][]byte
+	// Gives is the most it gives of each asset, its share of the fee
+	// included.
+	Gives map[[32]byte]uint64
+	// Gets is what it is paid, each by an output of its own.
+	Gets []Out
+	// FeeFloor, when set, is the least fee it accepts in a fee asset; an
+	// error refuses the asset.
+	FeeFloor func(asset [32]byte) (uint64, error)
+}
+
+// CheckTrade is what each side checks of a trade before it signs, from the
+// transaction itself:
+//
+//   - the lock time is 0 and every input's sequence disables BIP68, so no
+//     path gated by a time sits in the trade: a gated order's or an HTLC's
+//     keyless refund pays an enclave at its output 0, and that output would
+//     otherwise count as ours twice (as the refund and as the trade);
+//   - every input that is ours, by the wallet or by a script of ours, is one
+//     we offered, and every coin we offered is spent;
+//   - every output is explicit; each of Gets is paid by its own output, at a
+//     script of ours;
+//   - per asset, what comes back to us plus what we agreed to give covers
+//     what we put in plus what we are owed: an output counts once;
+//   - one asset pays the fee, at least FeeFloor of it.
+func CheckTrade(u *Unsigned, s TradeSide) error {
+	if u.Tx.Locktime != 0 {
+		return fmt.Errorf("the trade has lock time %d, not 0", u.Tx.Locktime)
 	}
-	for _, ti := range u.Tx.Inputs {
-		h, err := chainhash.NewHash(ti.Hash)
-		if err != nil {
-			return err
-		}
-		k := outpointKey(h.String(), ti.Index)
-		if walletOwns[k] && !offered[k] {
-			return fmt.Errorf("the trade spends %s, a coin of ours not offered", k)
-		}
-		delete(offered, k)
-	}
-	if len(offered) != 0 {
-		return fmt.Errorf("the trade leaves out coins we offered")
+	if len(u.Coins) != len(u.Tx.Inputs) {
+		return fmt.Errorf("the trade names %d coins for %d inputs", len(u.Coins), len(u.Tx.Inputs))
 	}
 	isOurs := func(spk []byte) bool {
-		for _, o := range ours {
-			if bytes.Equal(o, spk) {
+		for _, o := range s.Ours {
+			if len(o) > 0 && bytes.Equal(o, spk) {
 				return true
 			}
 		}
 		return false
 	}
+	offered := map[string]bool{}
+	in := map[[32]byte]uint64{}
+	for _, c := range s.Offered {
+		offered[outpointKey(c.Txid, c.Vout)] = true
+		in[c.Asset] += c.Value
+	}
+	for i, ti := range u.Tx.Inputs {
+		if ti.Sequence&(1<<31) == 0 {
+			return fmt.Errorf("input %d has sequence %#x, which can meet a relative lock", i, ti.Sequence)
+		}
+		h, err := chainhash.NewHash(ti.Hash)
+		if err != nil {
+			return err
+		}
+		k := outpointKey(h.String(), ti.Index)
+		if u.Coins[i].Txid != h.String() || u.Coins[i].Vout != ti.Index {
+			return fmt.Errorf("input %d spends %s, and its coin is named %s:%d", i, k, u.Coins[i].Txid, u.Coins[i].Vout)
+		}
+		if offered[k] {
+			delete(offered, k)
+			continue
+		}
+		if s.WalletOwns[k] {
+			return fmt.Errorf("the trade spends %s, a coin of ours not offered", k)
+		}
+		if isOurs(u.Coins[i].Script) {
+			return fmt.Errorf("the trade spends %s at a script of ours, not offered", k)
+		}
+	}
+	if len(offered) != 0 {
+		return fmt.Errorf("the trade leaves out coins we offered")
+	}
 	back := map[[32]byte]uint64{}
-	for _, o := range u.Tx.Outputs {
+	fee := map[[32]byte]uint64{}
+	used := make([]bool, len(u.Tx.Outputs))
+	values := make([]uint64, len(u.Tx.Outputs))
+	assets := make([][32]byte, len(u.Tx.Outputs))
+	for i, o := range u.Tx.Outputs {
 		v, ok := explicitValue(o.Value)
 		if !ok || len(o.Asset) != 33 || o.Asset[0] != 1 {
 			return fmt.Errorf("the trade carries a confidential output")
 		}
-		var a [32]byte
-		copy(a[:], o.Asset[1:])
-		if isOurs(o.Script) {
-			back[a] += v
+		copy(assets[i][:], o.Asset[1:])
+		values[i] = v
+		switch {
+		case len(o.Script) == 0:
+			fee[assets[i]] += v
+		case isOurs(o.Script):
+			back[assets[i]] += v
 		}
 	}
-	for a, v := range in {
-		if back[a] < v && v-back[a] > maxGive[a] {
-			return fmt.Errorf("the trade takes %d of %s from us, more than the %d agreed", v-back[a], Display(a), maxGive[a])
+	owed := map[[32]byte]uint64{}
+	for _, g := range s.Gets {
+		if !isOurs(g.Script) {
+			return fmt.Errorf("we are to be paid at %x, a script not ours", g.Script)
 		}
-	}
-	for _, g := range gets {
 		found := false
-		for _, o := range u.Tx.Outputs {
-			if v, ok := explicitValue(o.Value); ok && bytes.Equal(o.Script, g.Script) && bytes.Equal(o.Asset[1:], g.Asset[:]) && v >= g.Value {
-				found = true
+		for i, o := range u.Tx.Outputs {
+			if !used[i] && bytes.Equal(o.Script, g.Script) && assets[i] == g.Asset && values[i] >= g.Value {
+				used[i], found = true, true
 				break
 			}
 		}
 		if !found {
 			return fmt.Errorf("the trade does not pay %d of %s to %x", g.Value, Display(g.Asset), g.Script)
 		}
+		owed[g.Asset] += g.Value
+	}
+	seen := map[[32]byte]bool{}
+	for a := range in {
+		seen[a] = true
+	}
+	for a := range owed {
+		seen[a] = true
+	}
+	for a := range seen {
+		if back[a]+s.Gives[a] < in[a]+owed[a] {
+			if in[a] > back[a] {
+				return fmt.Errorf("the trade takes %d of %s from us, more than the %d agreed", in[a]+owed[a]-back[a], Display(a), s.Gives[a])
+			}
+			return fmt.Errorf("the trade pays us %d of %s, less than the %d owed", back[a]-in[a], Display(a), owed[a])
+		}
+	}
+	if len(fee) != 1 {
+		return fmt.Errorf("the trade pays its fee in %d assets, not one", len(fee))
+	}
+	if s.FeeFloor != nil {
+		for a, v := range fee {
+			min, err := s.FeeFloor(a)
+			if err != nil {
+				return fmt.Errorf("the fee in %s: %v", Display(a), err)
+			}
+			if v < min {
+				return fmt.Errorf("the trade pays a fee of %d %s, below our floor of %d", v, Display(a), min)
+			}
+		}
 	}
 	return nil
+}
+
+// OfferedInputs are the indices of the inputs spending the coins offered.
+func OfferedInputs(u *Unsigned, offered []Coin) []int {
+	set := map[string]bool{}
+	for _, c := range offered {
+		set[outpointKey(c.Txid, c.Vout)] = true
+	}
+	var ins []int
+	for i, c := range u.Coins {
+		if set[outpointKey(c.Txid, c.Vout)] {
+			ins = append(ins, i)
+		}
+	}
+	return ins
 }
 
 func outpointKey(txid string, vout uint32) string { return txid + ":" + strconv.Itoa(int(vout)) }

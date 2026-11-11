@@ -13,11 +13,17 @@ package client
 //	                             the payer: the trade with its own inputs signed
 //	taker -> maker  dvp_done     the txid the policy server broadcast
 //
-// Each side checks the trade against what it agreed before signing: its coins
-// spent only as offered (none other of its wallet's), what it gives bounded,
-// what it gets paid. The seller's signatures carry an expiry the server
-// enforces. The payer's do not, so a payer whose trade is not broadcast in
-// time spends its coin elsewhere, and the signed trade can never land.
+// Each side runs the same check on the whole transaction before it signs
+// anything (restricted.CheckTrade): no lock time and no relative lock, so no
+// time-gated refund shares the trade; every input of its own one it offered;
+// each output it counts its own and counted once; per asset, what it gives and
+// gets as agreed; the fee at or above its floor. A side signs only the inputs
+// it offered. The seller's signatures carry an expiry the server enforces
+// before it broadcasts. The payer's do not, so a payer whose trade is not
+// mined in time replaces it (the trade signals BIP125) by spending its coin
+// elsewhere. A trade still in the mempool, or broadcast and not yet
+// contradicted by a spend of its inputs, may still be mined: it is reported
+// pending (ErrDvPPending), never failed.
 
 import (
 	"bytes"
@@ -28,6 +34,12 @@ import (
 
 	"github.com/aejkcs50/seqdex/daemon/pkg/restricted"
 )
+
+// ErrDvPPending: the trade was signed and broadcast and may still be mined.
+var ErrDvPPending = errors.New("restricted trade pending")
+
+// dvpFeeVBytes is the size a trade's fee is reckoned for.
+const dvpFeeVBytes = 1200
 
 const (
 	XcDvpRequest XcMsgType = "dvp_request"
@@ -118,6 +130,11 @@ func unsignedFrom(n *restricted.Node, raw string) (*restricted.Unsigned, error) 
 		return nil, err
 	}
 	return u, nil
+}
+
+// feeFloor is the least fee a side accepts, at its own rate.
+func (d *RestrictedDvP) feeFloor(a [32]byte) (uint64, error) {
+	return d.Party.Node.FeeAtoms(restricted.Display(a), dvpFeeVBytes, d.RfaPerVb)
 }
 
 // inputsAt are the indices of the inputs spending coins at spk.
@@ -212,22 +229,24 @@ func RunMakerRestrictedDvP(d *RestrictedDvP, sell bool, recv []byte, in <-chan [
 	}
 	a, _ := restricted.ReverseHex(p.Asset)
 	b, _ := restricted.ReverseHex(d.AssetB)
+	side := restricted.TradeSide{Offered: mine, WalletOwns: owns, FeeFloor: d.feeFloor}
 	if sell {
-		err = restricted.CheckDvP(u, mine, owns, [][]byte{myEnclave, recv}, map[[32]byte]uint64{a: d.Value},
-			[]restricted.Out{{Asset: b, Value: d.Price, Script: recv}})
+		side.Ours, side.Gives = [][]byte{myEnclave, recv}, map[[32]byte]uint64{a: d.Value}
+		side.Gets = []restricted.Out{{Asset: b, Value: d.Price, Script: recv}}
 	} else {
-		err = restricted.CheckDvP(u, mine, owns, [][]byte{myEnclave, change}, map[[32]byte]uint64{b: d.Price},
-			[]restricted.Out{{Asset: a, Value: d.Value, Script: myEnclave}})
+		side.Ours, side.Gives = [][]byte{myEnclave, change}, map[[32]byte]uint64{b: d.Price}
+		side.Gets = []restricted.Out{{Asset: a, Value: d.Value, Script: myEnclave}}
 	}
-	if err != nil {
+	if err = restricted.CheckTrade(u, side); err != nil {
 		sendXcFail(d.Crypter, send, "bad_tx", err.Error())
 		return "", err
 	}
-	sellerEnclave := myEnclave
+	// The seller signs the inputs it offered and no other: an input the
+	// taker added at its enclave was refused above.
+	sellerIns := restricted.OfferedInputs(u, mine)
 	if !sell {
-		sellerEnclave = takerEnclave
+		sellerIns = inputsAt(u, takerEnclave)
 	}
-	sellerIns := inputsAt(u, sellerEnclave)
 	if err := p.Policy.CheckDvPWithServer(u, p.Asset, seller, sellerIns); err != nil {
 		sendXcFail(d.Crypter, send, "refused", err.Error())
 		return "", err
@@ -252,24 +271,52 @@ func RunMakerRestrictedDvP(d *RestrictedDvP, sell bool, recv []byte, in <-chan [
 		}
 	}
 	d.logf("signed the trade %s; waiting for it to be mined", txid)
+	return d.awaitTrade(u, txid, sell, mine)
+}
+
+// awaitTrade waits for a signed trade. Past the wait, a payer replaces a
+// trade that is not mined by spending its coin elsewhere; a trade that may
+// still be mined is reported pending, never failed.
+func (d *RestrictedDvP) awaitTrade(u *restricted.Unsigned, txid string, sell bool, mine []restricted.Coin) (string, error) {
+	p := d.Party
+	mined := func() bool {
+		bh, err := p.Node.Chain.BlockHashOfTx(txid)
+		return err == nil && bh != ""
+	}
+	seen := false
 	deadline := time.Now().Add(d.Wait)
 	for time.Now().Before(deadline) {
-		if bh, err := p.Node.Chain.BlockHashOfTx(txid); err == nil && bh != "" {
+		if mined() {
 			return txid, nil
+		}
+		if p.Node.InMempool(txid) {
+			seen = true
 		}
 		time.Sleep(d.Timing.Poll)
 	}
+	if !sell {
+		// The payer's signatures do not expire: spend its coin elsewhere, at
+		// a fee that replaces the trade if it waits in a mempool.
+		rt, rerr := p.Node.Respend(mine[0], d.FeeAsset, d.RfaPerVb, 2*dvpFeeVBytes)
+		if rerr == nil {
+			return "", fmt.Errorf("the trade %s was not mined; its coin was respent in %s, which replaces it", txid, rt)
+		}
+		d.logf("respending the coin of trade %s failed: %v", txid, rerr)
+	}
+	if mined() {
+		return txid, nil
+	}
+	if p.Node.InMempool(txid) || seen {
+		if spent, _ := p.Node.AnySpent(u); !spent {
+			return "", fmt.Errorf("%w: the trade %s was broadcast and may still be mined; it is not failed", ErrDvPPending, txid)
+		}
+	}
 	if sell {
-		// The server refuses the trade from the expiry on.
+		// The server refuses the trade from the expiry on, and it never
+		// broadcast it.
 		return "", fmt.Errorf("the trade %s was not mined; its signatures expired", txid)
 	}
-	// The payer's signatures do not expire: spend a coin of the trade
-	// elsewhere, so the signed trade can never land.
-	rt, err := p.Node.Respend(mine[0], d.FeeAsset, d.RfaPerVb)
-	if err != nil {
-		return "", fmt.Errorf("the trade %s was not mined, and respending its coin failed: %v", txid, err)
-	}
-	return "", fmt.Errorf("the trade %s was not mined; its coin was respent in %s", txid, rt)
+	return "", fmt.Errorf("the trade %s was not mined, and its coin could not be respent", txid)
 }
 
 // RunTakerRestrictedDvP lifts a maker's asset quote. makerSells: the taker
@@ -302,6 +349,16 @@ func RunTakerRestrictedDvP(d *RestrictedDvP, makerAID string, makerSells bool, m
 	if err != nil {
 		return "", err
 	}
+	owns, err := p.Node.WalletOutpoints()
+	if err != nil {
+		return "", err
+	}
+	for _, c := range theirs {
+		if owns[c.Txid+":"+fmt.Sprint(c.Vout)] || bytes.Equal(c.Script, myEnclave) {
+			sendXcFail(d.Crypter, send, "bad_terms", "the maker's coins include ours")
+			return "", fmt.Errorf("%w: the maker names %s:%d, a coin of ours", ErrXcBadTerms, c.Txid, c.Vout)
+		}
+	}
 	a, _ := restricted.ReverseHex(p.Asset)
 	b, err := restricted.ReverseHex(d.AssetB)
 	if err != nil {
@@ -311,7 +368,7 @@ func RunTakerRestrictedDvP(d *RestrictedDvP, makerAID string, makerSells bool, m
 	if err != nil {
 		return "", err
 	}
-	fee, err := p.Node.FeeAtoms(d.FeeAsset, 1200, d.RfaPerVb)
+	fee, err := p.Node.FeeAtoms(d.FeeAsset, dvpFeeVBytes, d.RfaPerVb)
 	if err != nil {
 		return "", err
 	}
@@ -326,6 +383,7 @@ func RunTakerRestrictedDvP(d *RestrictedDvP, makerAID string, makerSells bool, m
 	if err != nil {
 		return "", err
 	}
+	side := restricted.TradeSide{WalletOwns: owns, FeeFloor: d.feeFloor}
 	plan := restricted.DvP{Asset: a, Value: d.Value, AssetB: b, Price: d.Price, FeeCoins: feeCoins, FeeAsset: fa, Fee: fee, FeeChange: feeChange}
 	if makerSells {
 		for _, c := range theirs {
@@ -344,6 +402,11 @@ func RunTakerRestrictedDvP(d *RestrictedDvP, makerAID string, makerSells bool, m
 		}
 		plan.SellerCoins, plan.SellerEnclave, plan.SellerRecv = theirs, makerEnclave, makerRecv
 		plan.BuyerCoins, plan.BuyerEnclave, plan.BuyerChange = pay, myEnclave, ch
+		side.Offered = append(append([]restricted.Coin{}, pay...), feeCoins...)
+		side.Ours = [][]byte{myEnclave, ch, feeChange}
+		side.Gives = map[[32]byte]uint64{b: d.Price}
+		side.Gives[fa] += fee
+		side.Gets = []restricted.Out{{Asset: a, Value: d.Value, Script: myEnclave}}
 	} else {
 		for _, c := range theirs {
 			if c.Asset != b {
@@ -373,10 +436,19 @@ func RunTakerRestrictedDvP(d *RestrictedDvP, makerAID string, makerSells bool, m
 		}
 		plan.SellerCoins, plan.SellerEnclave, plan.SellerRecv = sell, myEnclave, recvB
 		plan.BuyerCoins, plan.BuyerEnclave, plan.BuyerChange = theirs, makerEnclave, mc
+		side.Offered = append(append([]restricted.Coin{}, sell...), feeCoins...)
+		side.Ours = [][]byte{myEnclave, recvB, feeChange}
+		side.Gives = map[[32]byte]uint64{a: d.Value}
+		side.Gives[fa] += fee
+		side.Gets = []restricted.Out{{Asset: b, Value: d.Price, Script: recvB}}
 	}
 	u, err := restricted.BuildDvP(plan)
 	if err != nil {
 		return "", err
+	}
+	if err := restricted.CheckTrade(u, side); err != nil {
+		sendXcFail(d.Crypter, send, "bad_terms", err.Error())
+		return "", fmt.Errorf("%w: %v", ErrXcBadTerms, err)
 	}
 	seller := makerAID
 	if !makerSells {
