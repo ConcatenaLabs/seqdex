@@ -198,11 +198,11 @@ func verify(x [32]byte, h [32]byte, sig []byte) error {
 // the asset's change home to the seller's enclave, then the fee asset's change,
 // then the fee.
 type LockPlan struct {
-	Swap          Swap
-	EnclaveCoins  []Coin // the seller's coins of the asset, at its enclave
-	FeeCoins      []Coin // coins of Swap.PotAsset, which pays the pot and the fee
-	FeeChange     []byte // where the fee asset's change goes
-	Fee           uint64 // in Swap.PotAsset
+	Swap         Swap
+	EnclaveCoins []Coin // the seller's coins of the asset, at its enclave
+	FeeCoins     []Coin // coins of Swap.PotAsset, which pays the pot and the fee
+	FeeChange    []byte // where the fee asset's change goes
+	Fee          uint64 // in Swap.PotAsset
 	// Reserve outputs, of the pot's asset, follow the asset's change: coins the
 	// seller sets aside to pay its refunds' fees.
 	Reserve []Out
@@ -321,27 +321,22 @@ func FinishClaim(u *Unsigned, s Swap, secret []byte, policySig []byte, buyer *bt
 }
 
 // RefundPlan sends an HTLC or a pot home after T_seq: the coin at input 0,
-// home at output 0 with its whole value, then a fee coin the refunder holds,
-// its change and the fee. Nobody's key is on the coin's path.
+// home at output 0 with its whole value, then a fee coin the refunder set
+// aside for this refund, all of which is the fee. Nobody's key is on the
+// coin's path.
 type RefundPlan struct {
-	Coin      Coin
-	Home      []byte // the v1 program script the leaf pins
-	Leaf      covenant.TapLeaf
-	FeeCoin   Coin
-	FeeChange []byte
-	Fee       uint64
-	TSeq      uint32
+	Coin    Coin
+	Home    []byte // the v1 program script the leaf pins
+	Leaf    covenant.TapLeaf
+	FeeCoin Coin // its whole value is the fee: a change output would be dust
+	TSeq    uint32
 }
 
 // BuildRefund lays out a refund; the fee coin's input is left to sign.
 func BuildRefund(p RefundPlan) (*Unsigned, error) {
-	if p.FeeCoin.Value <= p.Fee {
-		return nil, fmt.Errorf("the fee coin %d does not cover the fee %d", p.FeeCoin.Value, p.Fee)
-	}
 	u, err := Build([]Coin{p.Coin, p.FeeCoin}, []Out{
 		{p.Coin.Asset, p.Coin.Value, p.Home},
-		{p.FeeCoin.Asset, p.FeeCoin.Value - p.Fee, p.FeeChange},
-		{p.FeeCoin.Asset, p.Fee, nil},
+		{p.FeeCoin.Asset, p.FeeCoin.Value, nil},
 	}, p.TSeq)
 	if err != nil {
 		return nil, err

@@ -65,12 +65,12 @@ type RestrictedSwap struct {
 	// BtcMedianTime reads Bitcoin's median time past.
 	BtcMedianTime func() (int64, error)
 
-	Value     uint64 // the asset's atoms traded
-	BtcAmount uint64 // sats
-	PotAsset  string // display hex, from the signed offer
-	PotAmount uint64
-	RfaPerVb  uint64 // the Sequentia fee rate, reference atoms per vbyte
-	BtcFee    uint64 // sats for a BTC claim or refund
+	Value      uint64 // the asset's atoms traded
+	BtcAmount  uint64 // sats
+	PotAsset   string // display hex, from the signed offer
+	PotAmount  uint64
+	RfaPerVb   uint64 // the Sequentia fee rate, reference atoms per vbyte
+	BtcFee     uint64 // sats for a BTC claim or refund
 	MinBTCConf int
 
 	Timing XcTiming
@@ -664,3 +664,28 @@ func RunMakerRestrictedBuy(r *RestrictedSwap, newOps func(hashH []byte) (XcOps, 
 
 // noOps stands in before the BTC engine is bound to a hash; nothing calls it.
 type noOps struct{ XcOps }
+
+// RefundRestrictedBTC sends a restricted swap's BTC leg back to its payer once
+// Bitcoin's median time has passed T_btc, a time (BIP113), not a height. With
+// wait=false it returns ErrXcRefundNotDue when early.
+func RefundRestrictedBTC(r *RestrictedSwap, leg *xchain.LegLock, key *xchain.Key, tBtc uint32, wait bool) (string, error) {
+	r.Timing.setDefaults()
+	for {
+		mtp, err := r.BtcMedianTime()
+		if err != nil {
+			return "", err
+		}
+		if mtp >= int64(tBtc) {
+			break
+		}
+		if !wait {
+			return "", fmt.Errorf("%w: Bitcoin's median time %d < T_btc %d", ErrXcRefundNotDue, mtp, tBtc)
+		}
+		time.Sleep(r.Timing.Poll)
+	}
+	fee := r.BtcFee
+	if fee == 0 {
+		fee = 1000
+	}
+	return r.Ops.RefundBTCLeg(leg, key, tBtc, xcSafeFee(fee, leg.Funded.Amount))
+}

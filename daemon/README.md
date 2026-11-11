@@ -261,6 +261,25 @@ transaction to that server (`POST /v1/cosign` with `order_inputs` and
 `"broadcast": true`), which co-signs and broadcasts it if the asset's rules
 admit the taker. The matcher crosses no gated order and no settler fills one.
 
+A restricted quote (`RestrictedTerms`) is an online maker's offer of a
+restricted asset, the pair's base, for on-chain bitcoin. A taker lifts it
+through the courier like a cross-chain offer; the relay only checks its shape
+(an https policy server, a 32-byte policy key, the maker's account, a fee pot
+in another asset, never confidential) and never crosses it. The swap's Sequentia
+side is the policy server's swap HTLC with its fee pot (openamp, "Swap HTLCs";
+`pkg/covenant/htlc.go` pinned to its vectors, `pkg/restricted` for the policy
+server's client and the lock, claim and refund transactions). Whoever buys the
+asset pays the bitcoin, holds the secret and locks first; both locks are Unix
+times, with `T_btc` at least a day after `T_seq`. The seller locks only once its
+anchor reaches the BTC leg's height; the buyer claims after the anchor gate and
+never after `T_seq` − 1 h or within 12 h of `T_btc` by Bitcoin's median time;
+the seller claims the bitcoin as soon as the secret is in the pot's witness, or
+sends both coins home after `T_seq` with fee coins its lock set aside
+(`internal/seqob/client/xdriver_restricted.go`). Both parties' accounts are
+judged by the policy server before anything moves (`GET /v1/eligibility`).
+`pkg/restricted/testdata/start-regtest.sh` brings up a bitcoind, a Sequentia
+node anchored to it and openampd, for `TestRestrictedSwapRegtest`.
+
 **The book across a restart.** The relay keeps its covenant orders, both sides
 of each maker's pool, and the orders resting in operators' trees, and only
 those, when given `-covenant-book`; a resting order is checked again against its operator's

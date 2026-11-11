@@ -335,18 +335,7 @@ func (p *Party) Refund(l *Locked, rfaPerVb uint64) ([]string, error) {
 			return txids, fmt.Errorf("no reserved fee coin for refund %d", i)
 		}
 		fc := l.Reserve[i]
-		fee, err := p.Node.FeeAtoms(Display(fc.Asset), 400, rfaPerVb)
-		if err != nil {
-			return txids, err
-		}
-		if fee >= fc.Value {
-			fee = fc.Value - 1
-		}
-		ch, err := p.Node.NewScript()
-		if err != nil {
-			return txids, err
-		}
-		u, err := BuildRefund(RefundPlan{Coin: *c, Home: lg.home, Leaf: lg.leaf, FeeCoin: fc, FeeChange: ch, Fee: fee, TSeq: s.TSeq})
+		u, err := BuildRefund(RefundPlan{Coin: *c, Home: lg.home, Leaf: lg.leaf, FeeCoin: fc, TSeq: s.TSeq})
 		if err != nil {
 			return txids, err
 		}
