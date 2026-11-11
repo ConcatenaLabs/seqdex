@@ -238,7 +238,7 @@ func main() {
 	}
 	if strings.ToLower(*mode) == "restricted" {
 		mk := loadOrGenKey(*makerPriv)
-		runRestrictedMaker(restrictedMakerConfig{
+		rc := restrictedMakerConfig{
 			cross: crossMakerConfig{relay: strings.TrimRight(*relay, "/"), makerKey: mk,
 				makerPubHex: hex.EncodeToString(mk.PubKey().SerializeCompressed()), asset: *base, side: *side,
 				assetAmt: *baseAmt, btcAmt: *quoteAmt, expiry: *expiry, offerID: *offerID,
@@ -247,7 +247,12 @@ func main() {
 				stateDir: *xstateDir, btcFeeRate: *btcFeeRate},
 			policyServer: strings.TrimRight(*policyServer, "/"), aid: *openampAID, enclaveKey: hexKey(*openampKey),
 			potAsset: *potAsset, potAmount: *potAmount, rfaPerVb: *rfaPerVb, resume: *resume,
-		})
+		}
+		if q := *quoteAsset; q != "" && !offer.IsBTCSentinel(q) && !*resume {
+			runRestrictedDvPMaker(rc, q)
+			return
+		}
+		runRestrictedMaker(rc)
 		return
 	}
 	cross := strings.ToLower(*mode) == "cross"
