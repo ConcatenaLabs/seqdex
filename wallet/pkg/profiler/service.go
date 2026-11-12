@@ -79,7 +79,9 @@ func NewService(opts ServiceOpts) (*ProfilerService, error) {
 
 // Start starts the profiler.
 func (s *ProfilerService) Start() error {
-	runtime.SetBlockProfileRate(1)
+	// one blocking event sampled per 10 ms spent blocked: a rate of 1 recorded every channel and
+	// lock wait of every scanner, a cost paid on each of them for as long as the wallet ran
+	runtime.SetBlockProfileRate(int(10 * time.Millisecond))
 	go s.server.ListenAndServe()
 	ctx, cancelStats := context.WithCancel(context.Background())
 	s.enableMemoryStatistics(ctx, s.opts.Datadir)
@@ -94,7 +96,10 @@ func (s *ProfilerService) Start() error {
 // Stop stops the profiler.
 func (s *ProfilerService) Stop() {
 	s.stopFn()
-	s.server.Shutdown(context.Background())
+	// a profile being taken does not hold the wallet's stop
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = s.server.Shutdown(ctx)
 	s.ticker.Stop()
 	s.log(log.InfoLevel, "shutdown")
 }

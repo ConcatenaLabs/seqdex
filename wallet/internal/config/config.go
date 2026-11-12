@@ -81,6 +81,10 @@ const (
 	DbMigrationPath = "DB_MIGRATION_PATH"
 	// DustAmountKey is the key to customize the dust amount threshold
 	DustAmountKey = "DUST_AMOUNT"
+	// ScanCatchUpParallelKey is how many accounts' scanners may read blocks at once while they
+	// are catching up with the chain (after a restart, or for an account made with a birthday
+	// far back); a scanner following the tip never waits.
+	ScanCatchUpParallelKey = "SCAN_CATCHUP_PARALLEL"
 	// PasswordKey is the key to set the password for auto-init/auto-unlock.
 	PasswordKey = "PASSWORD"
 	// MnemonicKey is the key to set the mnemonic for auto-init.
@@ -156,6 +160,7 @@ func init() {
 	vip.SetDefault(DbMigrationPath, "file://internal/infrastructure/storage/db/postgres/migration")
 	vip.SetDefault(ElectrumUrlKey, defaultElectrumUrl)
 	vip.SetDefault(DustAmountKey, defaultDustAmount)
+	vip.SetDefault(ScanCatchUpParallelKey, 4)
 
 	if err := validate(); err != nil {
 		log.Fatalf("invalid config: %s", err)

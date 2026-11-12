@@ -18,6 +18,8 @@ type boundedCache[K comparable, V any] struct {
 	items   map[K]cacheItem[V]
 	order   []K
 	loading map[K]*cacheLoad[V]
+	// gen counts clears: an answer loaded under an older generation is not kept
+	gen uint64
 }
 
 // cacheLoad is one call to the node that every caller asking for the same key
@@ -64,6 +66,16 @@ func (c *boundedCache[K, V]) put(k K, v V) {
 	c.items[k] = cacheItem[V]{v: v, at: time.Now()}
 }
 
+// clear drops every entry, and keeps no answer from a load that began before it: what the node
+// said then may no longer hold (a reorg).
+func (c *boundedCache[K, V]) clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items = make(map[K]cacheItem[V], c.max)
+	c.order = nil
+	c.gen++
+}
+
 func (c *boundedCache[K, V]) len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -85,10 +97,14 @@ func (c *boundedCache[K, V]) getOrLoad(k K, load func() (V, error), keep func(V)
 	}
 	l := &cacheLoad[V]{done: make(chan struct{})}
 	c.loading[k] = l
+	gen := c.gen
 	c.mu.Unlock()
 
 	l.v, l.err = load()
-	if l.err == nil && (keep == nil || keep(l.v)) {
+	c.mu.Lock()
+	stale := c.gen != gen
+	c.mu.Unlock()
+	if l.err == nil && !stale && (keep == nil || keep(l.v)) {
 		c.put(k, l.v)
 	}
 	c.mu.Lock()

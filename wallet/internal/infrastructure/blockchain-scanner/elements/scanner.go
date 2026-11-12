@@ -152,16 +152,24 @@ func (s *scannerService) adoptBirthday(birth, resume uint32) bool {
 }
 
 func (s *scannerService) startFor() uint32 {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
 	if s.resumeFrom > s.startingBlockHeight {
 		return s.resumeFrom
 	}
 	return s.startingBlockHeight
 }
 
+// watchAddresses watches addresses the account held when the wallet opened, from where the last
+// run had scanned it to (startFor).
 func (s *scannerService) watchAddresses(addressesInfo []domain.AddressInfo) {
+	s.watchAddressesFrom(addressesInfo, s.startFor())
+}
+
+// watchAddressesFrom watches each address not watched yet from block `start`.
+func (s *scannerService) watchAddressesFrom(addressesInfo []domain.AddressInfo, start uint32) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	start := s.startFor()
 
 	for _, info := range addressesInfo {
 		// Prevent duplicates
@@ -188,10 +196,10 @@ func (s *scannerService) watchAddresses(addressesInfo []domain.AddressInfo) {
 }
 
 func (s *scannerService) watchUtxos(utxos []domain.UtxoInfo) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
 	// the coins known as the wallet opens: spent before the resumed height, the last run saw it
 	start := s.startFor()
+	s.lock.Lock()
+	defer s.lock.Unlock()
 
 	for _, u := range utxos {
 		hash, _ := elementsutil.TxIDToBytes(u.TxID)

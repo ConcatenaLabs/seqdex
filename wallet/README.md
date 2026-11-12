@@ -42,13 +42,26 @@ Elements code, untouched. What changed:
   transactions). The scanner polls the node tip (~2s) and needs
   `-blockfilterindex=1` on the node; a block deeper than six below the tip
   that has no filter is read in full. Each watch resumes at the first block it
-  has not scanned, and each account's scanned height is saved every minute in
-  `<datadir>/<scanner dir>/checkpoints.json`, so after a restart every watch
-  of the account, whenever it is set, resumes there (twelve blocks back)
-  instead of scanning again from the account's birth: an address or coin the
-  account held then was scanned up to there, and one it gains later has no
-  history before it. A vendored neutrino-elements scanner
+  has not scanned, and each account's scanned height is saved every minute and
+  at a stop in `<datadir>/<network>/blockchain/checkpoints.json`. A save keeps
+  the height of every account it holds no scanner for at that moment (a locked
+  wallet holds none). After a restart the addresses an account holds when the
+  wallet opens are watched from that height (twelve blocks back), not from the
+  account's birth; an address the account derives while the wallet runs is
+  watched from the lower of the tip (twelve blocks back) and the height the
+  account has been scanned to. Each block a pass scans must be the child of the
+  block it scanned before; where they stop linking (a reorg), the pass ends, the
+  scanners' shared height answers are dropped, and the scan starts again after
+  the fork point, which is asked of the node (a block's confirmations say
+  whether it is on the active chain), walking the orphaned branch back at most
+  1,000 blocks (that far back when the node no longer knows the branch). Scanners more than six blocks behind the tip read
+  blocks `OCEAN_SCAN_CATCHUP_PARALLEL` at a time, block by block in turn; a
+  scanner following the tip never waits. A vendored neutrino-elements scanner
   variant exists as well (`internal/infrastructure/blockchain-scanner/`).
+- **A prompt stop**: on SIGTERM every notification stream is closed at once,
+  calls in progress get ten seconds, the scanned heights are saved and the
+  store is closed. A stop takes seconds, so a service manager's stop timeout
+  of a minute leaves room.
 - **Open fee market**: non-swap transfers pay the network fee in the
   transacted asset (node-fed exchange rates) rather than assuming a native fee
   asset; swap-side any-asset fees live in the daemon module's `CompleteSwap`.
@@ -79,6 +92,15 @@ Env-only, prefix `OCEAN_` (full list in `internal/config/config.go`):
 | `OCEAN_PORT` | gRPC listen port | `18000` |
 | `OCEAN_DATADIR`, `OCEAN_DB_TYPE` | state directory, `badger`/`inmemory`/`postgres` | `~/.seqdex-wallet`, `badger` |
 | `OCEAN_NO_TLS` | disable TLS (dev) | `false` |
+| `OCEAN_SCAN_CATCHUP_PARALLEL` | how many accounts' scanners read blocks at once while more than six blocks behind the tip | `4` |
+| `OCEAN_PROFILER_PORT`, `OCEAN_NO_PROFILER` | the pprof port (`/debug/pprof/`), or no profiler | `18001`, `false` |
+
+The Go runtime reads two variables of its own that matter under a service
+manager's limits. `go.mod` names Go 1.18, so the runtime does not size itself
+to a CPU quota: set `GOMAXPROCS` to the quota's cores, or the process runs as
+many threads as the machine has cores and is throttled most of each period.
+Set `GOMEMLIMIT` below a memory threshold such as systemd's `MemoryHigh`, so
+the collector works harder before the kernel starts stalling the process.
 
 ## Build and run
 
@@ -119,12 +141,15 @@ an address, fund it from the node, watch the balance sync.
 ## Tests
 
 ```sh
-go test ./...            # the storage tests also want Postgres: `make pg`
+OCEAN_NATIVE_ASSET=$(printf 'ab%.0s' {1..32}) OCEAN_DATADIR=$(mktemp -d) go test ./...
+# the storage tests also want Postgres: `make pg`
 ```
 
 The suites under `internal/core/application` and `internal/core/domain` are
 upstream Ocean's, run on Sequentia's regtest parameters; they cover the
-service logic with mocks, not the Sequentia paths. End-to-end coverage of this wallet comes from the
+service logic with mocks, not the Sequentia paths. The packages that read the
+daemon's configuration (`internal/interfaces/grpc` among them) stop at start-up
+unless `OCEAN_NATIVE_ASSET` is set, hence the variables above. End-to-end coverage of this wallet comes from the
 daemon module's swap flows and the regtest loops in
 [../docs/DEV.md](../docs/DEV.md).
 

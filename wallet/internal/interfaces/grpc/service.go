@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -27,6 +28,7 @@ type service struct {
 	appConfig                *appconfig.AppConfig
 	grpcServer               *grpc.Server
 	chCloseStreamConnections chan (struct{})
+	closeStreams             *sync.Once
 
 	log  func(format string, a ...interface{})
 	warn func(err error, format string, a ...interface{})
@@ -58,7 +60,7 @@ func NewService(config ServiceConfig, appConfig *appconfig.AppConfig) (*service,
 	}
 	chCloseStreamConnections := make(chan struct{})
 	return &service{
-		config, appConfig, nil, chCloseStreamConnections, logFn, warnFn,
+		config, appConfig, nil, chCloseStreamConnections, &sync.Once{}, logFn, warnFn,
 	}, nil
 }
 
@@ -130,15 +132,31 @@ func (s *service) start() (*grpc.Server, error) {
 	return grpcServer, nil
 }
 
-func (s *service) stop(onlyGrpcServer bool) {
-	select {
-	case s.chCloseStreamConnections <- struct{}{}:
-		s.log("closed stream connections")
-	default:
-	}
+// gracefulStopTimeout is how long a stop waits for calls in progress to end before it cuts them.
+const gracefulStopTimeout = 10 * time.Second
 
-	s.grpcServer.GracefulStop()
-	s.log("stopped grpc server")
+// stop ends every notification stream (closing the channel reaches every stream at once; a
+// single send reached one, and GracefulStop then waited for the others, which clients keep
+// open for good, until systemd killed the process), lets calls in progress end within
+// gracefulStopTimeout, then saves where each account's scan has got to and closes the store.
+func (s *service) stop(onlyGrpcServer bool) {
+	s.closeStreams.Do(func() {
+		close(s.chCloseStreamConnections)
+		s.log("closed stream connections")
+	})
+
+	done := make(chan struct{})
+	go func() {
+		s.grpcServer.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+		s.log("stopped grpc server")
+	case <-time.After(gracefulStopTimeout):
+		s.grpcServer.Stop()
+		s.log("stopped grpc server (calls still running after %s were cut)", gracefulStopTimeout)
+	}
 	if onlyGrpcServer {
 		return
 	}

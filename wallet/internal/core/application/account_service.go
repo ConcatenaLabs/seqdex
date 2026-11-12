@@ -261,9 +261,15 @@ func (as *AccountService) registerHandlerForWalletEvents() {
 		domain.WalletAccountAddressesDerived, func(event domain.WalletEvent) {
 			// the event names no birthday: the account's own, so that a derive that comes
 			// before the account's creation event is handled never starts its scan at genesis
-			as.bcScanner.WatchForAccount(
-				event.AccountName, as.birthdayOf(event.AccountName, event.AccountBirthdayBlock), event.AccountAddresses,
-			)
+			birthday := as.birthdayOf(event.AccountName, event.AccountBirthdayBlock)
+			// an address derived now has no history: a scanner that can watches it from the tip,
+			// not from where the wallet started (which rescanned every block since the start
+			// for each address derived)
+			if w, ok := as.bcScanner.(newAddressWatcher); ok {
+				w.WatchNewAddresses(event.AccountName, birthday, event.AccountAddresses)
+				return
+			}
+			as.bcScanner.WatchForAccount(event.AccountName, birthday, event.AccountAddresses)
 		},
 	)
 	// Stop watching account and all its addresses as soon as it's deleted.
@@ -403,6 +409,11 @@ func (as *AccountService) storeQueuedTransactions() {
 			as.log("confirmed transaction %s for account(s) %s", tx.TxID, accounts)
 		}
 	}
+}
+
+// newAddressWatcher is a scanner that watches addresses derived just now from the chain's tip.
+type newAddressWatcher interface {
+	WatchNewAddresses(accountName string, birthday uint32, addresses []domain.AddressInfo)
 }
 
 // birthdayOf is the block an account was made at: `known` when the event carries it, else the

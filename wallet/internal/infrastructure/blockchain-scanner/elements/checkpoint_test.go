@@ -1,6 +1,7 @@
 package elements_scanner
 
 import (
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -82,5 +83,59 @@ func TestAScannerTakesItsAccountsBirthday(t *testing.T) {
 	}
 	if sc.adoptBirthday(5, 5) || sc.startingBlockHeight != 191900 {
 		t.Fatalf("a known birthday is kept: %d", sc.startingBlockHeight)
+	}
+}
+
+func quietScanner(f *fakeSvc, birth, resume uint32) *scannerService {
+	return &scannerService{svc: f, startingBlockHeight: birth, resumeFrom: resume,
+		blindingKeys: map[string][]byte{}, lock: &sync.RWMutex{}, log: func(string, ...interface{}) {}, warn: func(error, string, ...interface{}) {}}
+}
+
+// An address the account derives while the wallet runs is watched from the tip less the margin:
+// it has no history before it was derived. Watched from where the wallet started (as the
+// addresses it held then are), each one derived made the account scan every block since the
+// start again, and held its saved height back there, so a wallet up for days resumed days back.
+func TestAnAddressDerivedLaterIsWatchedFromTheTip(t *testing.T) {
+	f := &fakeSvc{low: 209401} // caught up
+	s := &service{lock: &sync.RWMutex{}, checkpoints: map[string]uint32{"a": 199023},
+		scanners: map[string]*scannerService{"a": quietScanner(f, 93800, 199011)},
+		tip:      func() (uint32, error) { return 209400, nil }}
+	s.WatchForAccount("a", 93800, []domain.AddressInfo{{Script: "0014" + "44444444444444444444444444444444444444dd"}})
+	s.WatchNewAddresses("a", 93800, []domain.AddressInfo{{Script: "0014" + "55555555555555555555555555555555555555ee"}})
+	if len(f.starts) != 2 || f.starts[0] != 199011 || f.starts[1] != 209400-checkpointMargin {
+		t.Fatalf("held at the opening from 199011, derived later from the tip less the margin %d: %v", 209400-checkpointMargin, f.starts)
+	}
+	// an account still catching up (scanned to 205000): a derived address is watched from there,
+	// so a payment made to it before this wallet derived it, after that height, is seen
+	f.low = 205000
+	s.WatchNewAddresses("a", 93800, []domain.AddressInfo{{Script: "0014" + "77777777777777777777777777777777777777aa"}})
+	if f.starts[2] != 205000 {
+		t.Fatalf("an account behind the tip watches a derived address from its scanned height 205000: %v", f.starts)
+	}
+	f.low = 209401
+	// with no tip to read it falls back to where the opening watches started: never later than
+	// the account has been scanned to, so nothing is missed
+	s.tip = func() (uint32, error) { return 0, errors.New("node down") }
+	s.WatchNewAddresses("a", 93800, []domain.AddressInfo{{Script: "0014" + "66666666666666666666666666666666666666ff"}})
+	if f.starts[3] != 199011 {
+		t.Fatalf("without the tip it watches from the opening height: %v", f.starts)
+	}
+}
+
+// A save keeps the height of every account the wallet holds no scanner for at the moment. While
+// it is locked it holds none, and as it unlocks it holds only some: a save then wrote those only
+// (or nothing), and every other account scanned again from its birth at the next start.
+func TestASaveKeepsTheAccountsNotOpenYet(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "checkpoints.json")
+	s := &service{args: ServiceArgs{CheckpointFile: file}, lock: &sync.RWMutex{},
+		checkpoints: map[string]uint32{"a": 209000, "b": 208500}, scanners: map[string]*scannerService{}}
+	s.saveCheckpoints() // locked: no scanner yet
+	if got := loadCheckpoints(file); got["a"] != 209000 || got["b"] != 208500 || len(got) != 2 {
+		t.Fatalf("a save while locked keeps every saved height: %v", got)
+	}
+	s.scanners["a"] = quietScanner(&fakeSvc{low: 209100}, 93800, 0) // "a" opened, "b" not yet
+	s.saveCheckpoints()
+	if got := loadCheckpoints(file); got["a"] != 209100 || got["b"] != 208500 || len(got) != 2 {
+		t.Fatalf("an opened account's height is its scanner's, the other's is kept: %v", got)
 	}
 }

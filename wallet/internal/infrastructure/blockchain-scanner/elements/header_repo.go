@@ -284,6 +284,47 @@ func (r *headersRepo) blockLocatorFromHeader(
 	return locator, nil
 }
 
+// BlockOnActiveChain asks the node, never a cache, for a block's height and parent, and whether it
+// is on the node's active chain (getblockheader reports -1 confirmations for a block off it). The
+// scanners' height cache can answer with a block a reorg has just orphaned, for as long as it
+// keeps an entry, so a reorg's fork point is found with this instead.
+func (r *headersRepo) BlockOnActiveChain(
+	_ context.Context, hash chainhash.Hash,
+) (uint32, *chainhash.Hash, bool, error) {
+	resp, err := r.rpcClient.call("getblockheader", []interface{}{hash.String(), true})
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			return 0, nil, false, repository.ErrBlockNotFound
+		}
+		return 0, nil, false, err
+	}
+	m, ok := resp.(map[string]interface{})
+	if !ok {
+		return 0, nil, false, fmt.Errorf("unexpected getblockheader response type %T", resp)
+	}
+	conf, ok := m["confirmations"].(float64)
+	if !ok {
+		return 0, nil, false, fmt.Errorf("getblockheader %s: no confirmations", hash)
+	}
+	jh, err := decodeJSONHeader(resp)
+	if err != nil {
+		return 0, nil, false, err
+	}
+	var prev *chainhash.Hash
+	if jh.PreviousBlockHash != "" {
+		if prev, err = chainhash.NewHashFromStr(jh.PreviousBlockHash); err != nil {
+			return 0, nil, false, err
+		}
+	}
+	return jh.Height, prev, conf >= 0, nil
+}
+
+// ForgetHeights drops every cached height-to-hash answer: a reorg changed them, and every
+// account's scanner reads them.
+func (r *headersRepo) ForgetHeights() {
+	r.byHeight.clear()
+}
+
 // decodeJSONHeader coerces the decoded `getblockheader ... true` response (a
 // generic map[string]interface{} produced by rpcClient.call) into jsonHeader.
 func decodeJSONHeader(resp interface{}) (*jsonHeader, error) {
