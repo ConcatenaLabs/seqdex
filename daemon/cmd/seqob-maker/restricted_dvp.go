@@ -10,6 +10,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -71,44 +72,67 @@ func runRestrictedDvPMaker(cfg restrictedMakerConfig, assetB string) {
 		time.Sleep(time.Minute)
 		fatal("not posted: "+f, a...)
 	}
-	asset, err := party.Policy.Asset(c.asset)
-	if err != nil {
-		notPosted("the policy server does not list %s: %v", c.asset, err)
-	}
-	policyX, _, err := asset.Keys()
-	if err != nil {
-		notPosted("%v", err)
-	}
-	enclave, _, _, err := party.Enclave()
-	if err != nil {
-		notPosted("%v", err)
-	}
-	if side == "sell" {
-		coins, err := party.Node.EnclaveCoins(enclave, c.asset)
+	// quote checks the maker can fill a new offer now (the enclave holds what a sell quote
+	// sells; the wallet holds what a buy quote pays) and returns it signed, with the address
+	// its proceeds are paid to.
+	var qmu sync.Mutex
+	recvOf := map[string][]byte{}
+	first := true
+	quote := func() (*seqobv1.Offer, error) {
+		asset, err := party.Policy.Asset(c.asset)
 		if err != nil {
-			notPosted("the enclave does not read: %v", err)
+			return nil, fmt.Errorf("the policy server does not list %s: %v", c.asset, err)
 		}
-		var have uint64
-		for _, x := range coins {
-			have += x.Value
-		}
-		if have < c.assetAmt {
-			notPosted("the enclave holds %d of the %d this offer sells", have, c.assetAmt)
-		}
-	} else {
-		cs, err := party.Node.WalletCoins(assetB, c.btcAmt)
+		policyX, _, err := asset.Keys()
 		if err != nil {
-			notPosted("%v", err)
+			return nil, err
 		}
-		_ = party.Node.Unlock(cs)
+		enclave, _, _, err := party.Enclave()
+		if err != nil {
+			return nil, err
+		}
+		if side == "sell" {
+			coins, err := party.Node.EnclaveCoins(enclave, c.asset)
+			if err != nil {
+				return nil, fmt.Errorf("the enclave does not read: %v", err)
+			}
+			var have uint64
+			for _, x := range coins {
+				have += x.Value
+			}
+			if have < c.assetAmt {
+				return nil, fmt.Errorf("the enclave holds %d of the %d this offer sells", have, c.assetAmt)
+			}
+		} else {
+			cs, err := party.Node.WalletCoins(assetB, c.btcAmt)
+			if err != nil {
+				return nil, err
+			}
+			_ = party.Node.Unlock(cs)
+		}
+		recvAddr, recv, err := party.Node.NewAddress()
+		if err != nil {
+			return nil, err
+		}
+		qc := cfg
+		qmu.Lock()
+		if !first {
+			qc.cross.offerID = "" // -offer-id names the first quote only
+		}
+		first = false
+		qmu.Unlock()
+		o := buildRestrictedDvPOffer(qc, assetB, recvAddr, policyX)
+		if err := offer.SignOffer(o, c.makerKey); err != nil {
+			return nil, fmt.Errorf("sign offer: %v", err)
+		}
+		qmu.Lock()
+		recvOf[o.GetOfferId()] = recv
+		qmu.Unlock()
+		return o, nil
 	}
-	recvAddr, recv, err := party.Node.NewAddress()
+	o, err := quote()
 	if err != nil {
 		notPosted("%v", err)
-	}
-	o := buildRestrictedDvPOffer(cfg, assetB, recvAddr, policyX)
-	if err := offer.SignOffer(o, c.makerKey); err != nil {
-		fatal("sign offer: %v", err)
 	}
 	wsURL := "ws" + strings.TrimPrefix(c.relay, "http") + "/v1/ws"
 	ws := &crossWS{}
@@ -117,107 +141,17 @@ func runRestrictedDvPMaker(cfg restrictedMakerConfig, assetB string) {
 	}
 	fmt.Printf("seqob-maker up (RESTRICTED, asset quote): posted %s offer %s: %d %s for %d %s, account %s at %s\n",
 		side, o.GetOfferId(), c.assetAmt, c.asset, c.btcAmt, assetB, cfg.aid, cfg.policyServer)
-
-	var mu sync.Mutex
-	inboxes := map[string]chan []byte{}
-	inFlight, filled := 0, false
-	setBusyFn(func() int { mu.Lock(); defer mu.Unlock(); return inFlight })
-	armRequoteExit(o, func() bool { mu.Lock(); defer mu.Unlock(); return inFlight == 0 })
-	refuse := func(sid string, cr *client.Crypter, code, msg string) {
-		m := &client.XcMsg{Type: client.XcFail, Code: code, Message: msg}
-		if sealed, err := m.Seal(cr); err == nil {
-			_ = ws.write(&seqobv1.To{Msg: &seqobv1.To_SwapMsg{SwapMsg: &seqobv1.SwapMsg{SessionId: sid, Ciphertext: sealed}}})
-		}
-	}
-	for {
-		_, data, err := ws.current().ReadMessage()
-		if err != nil {
-			mu.Lock()
-			done := filled && inFlight == 0
-			mu.Unlock()
-			if done {
-				fmt.Println("offer filled and no lift in flight; exiting (restart to quote again)")
-				return
-			}
-			var resubmit *seqobv1.Offer
-			if !filled {
-				resubmit = o
-				_ = refreshOfferForRequote(o, c.expiry, c.makerKey)
-			}
-			fmt.Printf("ws read error: %v; reconnecting\n", err)
-			ws.redialLoop(wsURL, resubmit)
-			reattachSessions(ws, c.makerKey, &mu, inboxes)
-			continue
-		}
-		var from seqobv1.From
-		if err := jsonUnmarshal.Unmarshal(data, &from); err != nil {
-			continue
-		}
-		switch {
-		case from.GetLiftRequested() != nil:
-			lr := from.GetLiftRequested()
-			sid := lr.GetSessionId()
-			cr, err := client.NewMakerCrypterFromLift(c.makerKey, lr.GetTakerSessionPubkey())
-			if err != nil {
-				continue
-			}
-			if lr.GetOfferId() != o.GetOfferId() {
-				refuse(sid, cr, "stale_offer", "this maker process serves offer "+o.GetOfferId()+", not "+lr.GetOfferId())
-				continue
-			}
-			if lr.GetTakeAmount() != 0 && lr.GetTakeAmount() != c.assetAmt {
-				refuse(sid, cr, "whole_fill_only", fmt.Sprintf("this offer fills whole: %d", c.assetAmt))
-				continue
-			}
-			if refuseIfDraining(sid, cr, refuse) {
-				continue
-			}
-			mu.Lock()
-			if inFlight > 0 || filled {
-				mu.Unlock()
-				refuse(sid, cr, "busy", "a lift of this offer is in flight")
-				continue
-			}
-			inFlight++
-			in := make(chan []byte, 16)
-			inboxes[sid] = in
-			mu.Unlock()
-			send := func(sealed []byte) error {
-				return ws.write(&seqobv1.To{Msg: &seqobv1.To_SwapMsg{SwapMsg: &seqobv1.SwapMsg{SessionId: sid, Ciphertext: sealed}}})
-			}
-			go func(sid string, in chan []byte) {
-				d := &client.RestrictedDvP{Party: party, Crypter: cr, Value: c.assetAmt, Price: c.btcAmt, AssetB: assetB,
-					FeeAsset: cfg.potAsset, RfaPerVb: cfg.rfaPerVb,
-					Log: func(f string, a ...interface{}) { fmt.Printf("lift "+sid+": "+f+"\n", a...) }}
-				txid, err := client.RunMakerRestrictedDvP(d, side == "sell", recv, in, send)
-				mu.Lock()
-				inFlight--
-				delete(inboxes, sid)
-				if err == nil {
-					filled = true
-				}
-				mu.Unlock()
-				if err != nil {
-					fmt.Printf("lift %s ended: %v (the offer stays)\n", sid, err)
-					return
-				}
-				reportSettledTrade(ws, o, c.makerKey, c.assetAmt, txid)
-				fmt.Printf("lift %s traded in %s; retiring the offer\n", sid, txid)
-				cancelOffer(c.relay, o, c.makerKey)
-			}(sid, in)
-		case from.GetSwapMsg() != nil:
-			sm := from.GetSwapMsg()
-			mu.Lock()
-			in := inboxes[sm.GetSessionId()]
-			mu.Unlock()
-			if in != nil {
-				select {
-				case in <- sm.GetCiphertext():
-				default:
-				}
-			}
-		case from.GetError() != nil:
-			releaseDetachedSession(from.GetError(), &mu, inboxes)
-		}
-	}
+	srv := &restrictedServer{relay: c.relay, wsURL: wsURL, key: c.makerKey, expiry: c.expiry, whole: c.assetAmt, ws: ws,
+		quote: quote, exit: os.Exit,
+		lift: func(sid string, o *seqobv1.Offer, cr *client.Crypter, in chan []byte, send func([]byte) error) (string, bool, error) {
+			qmu.Lock()
+			recv := recvOf[o.GetOfferId()]
+			qmu.Unlock()
+			d := &client.RestrictedDvP{Party: party, Crypter: cr, Value: c.assetAmt, Price: c.btcAmt, AssetB: assetB,
+				FeeAsset: cfg.potAsset, RfaPerVb: cfg.rfaPerVb,
+				Log: func(f string, a ...interface{}) { fmt.Printf("lift "+sid+": "+f+"\n", a...) }}
+			txid, err := client.RunMakerRestrictedDvP(d, side == "sell", recv, in, send)
+			return txid, err == nil, err
+		}}
+	srv.serve(o)
 }
