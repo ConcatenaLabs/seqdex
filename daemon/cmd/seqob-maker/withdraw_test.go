@@ -39,7 +39,7 @@ func TestWithdrawStale(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	n := withdrawStale(srv.URL, "aa", "bb", me, map[string]bool{"new1": true}, key)
+	n := withdrawStale(srv.URL, "aa", "bb", me, map[string]bool{"new1": true}, key, nil)
 	if n != 2 || strings.Join(cancelled, ",") != "old1,old2" {
 		t.Fatalf("withdrew %d: %v", n, cancelled)
 	}

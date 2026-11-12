@@ -378,6 +378,7 @@ func servePureLN(ws *crossWS, wsURL string, o *seqobv1.Offer, cfg pureLNMakerCon
 					mu.Unlock()
 					if settled && !cfg.requote && !partial {
 						cancelOffer(cfg.relay, o, cfg.makerKey)
+						exitAfterFill(idle)
 					}
 					requoteExitIfPending(idle)
 				}()

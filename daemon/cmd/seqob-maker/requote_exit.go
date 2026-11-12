@@ -73,15 +73,21 @@ func offerRejected(code uint32, msg string) bool {
 // whether no swap/lift session is in flight (called from the timer goroutine —
 // take the loop's own lock inside).
 func armRequoteExit(o *seqobv1.Offer, idle func() bool) {
+	d, reason := requoteDue(o)
+	if d == 0 {
+		return
+	}
+	time.AfterFunc(d, func() { requoteExitIfIdle(reason, idle) })
+}
+
+// requoteDue returns when offer o's exit-for-requote comes due, and why; 0 for never.
+func requoteDue(o *seqobv1.Offer) (time.Duration, string) {
 	d := requoteDelay(o.GetExpiresAtUnix(), time.Now())
 	reason := "offer expiring"
 	if maxQuoteAge > 0 && (d == 0 || maxQuoteAge < d) {
 		d, reason = maxQuoteAge, "quote older than -max-quote-age"
 	}
-	if d == 0 {
-		return
-	}
-	time.AfterFunc(d, func() { requoteExitIfIdle(reason, idle) })
+	return d, reason
 }
 
 // requoteExitIfIdle exits 0 (supervisor re-runs at a fresh price) when idle;
@@ -106,4 +112,12 @@ func requoteExitIfPending(idle func() bool) {
 		fmt.Println("in-flight swap done; exiting for a fresh re-quote (supervisor re-runs)")
 		os.Exit(0)
 	}
+}
+
+// exitAfterFill ends a maker whose offer was filled whole and is not quoted again in the
+// process (no -requote): its supervisor runs it again at the current price. Such a maker
+// used to wait for its websocket to fail before exiting, and on a healthy connection sat
+// with no offer, which the book shows as no one buying or selling (seqdex #165).
+func exitAfterFill(idle func() bool) {
+	requoteExitIfIdle("offer filled", idle)
 }
