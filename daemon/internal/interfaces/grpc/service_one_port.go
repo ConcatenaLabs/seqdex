@@ -194,13 +194,9 @@ func (s *serviceOnePort) Start() error {
 	return nil
 }
 
+// Stop leaves the shared wallet daemon unlocked, as service.Stop does: the
+// makers sign from their own accounts in it, and it unlocks itself.
 func (s *serviceOnePort) Stop() {
-	if s.password != "" {
-		// nolint
-		s.opts.AppConfig.UnlockerService().LockWallet(
-			context.Background(), s.password,
-		)
-	}
 
 	stopMacaroonSvc := true
 	s.stop(stopMacaroonSvc)
