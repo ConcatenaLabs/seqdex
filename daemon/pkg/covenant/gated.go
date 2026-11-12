@@ -40,6 +40,7 @@ type GatedTree struct {
 	FillLeaf, RefundLeaf, ClawLeaf []byte // ClawLeaf nil without clawback
 	ScriptPubKey                   []byte
 	FillControl                    []byte
+	RefundControl                  []byte // the keyless refund's control block
 }
 
 const (
@@ -102,6 +103,12 @@ func GatedTreeFromFill(policyX [32]byte, fill []byte, issuerX *[32]byte, expiry 
 	}
 	t.ScriptPubKey = append([]byte{op1, 0x20}, outKey[:]...)
 	t.FillControl = append(append([]byte{byte(leafVersion) + neg}, NUMS[:]...), sibling[:]...)
+	t.RefundControl = append([]byte{byte(leafVersion) + neg}, NUMS[:]...)
+	if t.ClawLeaf != nil {
+		clawH := LeafHash(t.ClawLeaf)
+		t.RefundControl = append(t.RefundControl, clawH[:]...)
+	}
+	t.RefundControl = append(t.RefundControl, fillH[:]...)
 	return t, nil
 }
 

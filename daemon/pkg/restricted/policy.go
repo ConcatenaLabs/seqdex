@@ -197,6 +197,19 @@ type HTLCOutput struct {
 	TSeq     uint32 `json:"t_seq"`
 }
 
+// OrderOutput names a gated order's output in its placement: the fill
+// covenant it wraps (hex) and its expiry (a Unix time).
+type OrderOutput struct {
+	Output int    `json:"output"`
+	Fill   string `json:"fill"`
+	Expiry uint32 `json:"expiry"`
+}
+
+// OrderInput names a fill's gated order input.
+type OrderInput struct {
+	Input int `json:"input"`
+}
+
 // HTLCInput names a claim's HTLC input.
 type HTLCInput struct {
 	Input int `json:"input"`
@@ -211,6 +224,10 @@ type CosignRequest struct {
 	SenderSig   string       `json:"sender_sig,omitempty"`
 	HTLCOutputs []HTLCOutput `json:"htlc_outputs,omitempty"`
 	HTLCInputs  []HTLCInput  `json:"htlc_inputs,omitempty"`
+	// OrderOutputs names a gated order's placement outputs.
+	OrderOutputs []OrderOutput `json:"order_outputs,omitempty"`
+	// OrderInputs names a gated order's input in a fill.
+	OrderInputs []OrderInput `json:"order_inputs,omitempty"`
 
 	Broadcast bool              `json:"broadcast,omitempty"`
 	UserSigs  map[string]string `json:"user_sigs,omitempty"`
