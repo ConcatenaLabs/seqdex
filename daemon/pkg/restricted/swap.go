@@ -385,3 +385,18 @@ func ProgramOf(spk []byte) ([32]byte, error) {
 func SameScript(a, b []byte) bool { return bytes.Equal(a, b) }
 
 func txFromHex(h string) (*transaction.Transaction, error) { return transaction.NewTxFromHex(h) }
+
+// ParseTx reads a transaction's hex; its coins are left for the caller.
+func ParseTx(raw string) (*Unsigned, error) {
+	tx, err := txFromHex(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &Unsigned{Tx: tx}, nil
+}
+
+// InputOutpoint is the coin an input spends.
+func InputOutpoint(in *transaction.TxInput) Outpoint {
+	h, _ := chainhash.NewHash(in.Hash)
+	return Outpoint{Txid: h.String(), Vout: in.Index}
+}

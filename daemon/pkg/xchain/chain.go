@@ -666,15 +666,25 @@ func (c *Chain) BlockCertification(blockHash string) (certified, present bool, e
 // for txs the local wallet did NOT create — e.g. the taker-funded SEQ leg the reverse
 // maker must verify; gettransaction errors -5 ("Invalid or non-wallet transaction id")
 // on a non-wallet txid. Relies on the node's txindex (the DEX node has it).
+//
+// The txindex keeps a transaction's block after a reorg disconnects that
+// block, so a block hash alone does not say the transaction is mined: one the
+// reorg returned and a conflicting spend then replaced would still name its
+// old block. Only a block of the active chain counts, which getrawtransaction
+// reports as "confirmations" above 0 (0 for a block off the active chain).
 func (c *Chain) BlockHashOfTx(txid string) (string, error) {
 	var tx struct {
-		BlockHash string `json:"blockhash"`
+		BlockHash     string `json:"blockhash"`
+		Confirmations *int64 `json:"confirmations"`
 	}
 	if err := c.rpc.Call(&tx, "getrawtransaction", txid, true); err != nil {
 		return "", err
 	}
 	if tx.BlockHash == "" {
 		return "", fmt.Errorf("tx %s is not confirmed (no blockhash)", txid)
+	}
+	if tx.Confirmations == nil || *tx.Confirmations <= 0 {
+		return "", fmt.Errorf("tx %s is not confirmed (its block %s is not in the active chain)", txid, tx.BlockHash)
 	}
 	return tx.BlockHash, nil
 }

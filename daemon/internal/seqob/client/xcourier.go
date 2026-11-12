@@ -3,6 +3,8 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/aejkcs50/seqdex/daemon/pkg/restricted"
 )
 
 // xcourier.go defines the CROSS-CHAIN lift handshake messages. They travel as the
@@ -105,6 +107,15 @@ type XcMsg struct {
 	PotAmount uint64  `json:"pot_amount,omitempty"` // terms / btc_leg_locked: the pot's atoms
 	PotVout   *uint32 `json:"pot_vout,omitempty"`   // seq_leg_locked / seq_leg_funded: the pot's output in the lock
 	Payout    string  `json:"payout,omitempty"`     // seq_leg_locked / seq_leg_funded: the seller's v1 script the pot goes home to (hex)
+
+	// Restricted delivery against payment (RestrictedTerms with an asset
+	// quote); see xdriver_restricted_dvp.go.
+	DvpCoins  []restricted.Outpoint `json:"dvp_coins,omitempty"`  // dvp_coins: the maker's coins in the trade
+	DvpChange string                `json:"dvp_change,omitempty"` // dvp_coins: the maker's change script (hex), when it pays
+	DvpTx     string                `json:"dvp_tx,omitempty"`     // dvp_tx: the trade; dvp_signed: with the payer's inputs signed
+	UserSigs  map[string]string     `json:"user_sigs,omitempty"`  // dvp_signed: the seller's input signatures, by index
+	ExpiresAt int64                 `json:"expires_at,omitempty"` // dvp_signed: when the policy server stops accepting the trade
+	ExpirySig string                `json:"expiry_sig,omitempty"` // dvp_signed: the seller's signature of that expiry
 
 	Preimage string `json:"preimage,omitempty"` // XcSecretRevealed
 	Code     string `json:"code,omitempty"`     // XcFail
