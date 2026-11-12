@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"fmt"
+
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	path "github.com/aejkcs50/seqdex/wallet/pkg/wallet/derivation-path"
 	singlesig "github.com/aejkcs50/seqdex/wallet/pkg/wallet/single-sig"
@@ -14,14 +16,34 @@ type AccountInfo struct {
 	DerivationPath string
 }
 
+// GetMasterBlindingKey derives the account's SLIP-77 master blinding key
+// from the wallet's mnemonic. It returns an error, never a panic, when the
+// wallet is locked (no mnemonic in the store) or the account's derivation
+// path cannot be read: a request answered between a lock and an unlock must
+// not bring the daemon down.
 func (i *AccountInfo) GetMasterBlindingKey() (string, error) {
+	if MnemonicStore == nil {
+		return "", ErrWalletLocked
+	}
 	mnemonic := MnemonicStore.Get()
-	rootPath, _ := path.ParseDerivationPath(i.DerivationPath)
+	if len(mnemonic) <= 0 {
+		return "", ErrWalletLocked
+	}
+	rootPath, err := path.ParseDerivationPath(i.DerivationPath)
+	if err != nil {
+		return "", err
+	}
+	if len(rootPath) <= 0 {
+		return "", fmt.Errorf("account %s has an empty derivation path", i.Namespace)
+	}
 	rootPath = rootPath[:len(rootPath)-1]
-	ww, _ := singlesig.NewWalletFromMnemonic(singlesig.NewWalletFromMnemonicArgs{
+	ww, err := singlesig.NewWalletFromMnemonic(singlesig.NewWalletFromMnemonicArgs{
 		RootPath: rootPath.String(),
 		Mnemonic: mnemonic,
 	})
+	if err != nil {
+		return "", err
+	}
 	return ww.MasterBlindingKey()
 }
 

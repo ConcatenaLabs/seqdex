@@ -202,10 +202,14 @@ func (ws *WalletService) RestoreWallet(
 	accountIndex := uint32(0)
 	emptyAccountCounter := uint32(0)
 	accounts := make([]domain.Account, 0)
-	w, _ := singlesig.NewWalletFromMnemonic(singlesig.NewWalletFromMnemonicArgs{
+	w, err := singlesig.NewWalletFromMnemonic(singlesig.NewWalletFromMnemonicArgs{
 		RootPath: walletRootPath,
 		Mnemonic: mnemonic,
 	})
+	if err != nil {
+		sendMessage(canceled, chMessages, WalletRestoreMessage{Err: err})
+		return
+	}
 
 	if !sendMessage(canceled, chMessages, WalletRestoreMessage{
 		Message: "start restoring wallet accounts...",

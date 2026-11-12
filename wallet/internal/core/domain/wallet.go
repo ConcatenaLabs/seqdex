@@ -235,14 +235,23 @@ func (w *Wallet) CreateAccount(label string, birthdayBlock uint32, unconf bool) 
 		return nil, ErrWalletMaxAccountNumberReached
 	}
 
-	mnemonic := MnemonicStore.Get()
+	mnemonic, err := w.GetMnemonic()
+	if err != nil {
+		return nil, err
+	}
 	namespace := GetAccountNamespace(w.RootPath, w.NextAccountIndex)
 
-	ww, _ := singlesig.NewWalletFromMnemonic(singlesig.NewWalletFromMnemonicArgs{
+	ww, err := singlesig.NewWalletFromMnemonic(singlesig.NewWalletFromMnemonicArgs{
 		RootPath: w.RootPath,
 		Mnemonic: mnemonic,
 	})
-	xpub, _ := ww.AccountExtendedPublicKey(singlesig.ExtendedKeyArgs{Account: w.NextAccountIndex})
+	if err != nil {
+		return nil, err
+	}
+	xpub, err := ww.AccountExtendedPublicKey(singlesig.ExtendedKeyArgs{Account: w.NextAccountIndex})
+	if err != nil {
+		return nil, err
+	}
 
 	derivationPath, _ := path.ParseDerivationPath(w.RootPath)
 	derivationPath = append(derivationPath, w.NextAccountIndex+hdkeychain.HardenedKeyStart)
@@ -366,11 +375,17 @@ func (w *Wallet) deriveNextAddressForAccount(
 		return nil, err
 	}
 
-	mnemonic, _ := w.GetMnemonic()
-	ww, _ := singlesig.NewWalletFromMnemonic(singlesig.NewWalletFromMnemonicArgs{
+	mnemonic, err := w.GetMnemonic()
+	if err != nil {
+		return nil, err
+	}
+	ww, err := singlesig.NewWalletFromMnemonic(singlesig.NewWalletFromMnemonicArgs{
 		RootPath: w.RootPath,
 		Mnemonic: mnemonic,
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	addressIndex := account.NextExternalIndex
 	if chainIndex == internalChain {
@@ -418,11 +433,17 @@ func (w *Wallet) allDerivedAddressesForAccount(
 	}
 
 	net := networkFromName(w.NetworkName)
-	mnemonic, _ := w.GetMnemonic()
-	ww, _ := singlesig.NewWalletFromMnemonic(singlesig.NewWalletFromMnemonicArgs{
+	mnemonic, err := w.GetMnemonic()
+	if err != nil {
+		return nil, err
+	}
+	ww, err := singlesig.NewWalletFromMnemonic(singlesig.NewWalletFromMnemonicArgs{
 		RootPath: w.RootPath,
 		Mnemonic: mnemonic,
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	infoLen := account.NextExternalIndex
 	if includeInternals {
