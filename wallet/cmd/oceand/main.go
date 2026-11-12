@@ -15,6 +15,7 @@ import (
 	electrum_scanner "github.com/aejkcs50/seqdex/wallet/internal/infrastructure/blockchain-scanner/electrum"
 	elements_scanner "github.com/aejkcs50/seqdex/wallet/internal/infrastructure/blockchain-scanner/elements"
 	neutrino_scanner "github.com/aejkcs50/seqdex/wallet/internal/infrastructure/blockchain-scanner/neutrino"
+	"github.com/aejkcs50/seqdex/wallet/internal/infrastructure/blockchain-scanner/scanner"
 	postgresdb "github.com/aejkcs50/seqdex/wallet/internal/infrastructure/storage/db/postgres"
 	"github.com/aejkcs50/seqdex/wallet/internal/interfaces"
 	grpc_interface "github.com/aejkcs50/seqdex/wallet/internal/interfaces/grpc"
@@ -57,6 +58,7 @@ var (
 	dustAmount         = uint64(config.GetInt(config.DustAmountKey))
 	walletPassword     = config.GetString(config.PasswordKey)
 	walletMnemonic     = config.GetString(config.MnemonicKey)
+	scanCatchUp        = config.GetInt(config.ScanCatchUpParallelKey)
 )
 
 func main() {
@@ -124,6 +126,7 @@ func buildScannerConfig() interface{} {
 	switch bcScannerType {
 	case "elements":
 		_ = os.MkdirAll(scannerDir, 0o700)
+		scanner.SetCatchUpParallel(scanCatchUp)
 		return elements_scanner.ServiceArgs{
 			RpcAddr:        elementsRpcAddr,
 			Network:        network.Name,

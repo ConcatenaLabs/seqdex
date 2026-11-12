@@ -14,6 +14,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil/gcs/builder"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/sirupsen/logrus"
+	"github.com/vulpemventures/go-elements/block"
 	"github.com/vulpemventures/go-elements/transaction"
 	"github.com/vulpemventures/neutrino-elements/pkg/blockservice"
 	"github.com/vulpemventures/neutrino-elements/pkg/repository"
@@ -240,6 +241,59 @@ func (s *scannerService) requestsManager(ch chan<- Report) {
 	}
 }
 
+// reorgRollbackHorizon bounds how far back a reorg's fork point is looked for, and is how far a
+// scan rolls back when the node no longer knows the orphaned branch.
+const reorgRollbackHorizon = 1000
+
+// resumeAfterReorg is the first height to scan again after the block `last`, scanned at
+// nextHeight-1, left the node's chain: the height after the newest ancestor of `last` that is
+// still on the chain.
+func (s *scannerService) resumeAfterReorg(last *chainhash.Hash, nextHeight uint32) uint32 {
+	fallback := uint32(0) // unsigned: a chain shorter than the horizon rolls back to genesis
+	if nextHeight > reorgRollbackHorizon {
+		fallback = nextHeight - reorgRollbackHorizon
+	}
+	ctx := context.Background()
+	h := *last
+	for i := 0; i <= reorgRollbackHorizon; i++ {
+		hdr, err := s.headerDB.GetBlockHeader(ctx, h)
+		if err != nil || hdr == nil {
+			return fallback
+		}
+		onChain, err := s.headerDB.GetBlockHashByHeight(ctx, hdr.Height)
+		if err == nil && onChain.IsEqual(&h) {
+			return hdr.Height + 1
+		}
+		if hdr.Height == 0 {
+			return 0
+		}
+		prev, err := chainhash.NewHash(hdr.PrevBlockHash)
+		if err != nil {
+			return fallback
+		}
+		h = *prev
+	}
+	return fallback
+}
+
+// catchUp bounds how many scanners read blocks at once while they are more than catchUpLag
+// blocks behind the tip (SetCatchUpParallel): every account scans for itself, and after a
+// restart dozens of them catching up together took every core the wallet was given and the
+// memory of dozens of passes at once. A scanner following the tip never waits for it.
+var catchUp = make(chan struct{}, 4)
+
+// catchUpLag is how far behind the tip a pass counts as catching up.
+const catchUpLag = 6
+
+// SetCatchUpParallel sets how many scanners may catch up at once (at least 1). Call it before
+// any scanner starts.
+func SetCatchUpParallel(n int) {
+	if n < 1 {
+		n = 1
+	}
+	catchUp = make(chan struct{}, n)
+}
+
 // errNotYet stops a pass at a block whose filter or body the node cannot give
 // yet: the pass resumes there, so the block is scanned, never skipped.
 var errNotYet = errors.New("block not available yet")
@@ -293,19 +347,15 @@ func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Repo
 		case herr == nil && ancHash.IsEqual(req.LastBlockHash):
 			// no reorg at/below our resume point; continue forward as normal
 		case herr == nil || errors.Is(herr, repository.ErrBlockNotFound):
-			// the remembered block was orphaned (hash differs) or the chain shrank
-			// past it (out of range): a parent-chain reorg changed our resume point.
-			// Roll back a BOUNDED reorg horizon (not all the way to genesis) and
-			// re-scan the canonical chain forward: far enough to cover any plausible
-			// parent-chain reorg, but cheap enough that even a shallow tip reorg does
-			// not trigger a whole-chain re-scan. Re-derivation is idempotent (UTXOs
-			// keyed by outpoint). A reorg deeper than the horizon is not expected on a
-			// Bitcoin-anchored chain (it would require an implausibly deep parent reorg).
-			const reorgRollbackHorizon = 1000
-			rollback := uint32(0) // unsigned: a chain shorter than the horizon rolls back to genesis
-			if nextHeight > reorgRollbackHorizon {
-				rollback = nextHeight - reorgRollbackHorizon
-			}
+			// the remembered block was orphaned (hash differs) or the chain shrank past it: a
+			// reorg (anchoring supremacy: a Bitcoin reorg always wins, and this chain follows it).
+			// The scan resumes at the block after the last one the orphaned branch shares with
+			// the node's chain, found by walking that branch's headers back. A fixed rollback of
+			// reorgRollbackHorizon blocks made each one-block reorg cost every account a thousand
+			// blocks; that horizon stays only as the bound of the walk, and as the fallback when
+			// the node no longer knows the orphaned branch. Re-derivation is idempotent (UTXOs
+			// keyed by outpoint).
+			rollback := s.resumeAfterReorg(req.LastBlockHash, nextHeight)
 			log.Warnf("scanner %s: block %d it last scanned is no longer on the chain (a reorg): scanning again from %d",
 				s.name, nextHeight-1, rollback)
 			req.StartHeight = rollback
@@ -324,77 +374,30 @@ func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Repo
 		return nil
 	}
 
+	slots := catchUp
+	held := false
+	defer func() {
+		if held {
+			<-slots
+		}
+	}()
 	for nextHeight <= chainTip.Height {
-		// append all the requests with start height = nextHeight
-		nextBatch = append(nextBatch, s.requestsQueue.dequeueAtHeight(nextHeight)...)
-
-		itemsBytes := make([][]byte, len(nextBatch))
-		for i, req := range nextBatch {
-			itemsBytes[i] = req.Item.Bytes()
+		// far behind the tip, a block is read only while holding one of the catch-up slots;
+		// one is taken per block, so the scanners catching up take turns block by block
+		if behind := chainTip.Height-nextHeight > catchUpLag; behind && !held {
+			slots <- struct{}{}
+			held = true
 		}
-
-		// get the block hash for height
-		var blockHash *chainhash.Hash
-		if nextHeight == 0 {
-			blockHash = s.genesisHash
-		} else {
-			blockHash, err = s.headerDB.GetBlockHashByHeight(context.Background(), nextHeight)
-			if err != nil {
-				if errors.Is(err, repository.ErrBlockNotFound) {
-					// the chain shrank past nextHeight mid-scan (reorg / caught up to
-					// the live tip): stop here; the remaining requests are re-enqueued
-					// below and retried next cycle.
-					break
-				}
-				return err
+		if err := s.scanOne(&nextHeight, &lastHash, &nextBatch, chainTip, reportsChan); err != nil {
+			if errors.Is(err, errStopPass) {
+				return nil
 			}
-		}
-
-		// check with filterDB if the block has one of the items
-		matched, err := s.blockFilterMatches(itemsBytes, blockHash)
-		if errors.Is(err, errNotYet) && nextHeight+filterLagBlocks <= chainTip.Height {
-			// No filter for a block well below the tip: the node will not index it now, so the
-			// block itself is read and matched in full rather than waited for, or skipped.
-			matched, err = true, nil
-		}
-		if err != nil {
 			return err
 		}
-
-		if matched {
-			reports, remainReqs, err := s.extractBlockMatches(blockHash, nextBatch)
-			if err != nil {
-				return err
-			}
-			// the matched requests leave the batch here: each persistent one is
-			// watched again below from the block after its match
-			nextBatch = remainReqs
-
-			rewatched := make(map[*ScanRequest]bool)
-			for _, report := range reports {
-				// send the report to the output channel
-				reportsChan <- report
-
-				// if the request is persistent, the scanner keeps watching the item from the
-				// next block: once, however many of the block's transactions it matched
-				if report.Request.IsPersistent && !rewatched[report.Request] {
-					rewatched[report.Request] = true
-					s.Watch(
-						WithRequestID(report.Request.ClientID),
-						WithStartBlock(report.BlockHeight+1),
-						WithWatchItem(report.Request.Item),
-						WithPersistentWatch(),
-						WithLastBlockHash(report.BlockHash),
-					)
-				}
-			}
-
+		if held {
+			<-slots
+			held = false
 		}
-
-		// the block is scanned for every request in the batch
-		lastHash = blockHash
-		nextHeight++
-		s.inFlight.Store(nextHeight + 1)
 		if time.Since(s.progressAt) >= progressEvery {
 			s.progressAt = time.Now()
 			log.Infof("scanner %s: scanned to block %d of %d, %d to go", s.name, nextHeight-1, chainTip.Height, chainTip.Height-(nextHeight-1))
@@ -406,6 +409,87 @@ func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Repo
 		}
 	}
 
+	return nil
+}
+
+// errStopPass ends a pass without an error: the chain shrank below the next height.
+var errStopPass = errors.New("the chain ends below the next height")
+
+// scanOne scans the block at *nextHeight for every request waiting at it or carried in the
+// batch, and moves *nextHeight and *lastHash past it. errStopPass: the chain ends below it.
+func (s *scannerService) scanOne(
+	nextHeight *uint32, lastHash **chainhash.Hash, nextBatch *[]*ScanRequest,
+	chainTip *block.Header, reportsChan chan<- Report,
+) error {
+	// append all the requests with start height = nextHeight
+	*nextBatch = append(*nextBatch, s.requestsQueue.dequeueAtHeight(*nextHeight)...)
+
+	itemsBytes := make([][]byte, len(*nextBatch))
+	for i, req := range *nextBatch {
+		itemsBytes[i] = req.Item.Bytes()
+	}
+
+	// get the block hash for height
+	var blockHash *chainhash.Hash
+	if *nextHeight == 0 {
+		blockHash = s.genesisHash
+	} else {
+		var err error
+		blockHash, err = s.headerDB.GetBlockHashByHeight(context.Background(), *nextHeight)
+		if err != nil {
+			if errors.Is(err, repository.ErrBlockNotFound) {
+				// the chain shrank past nextHeight mid-scan (reorg / caught up to the live
+				// tip): stop here; the requests are re-enqueued and retried next cycle.
+				return errStopPass
+			}
+			return err
+		}
+	}
+
+	// check with filterDB if the block has one of the items
+	matched, err := s.blockFilterMatches(itemsBytes, blockHash)
+	if errors.Is(err, errNotYet) && *nextHeight+filterLagBlocks <= chainTip.Height {
+		// No filter for a block well below the tip: the node will not index it now, so the
+		// block itself is read and matched in full rather than waited for, or skipped.
+		matched, err = true, nil
+	}
+	if err != nil {
+		return err
+	}
+
+	if matched {
+		reports, remainReqs, err := s.extractBlockMatches(blockHash, *nextBatch)
+		if err != nil {
+			return err
+		}
+		// the matched requests leave the batch here: each persistent one is
+		// watched again below from the block after its match
+		*nextBatch = remainReqs
+
+		rewatched := make(map[*ScanRequest]bool)
+		for _, report := range reports {
+			// send the report to the output channel
+			reportsChan <- report
+
+			// if the request is persistent, the scanner keeps watching the item from the
+			// next block: once, however many of the block's transactions it matched
+			if report.Request.IsPersistent && !rewatched[report.Request] {
+				rewatched[report.Request] = true
+				s.Watch(
+					WithRequestID(report.Request.ClientID),
+					WithStartBlock(report.BlockHeight+1),
+					WithWatchItem(report.Request.Item),
+					WithPersistentWatch(),
+					WithLastBlockHash(report.BlockHash),
+				)
+			}
+		}
+	}
+
+	// the block is scanned for every request in the batch
+	*lastHash = blockHash
+	*nextHeight++
+	s.inFlight.Store(*nextHeight + 1)
 	return nil
 }
 
