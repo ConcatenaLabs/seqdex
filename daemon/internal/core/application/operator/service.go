@@ -279,6 +279,7 @@ func (s *service) classifyAndStoreTx() func(ports.WalletTxNotification) bool {
 
 						// Spawn go routine to publish event for account's deposit.
 						go func() {
+							defer recoverHandler("publishing a deposit")
 							for _, deposit := range deposits {
 								accountName := deposit.AccountName
 								// Skip fragmenters account, we just don't want to publish
@@ -291,9 +292,16 @@ func (s *service) classifyAndStoreTx() func(ports.WalletTxNotification) bool {
 								balance, _ := s.wallet.Account().GetBalance(ctx, deposit.AccountName)
 								var market ports.Market = nil
 								if accountName != domain.FeeAccount {
-									mkt, _ := s.repoManager.MarketRepository().GetMarketByName(
+									// The wallet is shared: an account that is
+									// not one of this daemon's markets (a maker's
+									// own account, or any account once the store
+									// is closed) has no market to publish with.
+									mkt, err := s.repoManager.MarketRepository().GetMarketByName(
 										ctx, accountName,
 									)
+									if err != nil || mkt == nil {
+										continue
+									}
 									market = marketInfo{*mkt, balance}
 								}
 								if err := s.pubsub.PublisAccountDepositEvent(
@@ -317,6 +325,7 @@ func (s *service) classifyAndStoreTx() func(ports.WalletTxNotification) bool {
 
 						// Spawn go routine to publish event for account's withdrawal.
 						go func() {
+							defer recoverHandler("publishing a withdrawal")
 							for _, withdrawal := range withdrawals {
 								accountName := withdrawal.AccountName
 								// Skip fragmenters account, we just don't want to publish
@@ -329,9 +338,16 @@ func (s *service) classifyAndStoreTx() func(ports.WalletTxNotification) bool {
 								balance, _ := s.wallet.Account().GetBalance(ctx, withdrawal.AccountName)
 								var market ports.Market = nil
 								if accountName != domain.FeeAccount {
-									mkt, _ := s.repoManager.MarketRepository().GetMarketByName(
+									// The wallet is shared: an account that is
+									// not one of this daemon's markets (a maker's
+									// own account, or any account once the store
+									// is closed) has no market to publish with.
+									mkt, err := s.repoManager.MarketRepository().GetMarketByName(
 										ctx, accountName,
 									)
+									if err != nil || mkt == nil {
+										continue
+									}
 									market = marketInfo{*mkt, balance}
 								}
 								if err := s.pubsub.PublisAccountWithdrawEvent(
@@ -366,8 +382,22 @@ func (s *service) getTxInfo(
 		for _, addr := range addresses {
 			script, _ := seqnet.ToOutputScript(addr, &s.network)
 			if bytes.Equal(script, out.Script) {
-				key, _, _ := masterKey.DeriveKey(out.Script)
-				unblinded, _ := confidential.UnblindOutputWithKey(out, key.Serialize())
+				// A transparent output needs no key. A confidential one
+				// needs the account's blinding key, which is missing while
+				// the wallet is locked or unreachable: then it cannot be
+				// read, and it is not counted rather than crashing.
+				var blindKey []byte
+				if out.IsConfidential() {
+					if masterKey == nil {
+						return nil
+					}
+					key, _, err := masterKey.DeriveKey(out.Script)
+					if err != nil || key == nil {
+						return nil
+					}
+					blindKey = key.Serialize()
+				}
+				unblinded, _ := confidential.UnblindOutputWithKey(out, blindKey)
 				if unblinded != nil {
 					return &txOutputInfo{
 						hex.EncodeToString(elementsutil.ReverseBytes(unblinded.Asset)),
@@ -385,7 +415,11 @@ func (s *service) getTxInfo(
 		if txHex == "" {
 			continue
 		}
-		prevoutTx, _ := transaction.NewTxFromHex(txHex)
+		prevoutTx, err := transaction.NewTxFromHex(txHex)
+		if err != nil || int(in.Index) >= len(prevoutTx.Outputs) {
+			notOwnedInputs = append(notOwnedInputs, txOutputInfo{})
+			continue
+		}
 		prevout := prevoutTx.Outputs[in.Index]
 		if ownedInput := findOwnedUtxo(prevout); ownedInput != nil {
 			ownedInputs = append(ownedInputs, *ownedInput)
