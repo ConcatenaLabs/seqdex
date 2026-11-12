@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"runtime/debug"
 	"sync"
 
 	"github.com/aejkcs50/seqdex/daemon/internal/core/domain"
@@ -14,6 +15,7 @@ import (
 	"github.com/vulpemventures/go-elements/network"
 	"github.com/vulpemventures/go-elements/psetv2"
 	"github.com/vulpemventures/go-elements/slip77"
+	log "github.com/sirupsen/logrus"
 )
 
 type Service struct {
@@ -703,7 +705,7 @@ func (s *Service) listenToTxNotifications() {
 		numHandlers := s.txNotificationHandlers.len()
 		for i := 0; i < numHandlers; i++ {
 			handler := s.txNotificationHandlers.pop()
-			done := handler(notification)
+			done := callSafelyTxHandler(handler, notification)
 			if !done {
 				toRepeat = append(toRepeat, handler)
 			}
@@ -720,7 +722,7 @@ func (s *Service) listenToUtxoNotifications() {
 		numHandlers := s.utxoNotificationHandlers.len()
 		for i := 0; i < numHandlers; i++ {
 			handler := s.utxoNotificationHandlers.pop()
-			done := handler(notification)
+			done := callSafelyUtxoHandler(handler, notification)
 			if !done {
 				toRepeat = append(toRepeat, handler)
 			}
@@ -729,4 +731,40 @@ func (s *Service) listenToUtxoNotifications() {
 			s.utxoNotificationHandlers.pushBack(handler)
 		}
 	}
+}
+
+// callSafelyTxHandler runs one handler on one notification. A handler that
+// panics is logged with its stack and kept for the next notification: the
+// listener goroutine, and with it the daemon, carries on.
+func callSafelyTxHandler(
+	handler func(ports.WalletTxNotification) bool,
+	notification ports.WalletTxNotification,
+) (done bool) {
+	defer func() {
+		if p := recover(); p != nil {
+			log.Errorf(
+				"wallet: a tx notification handler panicked, skipped: %v\n%s",
+				p, debug.Stack(),
+			)
+			done = false
+		}
+	}()
+	return handler(notification)
+}
+
+// callSafelyUtxoHandler is callSafelyTxHandler for utxo notifications.
+func callSafelyUtxoHandler(
+	handler func(ports.WalletUtxoNotification) bool,
+	notification ports.WalletUtxoNotification,
+) (done bool) {
+	defer func() {
+		if p := recover(); p != nil {
+			log.Errorf(
+				"wallet: a utxo notification handler panicked, skipped: %v\n%s",
+				p, debug.Stack(),
+			)
+			done = false
+		}
+	}()
+	return handler(notification)
 }
