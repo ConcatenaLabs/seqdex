@@ -47,11 +47,14 @@ Elements code, untouched. What changed:
   the height of every account it holds no scanner for at that moment (a locked
   wallet holds none). After a restart the addresses an account holds when the
   wallet opens are watched from that height (twelve blocks back), not from the
-  account's birth; an address the account derives while the wallet runs has no
-  history, so it is watched from the tip, twelve blocks back. A reorg scans
-  again from the block after its fork point, found by walking the orphaned
-  branch's headers back (at most 1,000 blocks; that far back when the node no
-  longer knows the branch). Scanners more than six blocks behind the tip read
+  account's birth; an address the account derives while the wallet runs is
+  watched from the lower of the tip (twelve blocks back) and the height the
+  account has been scanned to. Each block a pass scans must be the child of the
+  block it scanned before; where they stop linking (a reorg), the pass ends, the
+  scanners' shared height answers are dropped, and the scan starts again after
+  the fork point, which is asked of the node (a block's confirmations say
+  whether it is on the active chain), walking the orphaned branch back at most
+  1,000 blocks (that far back when the node no longer knows the branch). Scanners more than six blocks behind the tip read
   blocks `OCEAN_SCAN_CATCHUP_PARALLEL` at a time, block by block in turn; a
   scanner following the tip never waits. A vendored neutrino-elements scanner
   variant exists as well (`internal/infrastructure/blockchain-scanner/`).

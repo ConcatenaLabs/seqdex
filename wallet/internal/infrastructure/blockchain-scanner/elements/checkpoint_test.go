@@ -96,7 +96,7 @@ func quietScanner(f *fakeSvc, birth, resume uint32) *scannerService {
 // addresses it held then are), each one derived made the account scan every block since the
 // start again, and held its saved height back there, so a wallet up for days resumed days back.
 func TestAnAddressDerivedLaterIsWatchedFromTheTip(t *testing.T) {
-	f := &fakeSvc{}
+	f := &fakeSvc{low: 209401} // caught up
 	s := &service{lock: &sync.RWMutex{}, checkpoints: map[string]uint32{"a": 199023},
 		scanners: map[string]*scannerService{"a": quietScanner(f, 93800, 199011)},
 		tip:      func() (uint32, error) { return 209400, nil }}
@@ -105,11 +105,19 @@ func TestAnAddressDerivedLaterIsWatchedFromTheTip(t *testing.T) {
 	if len(f.starts) != 2 || f.starts[0] != 199011 || f.starts[1] != 209400-checkpointMargin {
 		t.Fatalf("held at the opening from 199011, derived later from the tip less the margin %d: %v", 209400-checkpointMargin, f.starts)
 	}
+	// an account still catching up (scanned to 205000): a derived address is watched from there,
+	// so a payment made to it before this wallet derived it, after that height, is seen
+	f.low = 205000
+	s.WatchNewAddresses("a", 93800, []domain.AddressInfo{{Script: "0014" + "77777777777777777777777777777777777777aa"}})
+	if f.starts[2] != 205000 {
+		t.Fatalf("an account behind the tip watches a derived address from its scanned height 205000: %v", f.starts)
+	}
+	f.low = 209401
 	// with no tip to read it falls back to where the opening watches started: never later than
 	// the account has been scanned to, so nothing is missed
 	s.tip = func() (uint32, error) { return 0, errors.New("node down") }
 	s.WatchNewAddresses("a", 93800, []domain.AddressInfo{{Script: "0014" + "66666666666666666666666666666666666666ff"}})
-	if f.starts[2] != 199011 {
+	if f.starts[3] != 199011 {
 		t.Fatalf("without the tip it watches from the opening height: %v", f.starts)
 	}
 }

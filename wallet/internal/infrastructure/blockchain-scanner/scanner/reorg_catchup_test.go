@@ -20,7 +20,116 @@ type forkChain struct {
 	*fakeChain
 	staleFrom, staleTo uint32
 	forget             bool // the node no longer knows the orphaned branch
+	// cached: height answers still naming an orphaned block, as the scanners' shared height cache
+	// can for a few seconds after a reorg; ForgetHeights drops them
+	cached  map[uint32]*chainhash.Hash
+	forgets int
 }
+
+func (c *forkChain) GetBlockHashByHeight(ctx context.Context, h uint32) (*chainhash.Hash, error) {
+	c.mu.Lock()
+	x, ok := c.cached[h]
+	c.mu.Unlock()
+	if ok {
+		return x, nil
+	}
+	return c.fakeChain.GetBlockHashByHeight(ctx, h)
+}
+
+func (c *forkChain) ForgetHeights() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cached = nil
+	c.forgets++
+}
+
+// BlockOnActiveChain answers as the node does, from no cache.
+func (c *forkChain) BlockOnActiveChain(_ context.Context, hash chainhash.Hash) (uint32, *chainhash.Hash, bool, error) {
+	if h := heightOf(c.fakeChain, &hash); h != ^uint32(0) {
+		if h == 0 {
+			return 0, nil, true, nil
+		}
+		return h, hashAt(h - 1), true, nil
+	}
+	for h := c.staleFrom; h <= c.staleTo && !c.forget; h++ {
+		if staleAt(h).IsEqual(&hash) {
+			prev := hashAt(h - 1)
+			if h > c.staleFrom {
+				prev = staleAt(h - 1)
+			}
+			return h, prev, false, nil
+		}
+	}
+	return 0, nil, false, repository.ErrBlockNotFound
+}
+
+func payment(to []byte) *transaction.Transaction {
+	tx := transaction.NewTx(2)
+	tx.AddOutput(transaction.NewTxOutput(make([]byte, 33), []byte{1, 0, 0, 0, 0, 0, 0, 0, 1}, to))
+	return tx
+}
+
+func reportedAt(rs []Report, h uint32) bool {
+	for _, r := range rs {
+		if r.BlockHeight == h {
+			return true
+		}
+	}
+	return false
+}
+
+// Two accounts scan through the same reorg while the shared height answers still name the
+// orphaned block at 4998 (read moments before by another account's pass): the fork point is asked
+// of the node, so each account scans the new branch from 4998 and sees a payment there. Taking the
+// cached answer for the truth made 4999 the restart and missed the payment.
+func TestTwoAccountsThroughAReorgWithAStaleHeightAnswer(t *testing.T) {
+	main := &fakeChain{tip: 5000, txs: map[uint32][]*transaction.Transaction{4998: {payment(script(2))}}}
+	c := &forkChain{fakeChain: main, staleFrom: 4998, staleTo: 4999}
+	a, b := New(c, c, c, hashAt(0)).(*scannerService), New(c, c, c, hashAt(0)).(*scannerService)
+	a.Watch(WithStartBlock(5000), WithWatchItem(&UnspentWatchItem{outputScript: script(1)}), WithPersistentWatch(), WithLastBlockHash(staleAt(4999)))
+	b.Watch(WithStartBlock(5000), WithWatchItem(&UnspentWatchItem{outputScript: script(2)}), WithPersistentWatch(), WithLastBlockHash(staleAt(4999)))
+	for i, s := range []*scannerService{a, b} {
+		c.mu.Lock()
+		c.cached = map[uint32]*chainhash.Hash{4998: staleAt(4998)} // stale again for each
+		c.mu.Unlock()
+		if h := s.resumeAfterReorg(staleAt(4999), 5000); h != 4998 {
+			t.Fatalf("account %d resumes at %d, not after the fork point 4997", i, h)
+		}
+	}
+	c.mu.Lock()
+	c.cached = map[uint32]*chainhash.Hash{4998: staleAt(4998)}
+	c.mu.Unlock()
+	pass(t, a)
+	rs := pass(t, b)
+	if !reportedAt(rs, 4998) {
+		t.Fatalf("the payment in the new branch's block 4998 was not seen: %v", rs)
+	}
+	if c.forgets == 0 {
+		t.Fatal("a reorg left the shared height answers in place")
+	}
+}
+
+// A pass that crosses a reorg while the height answers are mixed (4998 still the orphaned block,
+// 4999 already the new branch's) stops where the blocks stop linking, and the next pass scans the
+// new branch from the fork point: the new branch's 4998 is never skipped.
+func TestAPassThatCrossesAReorgScansTheNewBranch(t *testing.T) {
+	main := &fakeChain{tip: 5005, txs: map[uint32][]*transaction.Transaction{4998: {payment(script(2))}}}
+	c := &forkChain{fakeChain: main, staleFrom: 4998, staleTo: 4998,
+		cached: map[uint32]*chainhash.Hash{4998: staleAt(4998)}}
+	s := New(c, c, c, hashAt(0)).(*scannerService)
+	s.Watch(WithStartBlock(4990), WithWatchItem(&UnspentWatchItem{outputScript: script(2)}), WithPersistentWatch())
+	var all []Report
+	for i := 0; i < 4; i++ {
+		all = append(all, pass(t, s)...)
+	}
+	if !reportedAt(all, 4998) {
+		t.Fatalf("the new branch's block 4998 was skipped: %v", all)
+	}
+	if r := s.requestsQueue.peek(); r == nil || r.StartHeight != 5006 {
+		t.Fatalf("the watch ends at the tip: %+v", r)
+	}
+}
+
 
 func staleAt(h uint32) *chainhash.Hash {
 	x := chainhash.DoubleHashH([]byte(fmt.Sprintf("orphaned block %d", h)))
@@ -123,4 +232,17 @@ func TestCatchingUpIsBounded(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("a scanner following the tip waited for a catch-up slot")
 	}
+}
+
+// the main chain's headers: each block's parent is the block below it
+func (c *fakeChain) GetBlockHeader(_ context.Context, hash chainhash.Hash) (*block.Header, error) {
+	h := heightOf(c, &hash)
+	if h == ^uint32(0) {
+		return nil, repository.ErrBlockNotFound
+	}
+	var prev []byte
+	if h > 0 {
+		prev = hashAt(h - 1).CloneBytes()
+	}
+	return &block.Header{Height: h, PrevBlockHash: prev}, nil
 }

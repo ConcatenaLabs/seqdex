@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -245,16 +246,54 @@ func (s *scannerService) requestsManager(ch chan<- Report) {
 // scan rolls back when the node no longer knows the orphaned branch.
 const reorgRollbackHorizon = 1000
 
+// activeChainReader answers from the node itself, never a cache, whether a block is on its active
+// chain (the production headers repository does; elements/header_repo.go).
+type activeChainReader interface {
+	BlockOnActiveChain(ctx context.Context, hash chainhash.Hash) (height uint32, prev *chainhash.Hash, onChain bool, err error)
+}
+
+// heightForgetter drops cached height-to-hash answers (shared by every account's scanner).
+type heightForgetter interface {
+	ForgetHeights()
+}
+
+func (s *scannerService) forgetHeights() {
+	if f, ok := s.headerDB.(heightForgetter); ok {
+		f.ForgetHeights()
+	}
+}
+
 // resumeAfterReorg is the first height to scan again after the block `last`, scanned at
 // nextHeight-1, left the node's chain: the height after the newest ancestor of `last` that is
-// still on the chain.
+// on the node's active chain. Whether a block is on it is asked of the node itself: the cached
+// height-to-hash answers every scanner shares can still name an orphaned block for a few seconds
+// after a reorg, and taking such a block for the fork point would leave the new branch's blocks
+// below it unscanned. A reorg also clears those answers for every scanner.
 func (s *scannerService) resumeAfterReorg(last *chainhash.Hash, nextHeight uint32) uint32 {
+	s.forgetHeights()
 	fallback := uint32(0) // unsigned: a chain shorter than the horizon rolls back to genesis
 	if nextHeight > reorgRollbackHorizon {
 		fallback = nextHeight - reorgRollbackHorizon
 	}
 	ctx := context.Background()
 	h := *last
+	if ac, ok := s.headerDB.(activeChainReader); ok {
+		for i := 0; i <= reorgRollbackHorizon; i++ {
+			height, prev, onChain, err := ac.BlockOnActiveChain(ctx, h)
+			if err != nil {
+				return fallback
+			}
+			if onChain {
+				return height + 1
+			}
+			if prev == nil {
+				return 0
+			}
+			h = *prev
+		}
+		return fallback
+	}
+	// a headers repository that cannot say: the walk compares with its height lookup
 	for i := 0; i <= reorgRollbackHorizon; i++ {
 		hdr, err := s.headerDB.GetBlockHeader(ctx, h)
 		if err != nil || hdr == nil {
@@ -345,7 +384,9 @@ func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Repo
 		ancHash, herr := s.headerDB.GetBlockHashByHeight(context.Background(), nextHeight-1)
 		switch {
 		case herr == nil && ancHash.IsEqual(req.LastBlockHash):
-			// no reorg at/below our resume point; continue forward as normal
+			// no reorg at/below our resume point; continue forward as normal, each block
+			// linked to the one before it
+			lastHash = req.LastBlockHash
 		case herr == nil || errors.Is(herr, repository.ErrBlockNotFound):
 			// the remembered block was orphaned (hash differs) or the chain shrank past it: a
 			// reorg (anchoring supremacy: a Bitcoin reorg always wins, and this chain follows it).
@@ -372,6 +413,14 @@ func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Repo
 	if nextHeight > chainTip.Height {
 		time.Sleep(2 * time.Second)
 		return nil
+	}
+
+	// a pass is linked from the block below its start: the one the request remembers, or else
+	// the one the node names at that height now
+	if lastHash == nil && nextHeight > 0 {
+		if h, herr := s.headerDB.GetBlockHashByHeight(context.Background(), nextHeight-1); herr == nil {
+			lastHash = h
+		}
 	}
 
 	slots := catchUp
@@ -421,8 +470,18 @@ func (s *scannerService) scanOne(
 	nextHeight *uint32, lastHash **chainhash.Hash, nextBatch *[]*ScanRequest,
 	chainTip *block.Header, reportsChan chan<- Report,
 ) error {
-	// append all the requests with start height = nextHeight
-	*nextBatch = append(*nextBatch, s.requestsQueue.dequeueAtHeight(*nextHeight)...)
+	// append all the requests with start height = nextHeight. One that remembers another block
+	// below it than this pass scanned (it was matched in a block a reorg has orphaned) is not
+	// carried on: it starts again after its own fork point, in a pass of its own.
+	for _, r := range s.requestsQueue.dequeueAtHeight(*nextHeight) {
+		if r.LastBlockHash != nil && *lastHash != nil && !r.LastBlockHash.IsEqual(*lastHash) {
+			r.StartHeight = s.resumeAfterReorg(r.LastBlockHash, *nextHeight)
+			r.LastBlockHash = nil
+			s.requestsQueue.enqueue(r)
+			continue
+		}
+		*nextBatch = append(*nextBatch, r)
+	}
 
 	itemsBytes := make([][]byte, len(*nextBatch))
 	for i, req := range *nextBatch {
@@ -443,6 +502,25 @@ func (s *scannerService) scanOne(
 				return errStopPass
 			}
 			return err
+		}
+	}
+
+	// each block a pass scans is the child of the one it scanned before: the shared height
+	// answers can name an orphaned block for a moment after a reorg, and a pass that went from an
+	// orphaned block to the new branch's next one would never scan the new branch's block at the
+	// orphaned height. On a break the pass ends here; its requests keep the last block they
+	// scanned, so the next pass finds the reorg and scans again from its fork point.
+	if *lastHash != nil {
+		hdr, err := s.headerDB.GetBlockHeader(context.Background(), *blockHash)
+		if err != nil {
+			if errors.Is(err, repository.ErrBlockNotFound) {
+				return errStopPass
+			}
+			return err
+		}
+		if !bytes.Equal(hdr.PrevBlockHash, (*lastHash).CloneBytes()) {
+			s.forgetHeights()
+			return errStopPass
 		}
 	}
 

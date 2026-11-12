@@ -227,19 +227,30 @@ func (s *service) WatchForAccount(
 	scannerSvc.watchAddresses(addressesInfo)
 }
 
-// WatchNewAddresses watches addresses the account has just derived. Nothing can have paid an
-// address before it existed, so its watch starts at the tip less the margin (a reorg of the last
-// blocks, and a payment mined in the moment between the derive and this call, are still seen),
-// never at the height the wallet started from: a watch set there made the account scan every
-// block since its start again for each address it derived, held its saved height back there,
-// and a wallet up for days spent its cores on those passes and resumed days back after a restart.
+// WatchNewAddresses watches addresses the account has just derived, from the lower of the tip
+// less the margin (a reorg of the last blocks, and a payment mined between the derive and this
+// call, are still seen) and the height the account has been scanned to (an address paid before
+// this wallet derived it, by the same seed elsewhere, is seen as far back as the account's own
+// scan reaches). Never from the height the wallet started from: a watch set there made the account
+// scan every block since its start again for each address it derived, and held its saved height
+// back there, so a wallet up for days spent its cores on those passes and resumed days back after
+// a restart.
 func (s *service) WatchNewAddresses(
 	accountName string, birthday uint32, addressesInfo []domain.AddressInfo,
 ) {
 	scannerSvc := s.getOrCreateScanner(accountName, birthday)
-	start := scannerSvc.startFor()
+	opening := scannerSvc.startFor()
+	start := opening
 	if tip, err := s.tipHeight(); err == nil && tip > checkpointMargin && tip-checkpointMargin > start {
 		start = tip - checkpointMargin
+	}
+	if p, ok := scannerSvc.svc.(interface{ LowestUnscanned() (uint32, bool) }); ok {
+		if scanned, ok := p.LowestUnscanned(); ok && scanned < start {
+			start = scanned
+		}
+	}
+	if start < opening {
+		start = opening
 	}
 	scannerSvc.watchAddressesFrom(addressesInfo, start)
 }
