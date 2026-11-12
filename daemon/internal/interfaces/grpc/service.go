@@ -309,13 +309,12 @@ func (s *service) Start() error {
 	return nil
 }
 
+// Stop leaves the wallet daemon as it is. The wallet daemon is shared: the
+// makers sign from their own accounts in it, and it can unlock itself
+// (OCEAN_PASSWORD). Locking it here would stop every maker each time this
+// daemon stops, and leave the wallet answering locked until someone unlocks
+// it again.
 func (s *service) Stop() {
-	if s.password != "" {
-		// nolint
-		s.opts.AppConfig.UnlockerService().LockWallet(
-			context.Background(), s.password,
-		)
-	}
 	stopMacaroonSvc := true
 	s.stop(stopMacaroonSvc)
 
