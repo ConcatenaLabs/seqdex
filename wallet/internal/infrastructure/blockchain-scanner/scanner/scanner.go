@@ -68,6 +68,12 @@ type scannerService struct {
 	// scan from an account's birth) keeps what the pass has done, and a restart resumes there
 	// rather than at the pass's start.
 	inFlight      atomic.Uint32
+	// inFlightAt is the pass's first unscanned height with the hash of the block below it, set
+	// together (LowestUnscannedAt)
+	inFlightAt atomic.Pointer[heightHash]
+	// floor is where a scan starts again when a reorg's fork point cannot be found (the node no
+	// longer knows the orphaned branch): the account's birthday (SetFloor)
+	floor atomic.Uint32
 	// name says whose scanner this is in its log lines (SetName); progressAt is when it last
 	// said how far a pass had got
 	name          string
@@ -82,6 +88,29 @@ type scannerService struct {
 }
 
 var _ Service = (*scannerService)(nil)
+
+type heightHash struct {
+	height uint32
+	hash   *chainhash.Hash
+}
+
+// SetFloor sets the lowest height this scanner's account can have history at (its birthday).
+func (s *scannerService) SetFloor(h uint32) { s.floor.Store(h) }
+
+// LowestUnscannedAt is LowestUnscanned with the hash of the block just below that height, as the
+// scan last saw it (nil when it has none): saved with the height, it lets a restart check that
+// block against the node and find a reorg that happened while the wallet was stopped.
+func (s *scannerService) LowestUnscannedAt() (uint32, *chainhash.Hash, bool) {
+	low, ok := uint32(0), false
+	var hash *chainhash.Hash
+	if r := s.requestsQueue.peek(); r != nil {
+		low, hash, ok = r.StartHeight, r.LastBlockHash, true
+	}
+	if f := s.inFlightAt.Load(); f != nil && (!ok || f.height < low) {
+		low, hash, ok = f.height, f.hash, true
+	}
+	return low, hash, ok
+}
 
 // SetName names the scanner in its log lines (the account it scans for).
 func (s *scannerService) SetName(name string) { s.name = name }
@@ -242,8 +271,8 @@ func (s *scannerService) requestsManager(ch chan<- Report) {
 	}
 }
 
-// reorgRollbackHorizon bounds how far back a reorg's fork point is looked for, and is how far a
-// scan rolls back when the node no longer knows the orphaned branch.
+// reorgRollbackHorizon bounds the fork-point walk only for a headers repository that cannot ask
+// the node whether a block is on its active chain (the production one can: its walk has no bound).
 const reorgRollbackHorizon = 1000
 
 // activeChainReader answers from the node itself, never a cache, whether a block is on its active
@@ -271,29 +300,36 @@ func (s *scannerService) forgetHeights() {
 // below it unscanned. A reorg also clears those answers for every scanner.
 func (s *scannerService) resumeAfterReorg(last *chainhash.Hash, nextHeight uint32) uint32 {
 	s.forgetHeights()
+	ctx := context.Background()
+	h := *last
+	if ac, ok := s.headerDB.(activeChainReader); ok {
+		// however deep: this chain follows its Bitcoin anchor to any depth. When the node no
+		// longer knows the orphaned branch, from the account's birthday.
+		floor := s.floor.Load()
+		for {
+			height, prev, onChain, err := ac.BlockOnActiveChain(ctx, h)
+			if err != nil {
+				log.Warnf("scanner %s: the fork point below block %s is unknown to the node (%v): scanning again from %d", s.name, h, err, floor)
+				return floor
+			}
+			if onChain {
+				if height+1 < floor {
+					return floor
+				}
+				return height + 1
+			}
+			if prev == nil || height <= floor {
+				return floor
+			}
+			h = *prev
+		}
+	}
 	fallback := uint32(0) // unsigned: a chain shorter than the horizon rolls back to genesis
 	if nextHeight > reorgRollbackHorizon {
 		fallback = nextHeight - reorgRollbackHorizon
 	}
-	ctx := context.Background()
-	h := *last
-	if ac, ok := s.headerDB.(activeChainReader); ok {
-		for i := 0; i <= reorgRollbackHorizon; i++ {
-			height, prev, onChain, err := ac.BlockOnActiveChain(ctx, h)
-			if err != nil {
-				return fallback
-			}
-			if onChain {
-				return height + 1
-			}
-			if prev == nil {
-				return 0
-			}
-			h = *prev
-		}
-		return fallback
-	}
-	// a headers repository that cannot say: the walk compares with its height lookup
+	// a headers repository that cannot say: the walk compares with its height lookup, at most
+	// reorgRollbackHorizon blocks back
 	for i := 0; i <= reorgRollbackHorizon; i++ {
 		hdr, err := s.headerDB.GetBlockHeader(ctx, h)
 		if err != nil || hdr == nil {
@@ -351,6 +387,7 @@ func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Repo
 	nextHeight := req.StartHeight
 	s.inFlight.Store(req.StartHeight + 1)
 	defer s.inFlight.Store(0)
+	defer s.inFlightAt.Store(nil)
 	var lastHash *chainhash.Hash
 	defer func() {
 		for _, r := range nextBatch {
@@ -389,12 +426,9 @@ func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Repo
 			lastHash = req.LastBlockHash
 		case herr == nil || errors.Is(herr, repository.ErrBlockNotFound):
 			// the remembered block was orphaned (hash differs) or the chain shrank past it: a
-			// reorg (anchoring supremacy: a Bitcoin reorg always wins, and this chain follows it).
-			// The scan resumes at the block after the last one the orphaned branch shares with
-			// the node's chain, found by walking that branch's headers back. A fixed rollback of
-			// reorgRollbackHorizon blocks made each one-block reorg cost every account a thousand
-			// blocks; that horizon stays only as the bound of the walk, and as the fallback when
-			// the node no longer knows the orphaned branch. Re-derivation is idempotent (UTXOs
+			// reorg (anchoring supremacy: a Bitcoin reorg always wins, and this chain follows it,
+			// to any depth). The scan resumes at the block after the last one the orphaned branch
+			// shares with the node's chain (resumeAfterReorg). Re-derivation is idempotent (UTXOs
 			// keyed by outpoint).
 			rollback := s.resumeAfterReorg(req.LastBlockHash, nextHeight)
 			log.Warnf("scanner %s: block %d it last scanned is no longer on the chain (a reorg): scanning again from %d",
@@ -422,6 +456,7 @@ func (s *scannerService) requestWorker(req *ScanRequest, reportsChan chan<- Repo
 			lastHash = h
 		}
 	}
+	s.inFlightAt.Store(&heightHash{nextHeight, lastHash})
 
 	slots := catchUp
 	held := false
@@ -568,6 +603,7 @@ func (s *scannerService) scanOne(
 	*lastHash = blockHash
 	*nextHeight++
 	s.inFlight.Store(*nextHeight + 1)
+	s.inFlightAt.Store(&heightHash{*nextHeight, blockHash})
 	return nil
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
 	"github.com/aejkcs50/seqdex/wallet/internal/core/ports"
+	"github.com/aejkcs50/seqdex/wallet/internal/infrastructure/blockchain-scanner/scanner"
 	"github.com/aejkcs50/seqdex/wallet/pkg/seqnet"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/vulpemventures/go-elements/address"
@@ -37,6 +38,9 @@ type service struct {
 	tip func() (uint32, error)
 	// checkpoints: each account's scanned height as the last run saved it (CheckpointFile)
 	checkpoints map[string]uint32
+	// blocks: for an account whose saved height came with it, the hash of the block below that
+	// height as the scan saw it (blocksFile), checked against the node at the next start
+	blocks map[string]blockRef
 }
 
 type ServiceArgs struct {
@@ -114,6 +118,7 @@ func NewElementsScanner(args ServiceArgs) (ports.BlockchainScanner, error) {
 		genesisHash: genesisHash,
 		filtersRepo: filtersDb,
 		checkpoints: loadCheckpoints(args.CheckpointFile),
+		blocks:      loadBlockRefs(blocksFile(args.CheckpointFile)),
 		headersRepo: headersDb,
 		lock:        lock,
 		quit:        make(chan struct{}),
@@ -178,23 +183,117 @@ func (s *service) saveCheckpoints() {
 	if s.checkpoints == nil {
 		s.checkpoints = map[string]uint32{}
 	}
+	if s.blocks == nil {
+		s.blocks = map[string]blockRef{}
+	}
 	for name, sc := range s.scanners {
-		if p, ok := sc.svc.(interface{ LowestUnscanned() (uint32, bool) }); ok {
-			if h, ok := p.LowestUnscanned(); ok {
-				s.checkpoints[name] = h
-			}
+		h, hash, ok := lowestUnscanned(sc.svc)
+		if !ok {
+			continue
+		}
+		// never past a coin the account's listener was handed and has not stored: a kill then
+		// would resume above it, and the coin would never be reported again
+		if p, ok := sc.pendingLow(); ok && p < h {
+			h, hash = p, nil
+		}
+		s.checkpoints[name] = h
+		if hash != nil {
+			s.blocks[name] = blockRef{Height: h, Hash: hash.String()}
+		} else {
+			delete(s.blocks, name)
 		}
 	}
 	out := make(map[string]uint32, len(s.checkpoints))
 	for name, h := range s.checkpoints {
 		out[name] = h
 	}
-	s.lock.Unlock()
-	b, _ := json.Marshal(out)
-	tmp := s.args.CheckpointFile + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err == nil {
-		_ = os.Rename(tmp, s.args.CheckpointFile)
+	refs := make(map[string]blockRef, len(s.blocks))
+	for name, r := range s.blocks {
+		refs[name] = r
 	}
+	s.lock.Unlock()
+	writeWhole(s.args.CheckpointFile, out)
+	writeWhole(blocksFile(s.args.CheckpointFile), refs)
+}
+
+// lowestUnscanned is the scanner's lowest unscanned height, with the block below it when it says.
+func lowestUnscanned(svc scanner.Service) (uint32, *chainhash.Hash, bool) {
+	if p, ok := svc.(interface {
+		LowestUnscannedAt() (uint32, *chainhash.Hash, bool)
+	}); ok {
+		return p.LowestUnscannedAt()
+	}
+	if p, ok := svc.(interface{ LowestUnscanned() (uint32, bool) }); ok {
+		h, ok := p.LowestUnscanned()
+		return h, nil, ok
+	}
+	return 0, nil, false
+}
+
+// writeWhole writes v as JSON beside path, then renames it over path.
+func writeWhole(path string, v interface{}) {
+	if path == "" {
+		return
+	}
+	b, _ := json.Marshal(v)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err == nil {
+		_ = os.Rename(tmp, path)
+	}
+}
+
+// ReportStored is a listener's word that it stored the oldest coin report it took from the
+// account's channel (GetUtxoChannel).
+func (s *service) ReportStored(accountName string) {
+	s.lock.RLock()
+	sc, ok := s.scanners[accountName]
+	s.lock.RUnlock()
+	if ok {
+		sc.stored()
+	}
+}
+
+// blockRef is a saved height with the hash of the block just below it.
+type blockRef struct {
+	Height uint32 `json:"height"`
+	Hash   string `json:"hash"`
+}
+
+// blocksFile sits beside the checkpoint file. The heights file keeps its own format (a height per
+// account), so a tool or an older build that reads it is unaffected; a height edited there (a
+// script lowering it) no longer matches its entry here, and resumes with the margin, as before.
+func blocksFile(checkpointFile string) string {
+	if checkpointFile == "" {
+		return ""
+	}
+	return strings.TrimSuffix(checkpointFile, ".json") + "-blocks.json"
+}
+
+func loadBlockRefs(path string) map[string]blockRef {
+	out := map[string]blockRef{}
+	if path == "" {
+		return out
+	}
+	if b, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(b, &out)
+	}
+	return out
+}
+
+// resumeAt is where an account's watches start after a restart, and the block they check first.
+// With the hash of the block below its saved height kept, exactly at the saved height: the first
+// pass checks that block against the node and, when a reorg made while the wallet was stopped
+// orphaned it, scans again from the fork point however deep. Without it, the saved height less
+// the margin (resumeHeight).
+func (s *service) resumeAt(account string, birth uint32) (uint32, *chainhash.Hash) {
+	h, ok := s.checkpoints[account]
+	ref, kept := s.blocks[account]
+	if ok && kept && ref.Height == h && h > birth && h > 0 {
+		if hash, err := chainhash.NewHashFromStr(ref.Hash); err == nil {
+			return h, hash
+		}
+	}
+	return resumeHeight(s.checkpoints, account, birth), nil
 }
 
 // resumeHeight is where an account's watches start after a restart: its saved height less the
@@ -289,6 +388,7 @@ func (s *service) StopWatchForAccount(accountName string) {
 	// starts at its own birthday
 	s.lock.Lock()
 	delete(s.checkpoints, accountName)
+	delete(s.blocks, accountName)
 	s.lock.Unlock()
 }
 
@@ -469,7 +569,8 @@ func (s *service) getOrCreateScanner(
 		// made before the account's birthday was known (by a caller that knows none): it
 		// takes the birthday now, so its watches start there and not at genesis
 		if startingBlock > 0 {
-			scannerSvc.adoptBirthday(startingBlock, resumeHeight(s.checkpoints, accountName, startingBlock))
+			resume, hash := s.resumeAt(accountName, startingBlock)
+			scannerSvc.adoptBirthday(startingBlock, resume, hash)
 		}
 		return scannerSvc
 	}
@@ -479,7 +580,7 @@ func (s *service) getOrCreateScanner(
 		s.genesisHash,
 	)
 	// Every watch resumes where the last run had scanned the account to.
-	scannerSvc.resumeFrom = resumeHeight(s.checkpoints, accountName, startingBlock)
+	scannerSvc.resumeFrom, scannerSvc.resumeHash = s.resumeAt(accountName, startingBlock)
 	s.scanners[accountName] = scannerSvc
 	return scannerSvc
 }

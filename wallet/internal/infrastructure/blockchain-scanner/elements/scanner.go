@@ -51,6 +51,13 @@ type scannerService struct {
 	// resumeFrom is where every watch starts after a restart: the account's saved height
 	// less the margin (or its birth when it has none)
 	resumeFrom uint32
+	// resumeHash is the block below resumeFrom as the last run scanned it (nil: not kept): the
+	// watches resuming there carry it, so a reorg made while the wallet was stopped is found
+	resumeHash *chainhash.Hash
+	// pending holds the block height of every coin report handed to the account's listener and
+	// not yet stored by it, oldest first: a saved height never passes the oldest of them
+	pmu     sync.Mutex
+	pending []uint32
 	chTxs               chan *domain.Transaction
 	chUtxos             chan []*domain.Utxo
 	lock                *sync.RWMutex
@@ -94,6 +101,7 @@ func newScannerSvc(
 	if n, ok := scannerSvc.svc.(interface{ SetName(string) }); ok {
 		n.SetName(accountName)
 	}
+	scannerSvc.setFloor(startingBlockHeight)
 	chReports, _ := scannerSvc.svc.Start()
 	scannerSvc.reports.Add(1)
 	go func() {
@@ -141,14 +149,65 @@ func (s *scannerService) deliverTx(tx *domain.Transaction) bool {
 // restart.
 // adoptBirthday sets the account's birthday, and where its watches resume, on a scanner made
 // without one; true when it did.
-func (s *scannerService) adoptBirthday(birth, resume uint32) bool {
+func (s *scannerService) adoptBirthday(birth, resume uint32, resumeHash *chainhash.Hash) bool {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	if s.startingBlockHeight != 0 {
 		return false
 	}
-	s.startingBlockHeight, s.resumeFrom = birth, resume
+	s.startingBlockHeight, s.resumeFrom, s.resumeHash = birth, resume, resumeHash
+	s.setFloor(birth)
 	return true
+}
+
+// setFloor tells the scanner the account's birthday: where a scan starts again when a reorg's
+// fork point is unknown to the node.
+func (s *scannerService) setFloor(h uint32) {
+	if f, ok := s.svc.(interface{ SetFloor(uint32) }); ok {
+		f.SetFloor(h)
+	}
+}
+
+// resumeLink is the hash a watch starting at `start` carries: the kept block below the resumed
+// height, for a watch that starts exactly there.
+func (s *scannerService) resumeLink(start uint32) *chainhash.Hash {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	if s.resumeHash != nil && start == s.resumeFrom && s.resumeFrom >= s.startingBlockHeight {
+		return s.resumeHash
+	}
+	return nil
+}
+
+func (s *scannerService) pendingPush(h uint32) {
+	s.pmu.Lock()
+	s.pending = append(s.pending, h)
+	s.pmu.Unlock()
+}
+
+// stored is the listener's word that it stored the oldest coin report it was handed.
+func (s *scannerService) stored() {
+	s.pmu.Lock()
+	if len(s.pending) > 0 {
+		s.pending = s.pending[1:]
+	}
+	s.pmu.Unlock()
+}
+
+// pendingLow is the lowest block height of a coin report not yet stored.
+func (s *scannerService) pendingLow() (uint32, bool) {
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	if len(s.pending) == 0 {
+		return 0, false
+	}
+	low := s.pending[0]
+	for _, h := range s.pending {
+		if h < low {
+			low = h
+		}
+	}
+	return low, true
 }
 
 func (s *scannerService) startFor() uint32 {
@@ -168,6 +227,7 @@ func (s *scannerService) watchAddresses(addressesInfo []domain.AddressInfo) {
 
 // watchAddressesFrom watches each address not watched yet from block `start`.
 func (s *scannerService) watchAddressesFrom(addressesInfo []domain.AddressInfo, start uint32) {
+	link := s.resumeLink(start)
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -183,11 +243,15 @@ func (s *scannerService) watchAddressesFrom(addressesInfo []domain.AddressInfo, 
 			s.warn(err, "skip watching address with invalid script %q", info.Script)
 			continue
 		}
-		s.svc.Watch(
+		opts := []scanner.ScanRequestOption{
 			scanner.WithWatchItem(&unspentWatchItem{outputScript: script}),
 			scanner.WithStartBlock(start),
 			scanner.WithPersistentWatch(),
-		)
+		}
+		if link != nil {
+			opts = append(opts, scanner.WithLastBlockHash(link))
+		}
+		s.svc.Watch(opts...)
 		s.log(
 			"start watching address %s for account %s",
 			info.DerivationPath, s.accountName,
@@ -198,6 +262,7 @@ func (s *scannerService) watchAddressesFrom(addressesInfo []domain.AddressInfo, 
 func (s *scannerService) watchUtxos(utxos []domain.UtxoInfo) {
 	// the coins known as the wallet opens: spent before the resumed height, the last run saw it
 	start := s.startFor()
+	link := s.resumeLink(start)
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -206,10 +271,11 @@ func (s *scannerService) watchUtxos(utxos []domain.UtxoInfo) {
 		item, _ := scanner.NewSpentWatchItemFromInput(
 			&transaction.TxInput{Hash: hash, Index: u.VOut}, u.Script,
 		)
-		s.svc.Watch(
-			scanner.WithWatchItem(item),
-			scanner.WithStartBlock(start),
-		)
+		opts := []scanner.ScanRequestOption{scanner.WithWatchItem(item), scanner.WithStartBlock(start)}
+		if link != nil {
+			opts = append(opts, scanner.WithLastBlockHash(link))
+		}
+		s.svc.Watch(opts...)
 
 		s.log("start watching utxo %s for account %s", u, s.accountName)
 	}
@@ -271,8 +337,11 @@ func (s *scannerService) listenToReports(chReports <-chan scanner.Report) {
 				},
 			})
 		}
-		if len(spentUtxos) > 0 && !s.deliverUtxos(spentUtxos) {
-			return
+		if len(spentUtxos) > 0 {
+			s.pendingPush(uint32(blockHeight))
+			if !s.deliverUtxos(spentUtxos) {
+				return
+			}
 		}
 
 		newUtxos := make([]*domain.Utxo, 0)
@@ -321,8 +390,11 @@ func (s *scannerService) listenToReports(chReports <-chan scanner.Report) {
 			})
 		}
 
-		if len(newUtxos) > 0 && !s.deliverUtxos(newUtxos) {
-			return
+		if len(newUtxos) > 0 {
+			s.pendingPush(uint32(blockHeight))
+			if !s.deliverUtxos(newUtxos) {
+				return
+			}
 		}
 	}
 }

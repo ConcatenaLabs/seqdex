@@ -81,7 +81,7 @@ func TestAScannerTakesItsAccountsBirthday(t *testing.T) {
 	if len(f.starts) != 1 || f.starts[0] != 191900 {
 		t.Fatalf("a scanner made without a birthday watches from %v, not its birthday 191900", f.starts)
 	}
-	if sc.adoptBirthday(5, 5) || sc.startingBlockHeight != 191900 {
+	if sc.adoptBirthday(5, 5, nil) || sc.startingBlockHeight != 191900 {
 		t.Fatalf("a known birthday is kept: %d", sc.startingBlockHeight)
 	}
 }
