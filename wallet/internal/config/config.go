@@ -85,6 +85,13 @@ const (
 	// are catching up with the chain (after a restart, or for an account made with a birthday
 	// far back); a scanner following the tip never waits.
 	ScanCatchUpParallelKey = "SCAN_CATCHUP_PARALLEL"
+	// StoreReadsParallelKey is how many reads of an account's coins or balance the badger
+	// store runs at once; more wait their turn, and leave when their caller does.
+	StoreReadsParallelKey = "STORE_READS_PARALLEL"
+	// RebuildAccountIndexKey makes the badger store index each account's unspent coins again
+	// when it opens. Set it for the one start that follows a run of a build without the
+	// index on the same store.
+	RebuildAccountIndexKey = "REBUILD_ACCOUNT_INDEX"
 	// PasswordKey is the key to set the password for auto-init/auto-unlock.
 	PasswordKey = "PASSWORD"
 	// MnemonicKey is the key to set the mnemonic for auto-init.
@@ -161,6 +168,8 @@ func init() {
 	vip.SetDefault(ElectrumUrlKey, defaultElectrumUrl)
 	vip.SetDefault(DustAmountKey, defaultDustAmount)
 	vip.SetDefault(ScanCatchUpParallelKey, 4)
+	vip.SetDefault(StoreReadsParallelKey, 8)
+	vip.SetDefault(RebuildAccountIndexKey, false)
 
 	if err := validate(); err != nil {
 		log.Fatalf("invalid config: %s", err)
