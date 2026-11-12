@@ -45,4 +45,8 @@ jobs:
         run: go test $(go list ./... | grep -v '/test/e2e')
       - name: wallet tests
         working-directory: wallet
-        run: go test ./...
+        # the packages that read the daemon's configuration stop at start-up without a native
+        # asset; any 32-byte hex serves the tests
+        env:
+          OCEAN_NATIVE_ASSET: abababababababababababababababababababababababababababababababab
+        run: OCEAN_DATADIR=$(mktemp -d) go test ./...
