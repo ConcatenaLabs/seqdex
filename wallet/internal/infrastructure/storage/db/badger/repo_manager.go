@@ -62,6 +62,9 @@ func NewRepoManager(baseDbDir string, logger badger.Logger) (ports.RepoManager, 
 	}
 
 	utxoRepo := newUtxoRepository(utxoDb)
+	if err := utxoRepo.ensureAccountIndex(rebuildAccountIndex); err != nil {
+		return nil, fmt.Errorf("indexing the utxo db: %w", err)
+	}
 	stateFile := ""
 	if len(baseDbDir) > 0 {
 		stateFile = filepath.Join(baseDbDir, "wallet.state")

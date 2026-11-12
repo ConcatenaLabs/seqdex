@@ -18,6 +18,7 @@ type utxoRepository struct {
 	chEvents         chan domain.UtxoEvent
 	externalChEvents chan domain.UtxoEvent
 	lock             *sync.Mutex
+	reads            readSlots
 
 	log func(format string, a ...interface{})
 }
@@ -34,7 +35,7 @@ func newUtxoRepository(store *badgerhold.Store) *utxoRepository {
 		format = fmt.Sprintf("utxo repository: %s", format)
 		log.Debugf(format, a...)
 	}
-	return &utxoRepository{store, chEvents, externalChEvents, lock, logFn}
+	return &utxoRepository{store, chEvents, externalChEvents, lock, newReadSlots(), logFn}
 }
 
 func (r *utxoRepository) AddUtxos(
@@ -60,10 +61,14 @@ func (r *utxoRepository) GetUtxosByKey(
 	return utxos, nil
 }
 
+// GetAllUtxos, GetSpendableUtxos and GetAllUtxosForAccount read every coin in the store
+// (the last, spent ones included, which only the store as a whole holds); nothing the
+// daemon serves calls them. The reads of an account's unspent coins below use the index.
+
 func (r *utxoRepository) GetAllUtxos(
 	ctx context.Context,
 ) ([]*domain.Utxo, error) {
-	return r.getAllUtxos(ctx)
+	return r.scanUtxos(ctx, nil)
 }
 
 func (r *utxoRepository) GetSpendableUtxos(
@@ -72,7 +77,7 @@ func (r *utxoRepository) GetSpendableUtxos(
 	query := badgerhold.Where("SpentStatus").Eq(domain.UtxoStatus{}).
 		And("LockTimestamp").Eq(int64(0))
 
-	return r.findUtxos(ctx, query)
+	return r.scanUtxos(ctx, query)
 }
 
 func (r *utxoRepository) GetAllUtxosForAccount(
@@ -80,77 +85,48 @@ func (r *utxoRepository) GetAllUtxosForAccount(
 ) ([]*domain.Utxo, error) {
 	query := badgerhold.Where("AccountName").Eq(accountName)
 
-	return r.findUtxos(ctx, query)
+	return r.scanUtxos(ctx, query)
 }
 
 func (r *utxoRepository) GetSpendableUtxosForAccount(
 	ctx context.Context, accountName string, scripts [][]byte,
 ) ([]*domain.Utxo, error) {
-	query := badgerhold.Where("SpentStatus").Eq(domain.UtxoStatus{}).
-		And("LockTimestamp").Eq(int64(0)).And("AccountName").Eq(accountName)
-
-	utxos, err := r.findUtxos(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(scripts) <= 0 {
-		return utxos, nil
-	}
-
-	filteredUtxos := make([]*domain.Utxo, 0, len(utxos))
-	for _, u := range utxos {
-		for _, script := range scripts {
-			if bytes.Equal(u.Script, script) {
-				filteredUtxos = append(filteredUtxos, u)
-				break
-			}
-		}
-	}
-	return filteredUtxos, nil
+	return r.accountUtxos(ctx, accountName, func(u *domain.Utxo) bool {
+		return !u.IsLocked() && hasScript(u, scripts)
+	})
 }
 
 func (r *utxoRepository) GetLockedUtxosForAccount(
 	ctx context.Context, accountName string, scripts [][]byte,
 ) ([]*domain.Utxo, error) {
-	query := badgerhold.Where("SpentStatus").Eq(domain.UtxoStatus{}).
-		And("LockTimestamp").Gt(int64(0)).And("AccountName").Eq(accountName)
+	return r.accountUtxos(ctx, accountName, func(u *domain.Utxo) bool {
+		return u.IsLocked() && hasScript(u, scripts)
+	})
+}
 
-	utxos, err := r.findUtxos(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-
+// hasScript is whether `u` pays one of `scripts`, or any script when none is given.
+func hasScript(u *domain.Utxo, scripts [][]byte) bool {
 	if len(scripts) <= 0 {
-		return utxos, nil
+		return true
 	}
-
-	filteredUtxos := make([]*domain.Utxo, 0, len(utxos))
-	for _, u := range utxos {
-		for _, script := range scripts {
-			if bytes.Equal(u.Script, script) {
-				filteredUtxos = append(filteredUtxos, u)
-				break
-			}
+	for _, script := range scripts {
+		if bytes.Equal(u.Script, script) {
+			return true
 		}
 	}
-	return filteredUtxos, nil
+	return false
 }
 
 func (r *utxoRepository) GetBalanceForAccount(
 	ctx context.Context, accountName string,
 ) (map[string]*domain.Balance, error) {
-	utxos, err := r.GetAllUtxosForAccount(ctx, accountName)
+	utxos, err := r.accountUtxos(ctx, accountName, func(*domain.Utxo) bool { return true })
 	if err != nil {
 		return nil, err
 	}
 
 	balance := make(map[string]*domain.Balance)
 	for _, u := range utxos {
-		if u.IsSpent() {
-			continue
-		}
-
 		if _, ok := balance[u.Asset]; !ok {
 			balance[u.Asset] = &domain.Balance{}
 		}
@@ -200,21 +176,36 @@ func (r *utxoRepository) UnlockUtxos(
 	return r.unlockUtxos(ctx, utxoKeys)
 }
 
+// DeleteUtxosForAccount deletes every coin of the account, spent ones included, with its
+// index keys, in one transaction.
 func (r *utxoRepository) DeleteUtxosForAccount(
 	ctx context.Context, accountName string,
 ) error {
-	query := badgerhold.Where("AccountName").Eq(accountName)
-
-	utxos, err := r.findUtxos(ctx, query)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	utxoKeys := make([]domain.UtxoKey, 0, len(utxos))
-	for _, u := range utxos {
-		utxoKeys = append(utxoKeys, u.Key())
-	}
-	return r.deleteUtxos(ctx, utxoKeys)
+	return r.write(ctx, func(tx *badger.Txn) error {
+		query := badgerhold.Where("AccountName").Eq(accountName)
+		if err := r.store.TxDeleteMatching(tx, &domain.Utxo{}, query); err != nil {
+			return err
+		}
+		prefix := accountIndexPrefixOf(accountName)
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false
+		opts.Prefix = prefix
+		it := tx.NewIterator(opts)
+		var keys [][]byte
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			keys = append(keys, it.Item().KeyCopy(nil))
+		}
+		it.Close()
+		for _, k := range keys {
+			if err := tx.Delete(k); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (r *utxoRepository) GetEventChannel() chan domain.UtxoEvent {
@@ -245,10 +236,6 @@ func (r *utxoRepository) addUtxos(
 	}
 
 	return count, nil
-}
-
-func (r *utxoRepository) getAllUtxos(ctx context.Context) ([]*domain.Utxo, error) {
-	return r.findUtxos(ctx, nil)
 }
 
 func (r *utxoRepository) spendUtxos(
@@ -511,9 +498,31 @@ func (r *utxoRepository) unlockUtxo(
 	return true, &utxoInfo, nil
 }
 
+// scanUtxos runs a query over the whole store, in a read slot, and stops once its caller has
+// gone.
+func (r *utxoRepository) scanUtxos(
+	ctx context.Context, query *badgerhold.Query,
+) ([]*domain.Utxo, error) {
+	done, err := r.reads.take(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	stopped := func(*badgerhold.RecordAccess) (bool, error) {
+		return true, ctx.Err()
+	}
+	if query == nil {
+		return r.findUtxos(ctx, badgerhold.Where("TxID").MatchFunc(stopped))
+	}
+	return r.findUtxos(ctx, query.And("TxID").MatchFunc(stopped))
+}
+
 func (r *utxoRepository) findUtxos(
 	ctx context.Context, query *badgerhold.Query,
 ) ([]*domain.Utxo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var list []domain.Utxo
 	var utxos []*domain.Utxo
 	var err error
@@ -578,74 +587,63 @@ func (r *utxoRepository) storedAt(ctx context.Context, key domain.UtxoKey) (*dom
 	return &utxo, true, nil
 }
 
+// updateUtxo replaces the stored record of `utxo` and its index key, in one transaction.
 func (r *utxoRepository) updateUtxo(
 	ctx context.Context, utxo *domain.Utxo,
 ) error {
 	key := utxo.Key()
-	// Replaced under its key's hash, where it is stored, unless that holds another output's.
-	if found, held, err := r.storedAt(ctx, key); err != nil {
-		return err
-	} else if found != nil {
-		if tx, ok := ctx.Value("tx").(*badger.Txn); ok {
-			return r.store.TxUpdate(tx, key.Hash(), *utxo)
+	return r.write(ctx, func(tx *badger.Txn) error {
+		txCtx := context.WithValue(ctx, "tx", tx)
+		// Replaced under its key's hash, where it is stored, unless that holds another output's.
+		found, held, err := r.storedAt(txCtx, key)
+		if err != nil {
+			return err
 		}
-		return r.store.Update(key.Hash(), *utxo)
-	} else if !held {
-		return nil
-	}
-	query := badgerhold.Where("TxID").Eq(key.TxID).And("VOut").Eq(key.VOut)
-	if ctx.Value("tx") != nil {
-		tx := ctx.Value("tx").(*badger.Txn)
-		return r.store.TxUpdateMatching(
+		if found != nil {
+			if err := r.store.TxUpdate(tx, key.Hash(), *utxo); err != nil {
+				return err
+			}
+			return indexUtxo(tx, found, utxo)
+		}
+		if !held {
+			return nil
+		}
+		var was *domain.Utxo
+		query := badgerhold.Where("TxID").Eq(key.TxID).And("VOut").Eq(key.VOut)
+		if err := r.store.TxUpdateMatching(
 			tx, domain.Utxo{}, query, func(record interface{}) error {
 				u := record.(*domain.Utxo)
+				prev := *u
+				was = &prev
 				*u = *utxo
 				return nil
 			},
-		)
-	}
-
-	return r.store.UpdateMatching(domain.Utxo{}, query, func(record interface{}) error {
-		u := record.(*domain.Utxo)
-		*u = *utxo
-		return nil
+		); err != nil {
+			return err
+		}
+		if was == nil {
+			return nil
+		}
+		return indexUtxo(tx, was, utxo)
 	})
 }
 
 func (r *utxoRepository) insertUtxo(
 	ctx context.Context, utxo *domain.Utxo,
 ) (bool, error) {
-	var err error
-	if ctx.Value("tx") != nil {
-		tx := ctx.Value("tx").(*badger.Txn)
-		err = r.store.TxInsert(tx, utxo.Key().Hash(), *utxo)
-	} else {
-		err = r.store.Insert(utxo.Key().Hash(), *utxo)
-	}
+	err := r.write(ctx, func(tx *badger.Txn) error {
+		if err := r.store.TxInsert(tx, utxo.Key().Hash(), *utxo); err != nil {
+			return err
+		}
+		return indexUtxo(tx, nil, utxo)
+	})
 	if err != nil {
-		if err == badgerhold.ErrKeyExists {
+		if errors.Is(err, badgerhold.ErrKeyExists) {
 			return false, nil
 		}
 		return false, err
 	}
 	return true, nil
-}
-
-func (r *utxoRepository) deleteUtxos(
-	ctx context.Context, keys []domain.UtxoKey,
-) error {
-	query := &badgerhold.Query{}
-	for _, key := range keys {
-		qq := badgerhold.Where("TxID").Eq(key.TxID).And("VOut").Eq(key.VOut)
-		query = query.Or(qq)
-	}
-
-	if ctx.Value("tx") != nil {
-		tx := ctx.Value("tx").(*badger.Txn)
-		return r.store.TxDeleteMatching(tx, &domain.Utxo{}, query)
-	}
-
-	return r.store.DeleteMatching(&domain.Utxo{}, query)
 }
 
 func (r *utxoRepository) publishEvent(event domain.UtxoEvent) {

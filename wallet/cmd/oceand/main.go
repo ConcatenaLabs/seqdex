@@ -16,6 +16,7 @@ import (
 	elements_scanner "github.com/aejkcs50/seqdex/wallet/internal/infrastructure/blockchain-scanner/elements"
 	neutrino_scanner "github.com/aejkcs50/seqdex/wallet/internal/infrastructure/blockchain-scanner/neutrino"
 	"github.com/aejkcs50/seqdex/wallet/internal/infrastructure/blockchain-scanner/scanner"
+	dbbadger "github.com/aejkcs50/seqdex/wallet/internal/infrastructure/storage/db/badger"
 	postgresdb "github.com/aejkcs50/seqdex/wallet/internal/infrastructure/storage/db/postgres"
 	"github.com/aejkcs50/seqdex/wallet/internal/interfaces"
 	grpc_interface "github.com/aejkcs50/seqdex/wallet/internal/interfaces/grpc"
@@ -59,6 +60,8 @@ var (
 	walletPassword     = config.GetString(config.PasswordKey)
 	walletMnemonic     = config.GetString(config.MnemonicKey)
 	scanCatchUp        = config.GetInt(config.ScanCatchUpParallelKey)
+	storeReads         = config.GetInt(config.StoreReadsParallelKey)
+	rebuildIndex       = config.GetBool(config.RebuildAccountIndexKey)
 )
 
 func main() {
@@ -86,6 +89,8 @@ func main() {
 		ExtraIPs:     tlsExtraIPs,
 		ExtraDomains: tlsExtraDomains,
 	}
+	dbbadger.SetStoreReadsParallel(storeReads)
+	dbbadger.SetRebuildAccountIndex(rebuildIndex)
 	repoManagerConfig := dbConfigFromType()
 	appCfg := &appconfig.AppConfig{
 		Version:                 version,

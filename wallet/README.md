@@ -77,6 +77,17 @@ Elements code, untouched. What changed:
   unlock, a lock) is not written at all. Every five minutes the daemon also
   collects the badger value logs, file after file while each has half its bytes
   discarded.
+- **An account's reads cost its own coins**: the badger store keeps an index of
+  each account's unspent coins, written in the same transaction as every coin,
+  so a balance, spendable-coin or locked-coin read walks that account's
+  unspent coins and nothing else, however many coins the store holds. A store
+  written without the index is indexed once when it opens, in one pass over
+  its coins, before the scanners and the gRPC server start; the log gives the
+  number of coins and the time it took. A read stops when its caller goes away,
+  and at most `OCEAN_STORE_READS_PARALLEL` reads run at once (more wait their
+  turn, and leave when their caller does). A build without the index writes
+  coins without their index keys, so after one has run on a store, start this
+  build once with `OCEAN_REBUILD_ACCOUNT_INDEX=true`.
 
 ## Configuration
 
@@ -93,14 +104,20 @@ Env-only, prefix `OCEAN_` (full list in `internal/config/config.go`):
 | `OCEAN_DATADIR`, `OCEAN_DB_TYPE` | state directory, `badger`/`inmemory`/`postgres` | `~/.seqdex-wallet`, `badger` |
 | `OCEAN_NO_TLS` | disable TLS (dev) | `false` |
 | `OCEAN_SCAN_CATCHUP_PARALLEL` | how many accounts' scanners read blocks at once while more than six blocks behind the tip | `4` |
+| `OCEAN_STORE_READS_PARALLEL` | how many reads of an account's coins or balance the badger store runs at once | `8` |
+| `OCEAN_REBUILD_ACCOUNT_INDEX` | index each account's unspent coins again at this start (after a build without the index ran on the store) | `false` |
 | `OCEAN_PROFILER_PORT`, `OCEAN_NO_PROFILER` | the pprof port (`/debug/pprof/`), or no profiler | `18001`, `false` |
 
 The Go runtime reads two variables of its own that matter under a service
 manager's limits. `go.mod` names Go 1.18, so the runtime does not size itself
 to a CPU quota: set `GOMAXPROCS` to the quota's cores, or the process runs as
 many threads as the machine has cores and is throttled most of each period.
-Set `GOMEMLIMIT` below a memory threshold such as systemd's `MemoryHigh`, so
-the collector works harder before the kernel starts stalling the process.
+Set `GOMEMLIMIT` to about three quarters of a hard memory limit such as
+systemd's `MemoryMax`, so the collector works harder well before the limit.
+Give the unit a hard limit only (`MemoryMax`, with `MemoryHigh` left unset):
+past `MemoryHigh` the kernel throttles the process instead of killing it, and
+a throttled daemon accepts connections without answering them for hours,
+where a killed one is restarted in seconds.
 
 ## Build and run
 
