@@ -8,8 +8,8 @@ package main
 // client.RunMakerRestrictedSell (side sell: the taker pays BTC) or
 // RunMakerRestrictedBuy (side buy: the maker pays BTC), one at a time, whole
 // fills only; the state of every lift is written under -xstate-dir before each
-// step it depends on. After a fill the maker exits for its supervisor to quote
-// again, as the cross maker does.
+// step it depends on. After a fill the maker posts its next quote itself
+// (restricted_serve.go).
 
 import (
 	"encoding/hex"
@@ -191,7 +191,7 @@ func runRestrictedMaker(cfg restrictedMakerConfig) {
 		return &client.LiveXcOps{Swap: xchain.NewSwapBitcoin(btcChain, seqChain, xchain.NewHashLockFromHash(h)), BTC: btcChain, SEQ: seqChain}, nil
 	}
 	srv := &restrictedServer{relay: c.relay, wsURL: wsURL, key: c.makerKey, expiry: c.expiry, whole: c.assetAmt, ws: ws,
-		quote: quote, exit: os.Exit,
+		quote: quote, exit: os.Exit, retryPause: time.Minute,
 		lift: func(sid string, o *seqobv1.Offer, cr *client.Crypter, in chan []byte, send func([]byte) error) (string, bool, error) {
 			r := &client.RestrictedSwap{Party: party, Crypter: cr, BtcMedianTime: btcMTP,
 				Value: c.assetAmt, BtcAmount: c.btcAmt, PotAsset: cfg.potAsset, PotAmount: cfg.potAmount,

@@ -361,8 +361,10 @@ one; the relay grants makers no special standing. Its settlement modes:
   home to a fresh v1 address of it), which pays the pot and the
   Sequentia fees, at `-rfa-per-vb`). `-side sell` sells the asset held at the
   enclave; `-side buy` buys it with BTC. Whole fills, one lift at a time; it
-  posts only when the enclave is its key's and holds what it sells, and
-  retires after a fill. With `-quote-asset` an asset instead of the bitcoin
+  posts only when the enclave is its key's and holds what it sells. After a
+  fill it retires the filled offer and posts its next quote, after the same
+  checks; when it cannot (it holds too little), it exits non-zero after a
+  minute for its supervisor to retry. With `-quote-asset` an asset instead of the bitcoin
   sentinel, `-quote-amount` is that asset's atoms and each lift is one
   transaction through the policy server; then only `-xseq-rpc`,
   `-xseq-wallet`, the account flags and `-pot-asset` (the fee asset a held
@@ -431,7 +433,9 @@ one; the relay grants makers no special standing. Its settlement modes:
   (via `-xseq-rpc`/`-xseq-wallet`) and no bitcoind is involved.
 
 `-requote` (cross, lightning, pureln, sub-asset) re-posts a fresh offer under
-the same id after each settled fill instead of exiting.
+the same id after each settled fill. Without it the maker exits once its offer
+is filled whole and nothing is in flight, and its supervisor runs it again at
+the current price.
 
 Common flags: `-relay`, `-maker-priv` (32-byte hex identity/E2E key, generated
 if empty), `-base`, `-quote`, `-side sell|buy`, `-base-amount`,

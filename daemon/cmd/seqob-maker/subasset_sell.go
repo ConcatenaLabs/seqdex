@@ -312,6 +312,7 @@ func serveSubAssetSell(ws *crossWS, wsURL string, o *seqobv1.Offer, cfg subAsset
 					mu.Unlock()
 					if settled && !partial && !cfg.requote {
 						cancelOffer(cfg.relay, o, cfg.makerKey)
+						exitAfterFill(idle)
 					}
 					requoteExitIfPending(idle)
 				}()

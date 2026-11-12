@@ -1771,6 +1771,7 @@ func serveCross(ws *crossWS, wsURL string, o *seqobv1.Offer, cfg crossMakerConfi
 					mu.Unlock()
 					if settled && !partial && !cfg.requote {
 						cancelOffer(cfg.relay, o, cfg.makerKey)
+						exitAfterFill(idle)
 					}
 					requoteExitIfPending(idle)
 				}()
@@ -2428,10 +2429,22 @@ func reportSettledTrade(ws *crossWS, o *seqobv1.Offer, key *btcec.PrivateKey, fi
 // This is the NON-requote terminal path: the maker quotes once and exits.
 func cancelOffer(relay string, o *seqobv1.Offer, key *btcec.PrivateKey) {
 	if err := postCancel(relay, o, key); err != nil {
+		if cancelAlreadyGone(err) {
+			fmt.Printf("offer %s already retired by the relay after its fill\n", o.GetOfferId())
+			return
+		}
 		fmt.Printf("cancel offer: %v\n", err)
 		return
 	}
-	fmt.Printf("offer %s cancelled after fill (restart the maker to re-quote)\n", o.GetOfferId())
+	fmt.Printf("offer %s cancelled after fill\n", o.GetOfferId())
+}
+
+// cancelAlreadyGone reports the relay's answer to cancelling an offer it no longer holds
+// (409, "offer <maker>/<id> not found"): after a fill it has usually retired the offer
+// itself, so the cancel has nothing left to do.
+func cancelAlreadyGone(err error) bool {
+	m := err.Error()
+	return strings.HasPrefix(m, "status 409:") && strings.Contains(m, " not found")
 }
 
 // withdrawStale cancels every offer of maker `pub` on the pair base/quote (both orientations)

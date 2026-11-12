@@ -6,7 +6,7 @@ package main
 // is one transaction moving both legs, checked by the asset's policy server
 // before anyone signs and broadcast by it once both have
 // (client.RunMakerRestrictedDvP). Whole fills, one lift at a time; after a
-// fill the maker retires the offer and exits for its supervisor to quote again.
+// fill the maker retires the offer and posts its next quote (restricted_serve.go).
 
 import (
 	"fmt"
@@ -142,7 +142,7 @@ func runRestrictedDvPMaker(cfg restrictedMakerConfig, assetB string) {
 	fmt.Printf("seqob-maker up (RESTRICTED, asset quote): posted %s offer %s: %d %s for %d %s, account %s at %s\n",
 		side, o.GetOfferId(), c.assetAmt, c.asset, c.btcAmt, assetB, cfg.aid, cfg.policyServer)
 	srv := &restrictedServer{relay: c.relay, wsURL: wsURL, key: c.makerKey, expiry: c.expiry, whole: c.assetAmt, ws: ws,
-		quote: quote, exit: os.Exit,
+		quote: quote, exit: os.Exit, retryPause: time.Minute,
 		lift: func(sid string, o *seqobv1.Offer, cr *client.Crypter, in chan []byte, send func([]byte) error) (string, bool, error) {
 			qmu.Lock()
 			recv := recvOf[o.GetOfferId()]

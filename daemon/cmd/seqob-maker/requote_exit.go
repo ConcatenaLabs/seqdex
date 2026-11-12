@@ -107,3 +107,11 @@ func requoteExitIfPending(idle func() bool) {
 		os.Exit(0)
 	}
 }
+
+// exitAfterFill ends a maker whose offer was filled whole and is not quoted again in the
+// process (no -requote): its supervisor runs it again at the current price. Such a maker
+// used to wait for its websocket to fail before exiting, and on a healthy connection sat
+// with no offer, which the book shows as no one buying or selling (seqdex #165).
+func exitAfterFill(idle func() bool) {
+	requoteExitIfIdle("offer filled", idle)
+}
