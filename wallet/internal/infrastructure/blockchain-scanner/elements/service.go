@@ -32,7 +32,9 @@ type service struct {
 	headersRepo repository.BlockHeaderRepository
 	lock        *sync.RWMutex
 
-	quit      chan struct{}
+	quit chan struct{}
+	// tip, when set, gives the node's tip height in place of the headers repository (tests)
+	tip func() (uint32, error)
 	// checkpoints: each account's scanned height as the last run saved it (CheckpointFile)
 	checkpoints map[string]uint32
 }
@@ -164,20 +166,30 @@ func loadCheckpoints(path string) map[string]uint32 {
 }
 
 // saveCheckpoints writes every account's lowest unscanned height (written whole, then renamed).
+// An account the wallet holds no scanner for at the moment keeps the height saved for it: the
+// wallet holds none while it is locked, and before it holds them all as it unlocks, so a save
+// then would otherwise erase the heights of every account it has not opened yet, and each of
+// them would scan again from its birth at the next start.
 func (s *service) saveCheckpoints() {
 	if s.args.CheckpointFile == "" {
 		return
 	}
-	s.lock.RLock()
-	out := map[string]uint32{}
+	s.lock.Lock()
+	if s.checkpoints == nil {
+		s.checkpoints = map[string]uint32{}
+	}
 	for name, sc := range s.scanners {
 		if p, ok := sc.svc.(interface{ LowestUnscanned() (uint32, bool) }); ok {
 			if h, ok := p.LowestUnscanned(); ok {
-				out[name] = h
+				s.checkpoints[name] = h
 			}
 		}
 	}
-	s.lock.RUnlock()
+	out := make(map[string]uint32, len(s.checkpoints))
+	for name, h := range s.checkpoints {
+		out[name] = h
+	}
+	s.lock.Unlock()
 	b, _ := json.Marshal(out)
 	tmp := s.args.CheckpointFile + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err == nil {
@@ -215,6 +227,35 @@ func (s *service) WatchForAccount(
 	scannerSvc.watchAddresses(addressesInfo)
 }
 
+// WatchNewAddresses watches addresses the account has just derived. Nothing can have paid an
+// address before it existed, so its watch starts at the tip less the margin (a reorg of the last
+// blocks, and a payment mined in the moment between the derive and this call, are still seen),
+// never at the height the wallet started from: a watch set there made the account scan every
+// block since its start again for each address it derived, held its saved height back there,
+// and a wallet up for days spent its cores on those passes and resumed days back after a restart.
+func (s *service) WatchNewAddresses(
+	accountName string, birthday uint32, addressesInfo []domain.AddressInfo,
+) {
+	scannerSvc := s.getOrCreateScanner(accountName, birthday)
+	start := scannerSvc.startFor()
+	if tip, err := s.tipHeight(); err == nil && tip > checkpointMargin && tip-checkpointMargin > start {
+		start = tip - checkpointMargin
+	}
+	scannerSvc.watchAddressesFrom(addressesInfo, start)
+}
+
+// tipHeight is the node's tip, as the scanners read it (cached for a second).
+func (s *service) tipHeight() (uint32, error) {
+	if s.tip != nil {
+		return s.tip()
+	}
+	if s.headersRepo == nil {
+		return 0, fmt.Errorf("no headers repository")
+	}
+	_, h, err := s.GetLatestBlock()
+	return h, err
+}
+
 func (s *service) WatchForUtxos(
 	accountName string, utxos []domain.UtxoInfo,
 ) {
@@ -233,6 +274,11 @@ func (s *service) StopWatchForAccount(accountName string) {
 	scannerSvc := s.getOrCreateScanner(accountName, 0)
 	scannerSvc.stop()
 	s.removeScanner(accountName)
+	// a deleted account's saved height goes with it: an account made later under the same name
+	// starts at its own birthday
+	s.lock.Lock()
+	delete(s.checkpoints, accountName)
+	s.lock.Unlock()
 }
 
 func (s *service) GetUtxos(utxoList []domain.Utxo) ([]domain.Utxo, error) {
