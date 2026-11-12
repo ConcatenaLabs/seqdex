@@ -80,6 +80,18 @@ var (
 // setBusyFn is called by whichever serve loop is running.
 func setBusyFn(f func() int) { busyFn.Store(f) }
 
+// exitHook, when set, runs before a shutdown by signal ends the process: a maker that
+// serves one quote at a time withdraws it there, so no quote outlives its process.
+var exitHook atomic.Value // func()
+
+func setExitHook(f func()) { exitHook.Store(f) }
+
+func runExitHook() {
+	if f, ok := exitHook.Load().(func()); ok && f != nil {
+		f()
+	}
+}
+
 func inFlightSwaps() int {
 	if f, ok := busyFn.Load().(func() int); ok && f != nil {
 		return f()
@@ -122,6 +134,7 @@ func armGracefulShutdown(cap time.Duration) {
 		n := inFlightSwaps()
 		if n == 0 {
 			fmt.Printf("%v: no swap in flight; exiting cleanly\n", sig)
+			runExitHook()
 			os.Exit(0)
 		}
 		fmt.Printf("%v: %d swap(s) IN FLIGHT — refusing new lifts and draining before exit"+
@@ -131,11 +144,13 @@ func armGracefulShutdown(cap time.Duration) {
 			time.Sleep(3 * time.Second)
 			if n = inFlightSwaps(); n == 0 {
 				fmt.Printf("drain complete; exiting cleanly\n")
+				runExitHook()
 				os.Exit(0)
 			}
 		}
 		fmt.Printf("drain cap %s reached with %d swap(s) still in flight; exiting anyway"+
 			" (operator: check for a wedged session)\n", cap, n)
+		runExitHook()
 		os.Exit(0)
 	}()
 }
@@ -492,7 +507,7 @@ func main() {
 	for _, lo := range ladder {
 		keep[lo.GetOfferId()] = true
 	}
-	if n := withdrawStale(*relay, o.GetPair().GetBaseAsset(), o.GetPair().GetQuoteAsset(), makerPubHex, keep, makerKey); n > 0 {
+	if n := withdrawStale(*relay, o.GetPair().GetBaseAsset(), o.GetPair().GetQuoteAsset(), makerPubHex, keep, makerKey, nil); n > 0 {
 		fmt.Printf("withdrew %d offer(s) an earlier run of this maker left on the relay\n", n)
 	}
 	fmt.Printf("seqob-maker up: posted %s offer %s (+%d ladder levels) by maker %s\n", *side, o.GetOfferId(), len(ladder)-1, makerPubHex)
@@ -2447,9 +2462,22 @@ func cancelAlreadyGone(err error) bool {
 	return strings.HasPrefix(m, "status 409:") && strings.Contains(m, " not found")
 }
 
+// bookOffer is what withdrawStale reads of an offer in the relay's book.
+type bookOffer struct {
+	OfferID     string          `json:"offer_id"`
+	MakerPubkey string          `json:"maker_pubkey"`
+	TradeDir    string          `json:"trade_dir"`
+	Restricted  json.RawMessage `json:"restricted"`
+	GatedOrder  json.RawMessage `json:"gated_order"`
+}
+
+// present reports whether a JSON field was given a value.
+func present(m json.RawMessage) bool { return len(m) > 0 && string(m) != "null" }
+
 // withdrawStale cancels every offer of maker `pub` on the pair base/quote (both orientations)
-// that `keep` does not name, and returns how many it withdrew.
-func withdrawStale(relay, base, quote, pub string, keep map[string]bool, key *btcec.PrivateKey) int {
+// that `keep` does not name and `only` (nil: every offer) accepts, and returns how many it
+// withdrew.
+func withdrawStale(relay, base, quote, pub string, keep map[string]bool, key *btcec.PrivateKey, only func(bookOffer) bool) int {
 	n := 0
 	for _, bq := range [][2]string{{base, quote}, {quote, base}} {
 		resp, err := http.Get(fmt.Sprintf("%s/v1/market/%s/%s/orderbook", relay, bq[0], bq[1]))
@@ -2459,16 +2487,13 @@ func withdrawStale(relay, base, quote, pub string, keep map[string]bool, key *bt
 		body, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
 		var book struct {
-			Offers []struct {
-				OfferID     string `json:"offer_id"`
-				MakerPubkey string `json:"maker_pubkey"`
-			} `json:"offers"`
+			Offers []bookOffer `json:"offers"`
 		}
 		if json.Unmarshal(body, &book) != nil {
 			continue
 		}
 		for _, of := range book.Offers {
-			if !strings.EqualFold(of.MakerPubkey, pub) || keep[of.OfferID] {
+			if !strings.EqualFold(of.MakerPubkey, pub) || keep[of.OfferID] || (only != nil && !only(of)) {
 				continue
 			}
 			if err := postCancel(relay, &seqobv1.Offer{OfferId: of.OfferID}, key); err == nil {
