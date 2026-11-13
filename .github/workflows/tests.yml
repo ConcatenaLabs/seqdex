@@ -43,6 +43,13 @@ jobs:
       - name: daemon tests
         working-directory: daemon
         run: go test $(go list ./... | grep -v '/test/e2e')
+      - name: explorer tests
+        # pkg/explorer is a module of its own, which the daemon's `./...` leaves out; the
+        # daemon's module builds it through its replace directive
+        working-directory: daemon
+        run: |
+          go test github.com/aejkcs50/seqdex/daemon/pkg/explorer
+          go test -race -run 'Concurrent|Deterministic' github.com/aejkcs50/seqdex/daemon/pkg/explorer
       - name: wallet tests
         working-directory: wallet
         # the packages that read the daemon's configuration stop at start-up without a native
