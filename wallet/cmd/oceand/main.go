@@ -20,6 +20,7 @@ import (
 	postgresdb "github.com/aejkcs50/seqdex/wallet/internal/infrastructure/storage/db/postgres"
 	"github.com/aejkcs50/seqdex/wallet/internal/interfaces"
 	grpc_interface "github.com/aejkcs50/seqdex/wallet/internal/interfaces/grpc"
+	grpc_interceptor "github.com/aejkcs50/seqdex/wallet/internal/interfaces/grpc/interceptor"
 	"github.com/aejkcs50/seqdex/wallet/pkg/profiler"
 )
 
@@ -62,6 +63,9 @@ var (
 	scanCatchUp        = config.GetInt(config.ScanCatchUpParallelKey)
 	storeReads         = config.GetInt(config.StoreReadsParallelKey)
 	rebuildIndex       = config.GetBool(config.RebuildAccountIndexKey)
+	listenHost         = config.GetString(config.ListenHostKey)
+	requestsParallel   = config.GetInt(config.RequestsParallelKey)
+	requestWait        = time.Duration(config.GetInt(config.RequestWaitSecondsKey)) * time.Second
 )
 
 func main() {
@@ -83,6 +87,7 @@ func main() {
 
 	bcScannerConfig := buildScannerConfig()
 	serviceCfg := grpc_interface.ServiceConfig{
+		Host:         listenHost,
 		Port:         port,
 		NoTLS:        noTLS,
 		TLSLocation:  tlsDir,
@@ -90,6 +95,8 @@ func main() {
 		ExtraDomains: tlsExtraDomains,
 	}
 	dbbadger.SetStoreReadsParallel(storeReads)
+	dbbadger.SetWalletWriteWait(requestWait)
+	grpc_interceptor.SetHeavyRequestBound(requestsParallel, requestWait)
 	dbbadger.SetRebuildAccountIndex(rebuildIndex)
 	repoManagerConfig := dbConfigFromType()
 	appCfg := &appconfig.AppConfig{

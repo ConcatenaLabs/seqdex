@@ -38,7 +38,8 @@ func (o ServiceOpts) validate() error {
 }
 
 func (o ServiceOpts) address() string {
-	return fmt.Sprintf(":%d", o.Port)
+	// only this host: the profiles name the daemon's code and its memory, for its operator
+	return fmt.Sprintf("127.0.0.1:%d", o.Port)
 }
 
 // ProfilerService is the data structure representing a profiler webserver.
@@ -82,13 +83,18 @@ func (s *ProfilerService) Start() error {
 	// one blocking event sampled per 10 ms spent blocked: a rate of 1 recorded every channel and
 	// lock wait of every scanner, a cost paid on each of them for as long as the wallet ran
 	runtime.SetBlockProfileRate(int(10 * time.Millisecond))
-	go s.server.ListenAndServe()
+	go func() {
+		// a port taken by another program used to leave no trace but the start line below
+		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			s.warn(err, "not listening on %s, no profiles can be read", s.opts.address())
+		}
+	}()
 	ctx, cancelStats := context.WithCancel(context.Background())
 	s.enableMemoryStatistics(ctx, s.opts.Datadir)
 	s.stopFn = cancelStats
 	s.log(
 		log.InfoLevel,
-		"start at url http://localhost:%d/debug/pprof/", s.opts.Port,
+		"start at url http://127.0.0.1:%d/debug/pprof/", s.opts.Port,
 	)
 	return nil
 }

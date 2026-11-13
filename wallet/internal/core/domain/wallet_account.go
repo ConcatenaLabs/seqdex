@@ -57,6 +57,11 @@ type Account struct {
 	NextInternalIndex      uint
 	DerivationPathByScript map[string]string
 	Unconf                 bool
+
+	// ownsPaths is whether DerivationPathByScript belongs to this copy of the account alone.
+	// A view of a wallet (Wallet.View) shares each account's map with the wallet it was taken
+	// from, so a derivation copies the map before it adds to it, once per copy. Not stored.
+	ownsPaths bool
 }
 
 func (a *Account) incrementExternalIndex() (next uint) {
@@ -79,7 +84,16 @@ func (a *Account) incrementInternalIndex() (next uint) {
 }
 
 func (a *Account) addDerivationPath(outputScript, derivationPath string) {
-	if _, ok := a.DerivationPathByScript[outputScript]; !ok {
-		a.DerivationPathByScript[outputScript] = derivationPath
+	if _, ok := a.DerivationPathByScript[outputScript]; ok {
+		return
 	}
+	if !a.ownsPaths {
+		paths := make(map[string]string, len(a.DerivationPathByScript)+1)
+		for k, v := range a.DerivationPathByScript {
+			paths[k] = v
+		}
+		a.DerivationPathByScript = paths
+		a.ownsPaths = true
+	}
+	a.DerivationPathByScript[outputScript] = derivationPath
 }

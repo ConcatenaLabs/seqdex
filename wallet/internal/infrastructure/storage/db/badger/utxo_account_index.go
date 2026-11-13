@@ -10,6 +10,7 @@ import (
 	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
 	"github.com/dgraph-io/badger/v4"
 	log "github.com/sirupsen/logrus"
+	"github.com/timshannon/badgerhold/v4"
 )
 
 // The index of each account's unspent coins.
@@ -180,19 +181,80 @@ func (r *utxoRepository) ensureAccountIndex(rebuild bool) error {
 	return nil
 }
 
-// accountUtxos are `account`'s unspent coins that `keep` keeps, read from the index: the work
-// is the account's own unspent coins, whatever else the store holds. It stops with the
-// caller's error once the caller has gone.
-func (r *utxoRepository) accountUtxos(
-	ctx context.Context, account string, keep func(*domain.Utxo) bool,
-) ([]*domain.Utxo, error) {
-	done, err := r.reads.take(ctx)
+// accountCoin is a coin as an account's reads need it: everything but its range and
+// surjection proofs. Those are needed only to spend a coin, which reads it by its key, and they
+// are most of a confidential coin (about 4.2 KB of its 4.5): decoded into this type they are
+// skipped, not allocated. It is stored as a domain.Utxo, under that type's name.
+type accountCoin struct {
+	domain.UtxoKey
+	Value               uint64
+	Asset               string
+	ValueCommitment     []byte
+	AssetCommitment     []byte
+	ValueBlinder        []byte
+	AssetBlinder        []byte
+	Script              []byte
+	Nonce               []byte
+	AccountName         string
+	LockTimestamp       int64
+	LockExpiryTimestamp int64
+	SpentStatus         domain.UtxoStatus
+	ConfirmedStatus     domain.UtxoStatus
+}
+
+// Type is the name domain.Utxo is stored under, so a read of an accountCoin finds the coin.
+func (*accountCoin) Type() string { return "Utxo" }
+
+// Indexes is never used: an accountCoin is only read, never written.
+func (*accountCoin) Indexes() map[string]badgerhold.Index { return nil }
+
+func (c *accountCoin) utxo() *domain.Utxo {
+	return &domain.Utxo{
+		UtxoKey: c.UtxoKey, Value: c.Value, Asset: c.Asset,
+		ValueCommitment: c.ValueCommitment, AssetCommitment: c.AssetCommitment,
+		ValueBlinder: c.ValueBlinder, AssetBlinder: c.AssetBlinder, Script: c.Script, Nonce: c.Nonce,
+		AccountName: c.AccountName, LockTimestamp: c.LockTimestamp,
+		LockExpiryTimestamp: c.LockExpiryTimestamp, SpentStatus: c.SpentStatus,
+		ConfirmedStatus: c.ConfirmedStatus,
+	}
+}
+
+// accountCoinAt is the coin of `key` without its proofs, or nil (see utxoAt).
+func (r *utxoRepository) accountCoinAt(ctx context.Context, tx *badger.Txn, key domain.UtxoKey) (*domain.Utxo, error) {
+	var c accountCoin
+	err := r.store.TxGet(tx, key.Hash(), &c)
+	if errors.Is(err, badgerhold.ErrNotFound) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
+	if c.TxID == key.TxID && c.VOut == key.VOut {
+		return c.utxo(), nil
+	}
+	// The hash holds another output's coin (256 apart in one transaction): the full read.
+	u, err := r.utxoAt(context.WithValue(ctx, "tx", tx), key)
+	if err != nil || u == nil {
+		return nil, err
+	}
+	u.RangeProof, u.SurjectionProof = nil, nil
+	return u, nil
+}
+
+// eachAccountCoin calls `fn` with each of `account`'s unspent coins, without their proofs,
+// read from the index: the work is the account's own unspent coins, whatever else the store
+// holds, and nothing is kept between two calls of `fn`. It stops with the caller's error once
+// the caller has gone, and runs in one of the store's read slots.
+func (r *utxoRepository) eachAccountCoin(
+	ctx context.Context, account string, fn func(*domain.Utxo),
+) error {
+	done, err := r.reads.take(ctx)
+	if err != nil {
+		return err
+	}
 	defer done()
 
-	read := func(tx *badger.Txn) ([]*domain.Utxo, error) {
+	read := func(tx *badger.Txn) error {
 		prefix := accountIndexPrefixOf(account)
 		keys := make([]domain.UtxoKey, 0)
 		opts := badger.DefaultIteratorOptions
@@ -203,7 +265,7 @@ func (r *utxoRepository) accountUtxos(
 			if len(keys)%readCheckEvery == 0 {
 				if err := ctx.Err(); err != nil {
 					it.Close()
-					return nil, err
+					return err
 				}
 			}
 			if key, ok := utxoKeyOfIndexKey(it.Item().Key(), prefix); ok {
@@ -212,40 +274,45 @@ func (r *utxoRepository) accountUtxos(
 		}
 		it.Close()
 
-		txCtx := context.WithValue(ctx, "tx", tx)
-		utxos := make([]*domain.Utxo, 0, len(keys))
 		for i, key := range keys {
 			if i%readCheckEvery == 0 {
 				if err := ctx.Err(); err != nil {
-					return nil, err
+					return err
 				}
 			}
-			u, err := r.utxoAt(txCtx, key)
+			u, err := r.accountCoinAt(ctx, tx, key)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			// Every write keeps the index with its coin, so this skips nothing; it keeps a
 			// read right should a key outlive its coin all the same.
 			if u == nil || u.IsSpent() || u.AccountName != account {
 				continue
 			}
-			if keep(u) {
-				utxos = append(utxos, u)
-			}
+			fn(u)
 		}
-		return utxos, nil
+		return nil
 	}
 
 	if tx, ok := ctx.Value("tx").(*badger.Txn); ok {
 		return read(tx)
 	}
+	return r.store.Badger().View(read)
+}
+
+// accountUtxos are `account`'s unspent coins that `keep` keeps, without their proofs.
+func (r *utxoRepository) accountUtxos(
+	ctx context.Context, account string, keep func(*domain.Utxo) bool,
+) ([]*domain.Utxo, error) {
 	var utxos []*domain.Utxo
-	err = r.store.Badger().View(func(tx *badger.Txn) error {
-		var err error
-		utxos, err = read(tx)
-		return err
-	})
-	return utxos, err
+	if err := r.eachAccountCoin(ctx, account, func(u *domain.Utxo) {
+		if keep(u) {
+			utxos = append(utxos, u)
+		}
+	}); err != nil {
+		return nil, err
+	}
+	return utxos, nil
 }
 
 // write runs `fn` in the caller's transaction, or in one of its own, retried when it meets a

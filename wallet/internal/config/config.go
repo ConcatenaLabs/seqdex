@@ -88,6 +88,15 @@ const (
 	// StoreReadsParallelKey is how many reads of an account's coins or balance the badger
 	// store runs at once; more wait their turn, and leave when their caller does.
 	StoreReadsParallelKey = "STORE_READS_PARALLEL"
+	// ListenHostKey is the address the wallet's API listens on (default: every interface).
+	// Set it to 127.0.0.1 when every client runs on the same host.
+	ListenHostKey = "LISTEN_HOST"
+	// RequestsParallelKey is how many requests that read a whole account (a balance, a list of
+	// coins or addresses, a coin selection, a spend) run at once; more wait their turn.
+	RequestsParallelKey = "REQUESTS_PARALLEL"
+	// RequestWaitSecondsKey is the longest such a request waits for its turn, and a write of the
+	// wallet for the one before it; then it is refused with an error the client retries.
+	RequestWaitSecondsKey = "REQUEST_WAIT_SECONDS"
 	// RebuildAccountIndexKey makes the badger store index each account's unspent coins again
 	// when it opens. Set it for the one start that follows a run of a build without the
 	// index on the same store.
@@ -170,6 +179,9 @@ func init() {
 	vip.SetDefault(ScanCatchUpParallelKey, 4)
 	vip.SetDefault(StoreReadsParallelKey, 8)
 	vip.SetDefault(RebuildAccountIndexKey, false)
+	vip.SetDefault(ListenHostKey, "")
+	vip.SetDefault(RequestsParallelKey, 16)
+	vip.SetDefault(RequestWaitSecondsKey, 30)
 
 	if err := validate(); err != nil {
 		log.Fatalf("invalid config: %s", err)

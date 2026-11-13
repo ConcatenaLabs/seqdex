@@ -61,6 +61,27 @@ type Wallet struct {
 	NextAccountIndex    uint32
 }
 
+// View is a copy of the wallet that may be changed without changing w: its own maps of
+// accounts and labels, and its own copy of each account. The accounts' maps of derived
+// addresses, which hold most of a wallet's size, are shared with w and copied only by the
+// first derivation that adds to one (Account.addDerivationPath). A view costs the number of
+// accounts, not the number of addresses, so a wallet kept in memory can hand one to every
+// request. Nothing in w is changed through a view.
+func (w *Wallet) View() *Wallet {
+	v := *w
+	v.Accounts = make(map[string]*Account, len(w.Accounts))
+	for k, a := range w.Accounts {
+		c := *a
+		c.ownsPaths = false
+		v.Accounts[k] = &c
+	}
+	v.AccountsByLabel = make(map[string]string, len(w.AccountsByLabel))
+	for k, ns := range w.AccountsByLabel {
+		v.AccountsByLabel[k] = ns
+	}
+	return &v
+}
+
 // GetAccountNamespace generates a unique account namespace from the given root
 // path and account derivation index.
 func GetAccountNamespace(rootPath string, index uint32) string {
