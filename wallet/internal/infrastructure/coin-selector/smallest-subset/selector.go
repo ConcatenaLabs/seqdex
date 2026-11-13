@@ -2,6 +2,8 @@ package smallestsubset_selector
 
 import (
 	"fmt"
+	"math"
+	"math/bits"
 	"sort"
 
 	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
@@ -11,7 +13,26 @@ import (
 var (
 	ErrBlindedUtxos           = fmt.Errorf("error on utxos: all confidential utxos must be already revealed")
 	ErrTargetAmountNotReached = fmt.Errorf("not found enough utxos to cover target amount")
+	// ErrAmountOverflow is returned when the utxos that cover the target total more than a
+	// uint64 holds: their total, and so the change, cannot be given.
+	ErrAmountOverflow = fmt.Errorf("the utxos covering the target amount total more than can be counted")
 )
+
+// addChecked is a+b, and whether it fits in a uint64.
+func addChecked(a, b uint64) (uint64, bool) {
+	sum, carry := bits.Add64(a, b, 0)
+	return sum, carry == 0
+}
+
+// addCapped is a+b, or the largest uint64 when a+b is more than that. Every total it is used
+// for is only ever compared with a target, which is a uint64: a capped total is at least any
+// target, as the true one is.
+func addCapped(a, b uint64) uint64 {
+	if sum, ok := addChecked(a, b); ok {
+		return sum
+	}
+	return math.MaxUint64
+}
 
 type selector struct{}
 
@@ -27,7 +48,9 @@ func (s *selector) SelectUtxos(
 	})
 
 	targetUtxos := make([]*domain.Utxo, 0)
-	balance := uint64(0)
+	// balance is the total of the asset's utxos while it fits in a uint64 (balanceFits). One
+	// that does not fit is more than any target, and never equal to one.
+	balance, balanceFits := uint64(0), true
 	for i := range utxos {
 		utxo := utxos[i]
 		if utxo.IsConfidential() && !utxo.IsRevealed() {
@@ -35,11 +58,13 @@ func (s *selector) SelectUtxos(
 		}
 		if utxo.Asset == targetAsset {
 			targetUtxos = append(targetUtxos, utxo)
-			balance += utxo.Value
+			if balanceFits {
+				balance, balanceFits = addChecked(balance, utxo.Value)
+			}
 		}
 	}
 
-	if targetAmount == balance {
+	if balanceFits && targetAmount == balance {
 		return targetUtxos, 0, nil
 	}
 
@@ -51,8 +76,15 @@ func (s *selector) SelectUtxos(
 	selectedUtxos := make([]*domain.Utxo, 0)
 	totalAmount := uint64(0)
 	for _, v := range indexes {
-		totalAmount += targetUtxos[v].Value
+		var fits bool
+		if totalAmount, fits = addChecked(totalAmount, targetUtxos[v].Value); !fits {
+			return nil, 0, ErrAmountOverflow
+		}
 		selectedUtxos = append(selectedUtxos, targetUtxos[v])
+	}
+	if totalAmount < targetAmount {
+		// never met: what bestCombination selects reaches the target
+		return nil, 0, ErrTargetAmountNotReached
 	}
 
 	change := totalAmount - targetAmount
@@ -97,12 +129,21 @@ func selectUtxos(targetAmount uint64, utxos []*domain.Utxo) []int {
 //   - Otherwise the small values together fall short, no combination fits, and the first that
 //     reaches the target is the smallest value above it, if there is one.
 //
-// selector_internal_test.go checks it against the old enumeration.
+// No total here wraps around. Ten times a target above a tenth of the largest uint64 is more
+// than any value, so every value from the target up fits it. The totals of several values are
+// capped at the largest uint64 (addCapped) and only compared with the target.
+//
+// selector_internal_test.go checks it against the old enumeration, and selector_overflow_test.go
+// against an enumeration that adds without a limit.
 func bestCombination(values []uint64, target uint64) []int {
 	n := len(values)
+	tenTimes := uint64(math.MaxUint64)
+	if target <= math.MaxUint64/10 {
+		tenTimes = target * 10
+	}
 	// the first value of at least `target`
 	firstAtLeast := sort.Search(n, func(i int) bool { return values[i] >= target })
-	if firstAtLeast < n && values[firstAtLeast] <= target*10 {
+	if firstAtLeast < n && values[firstAtLeast] <= tenTimes {
 		return []int{firstAtLeast}
 	}
 
@@ -111,7 +152,7 @@ func bestCombination(values []uint64, target uint64) []int {
 	// tail[j] is the total of the j largest small values
 	tail := make([]uint64, m+1)
 	for j := 1; j <= m; j++ {
-		tail[j] = tail[j-1] + small[m-j]
+		tail[j] = addCapped(tail[j-1], small[m-j])
 	}
 	k := 0
 	for j := 1; j <= m; j++ {
@@ -135,12 +176,12 @@ func bestCombination(values []uint64, target uint64) []int {
 		last := m - rest
 		// the smallest value at a position in [from, last) that still lets the target be reached
 		need := uint64(0)
-		if target > total+tail[rest] {
-			need = target - total - tail[rest]
+		if reached := addCapped(total, tail[rest]); target > reached {
+			need = target - reached
 		}
 		i := from + sort.Search(last-from, func(j int) bool { return small[from+j] >= need })
 		picked = append(picked, i)
-		total += small[i]
+		total = addCapped(total, small[i])
 		from = i + 1
 	}
 	return picked
