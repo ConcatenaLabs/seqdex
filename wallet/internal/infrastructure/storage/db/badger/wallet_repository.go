@@ -50,6 +50,14 @@ type walletRepository struct {
 	// through insertWallet.
 	cacheLock sync.RWMutex
 	cached    *domain.Wallet
+	// cacheDrops counts the times what is kept was dropped. A read of the file runs while
+	// others may write the file or reset the store, and keeps what it read only if nothing was
+	// dropped since it began: otherwise a read that began before a write could put back, after
+	// a later drop, the wallet from before that write, or a wallet after a reset.
+	cacheDrops uint64
+	// loaded, when set, is called by a read of the file after it has read it and before it keeps
+	// what it read (tests).
+	loaded func()
 
 	closed bool // set by close, under lock
 
@@ -360,7 +368,7 @@ func (r *walletRepository) takeWriteLock(ctx context.Context) (func(), error) {
 func (r *walletRepository) getWallet(ctx context.Context) (*domain.Wallet, error) {
 	if r.stateFile != "" && ctx.Value("tx") == nil {
 		r.cacheLock.RLock()
-		w := r.cached
+		w, drops := r.cached, r.cacheDrops
 		r.cacheLock.RUnlock()
 		if w != nil {
 			return w.View(), nil
@@ -369,11 +377,21 @@ func (r *walletRepository) getWallet(ctx context.Context) (*domain.Wallet, error
 		if err != nil {
 			return nil, err
 		}
-		r.cacheLock.Lock()
-		if r.cached == nil {
-			r.cached = w
+		if r.loaded != nil {
+			r.loaded()
 		}
-		w = r.cached
+		r.cacheLock.Lock()
+		switch {
+		case r.cached != nil:
+			// a write, or another read, kept a wallet meanwhile: that one, never an older one
+			w = r.cached
+		case r.cacheDrops == drops:
+			r.cached = w
+		default:
+			// What was kept was dropped while this read ran, so what it read may be from before
+			// the drop. It answers this caller, whose read began before the drop, and is not kept:
+			// the next read reads the file again.
+		}
 		r.cacheLock.Unlock()
 		return w.View(), nil
 	}
@@ -387,9 +405,12 @@ func (r *walletRepository) setCached(w *domain.Wallet) {
 	r.cacheLock.Unlock()
 }
 
+// dropCached forgets the kept wallet, and makes every read of the file running now forget what
+// it read (cacheDrops).
 func (r *walletRepository) dropCached() {
 	r.cacheLock.Lock()
 	r.cached = nil
+	r.cacheDrops++
 	r.cacheLock.Unlock()
 }
 
