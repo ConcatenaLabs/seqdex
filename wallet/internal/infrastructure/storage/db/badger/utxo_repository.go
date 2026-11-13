@@ -120,27 +120,23 @@ func hasScript(u *domain.Utxo, scripts [][]byte) bool {
 func (r *utxoRepository) GetBalanceForAccount(
 	ctx context.Context, accountName string,
 ) (map[string]*domain.Balance, error) {
-	utxos, err := r.accountUtxos(ctx, accountName, func(*domain.Utxo) bool { return true })
-	if err != nil {
-		return nil, err
-	}
-
+	// summed as the coins are read: a balance holds no list of them
 	balance := make(map[string]*domain.Balance)
-	for _, u := range utxos {
-		if _, ok := balance[u.Asset]; !ok {
-			balance[u.Asset] = &domain.Balance{}
+	if err := r.eachAccountCoin(ctx, accountName, func(u *domain.Utxo) {
+		b, ok := balance[u.Asset]
+		if !ok {
+			b = &domain.Balance{}
+			balance[u.Asset] = b
 		}
-
-		b := balance[u.Asset]
 		if u.IsLocked() {
 			b.Locked += u.Value
+		} else if u.IsConfirmed() {
+			b.Confirmed += u.Value
 		} else {
-			if u.IsConfirmed() {
-				b.Confirmed += u.Value
-			} else {
-				b.Unconfirmed += u.Value
-			}
+			b.Unconfirmed += u.Value
 		}
+	}); err != nil {
+		return nil, err
 	}
 	return balance, nil
 }

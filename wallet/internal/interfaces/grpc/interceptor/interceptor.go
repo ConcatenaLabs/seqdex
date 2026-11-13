@@ -26,6 +26,7 @@ func unaryChain() grpc.UnaryServerInterceptor {
 			grpc_recovery.WithRecoveryHandler(recoverPanic),
 		),
 		unaryLogger,
+		boundHeavy,
 	)
 }
 

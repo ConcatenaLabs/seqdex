@@ -16,6 +16,8 @@ const (
 )
 
 type ServiceConfig struct {
+	// Host is the address the API listens on; empty means every interface.
+	Host         string
 	Port         int
 	NoTLS        bool
 	TLSLocation  string
@@ -35,7 +37,7 @@ func (c ServiceConfig) insecure() bool {
 }
 
 func (c ServiceConfig) address() string {
-	return fmt.Sprintf(":%d", c.Port)
+	return net.JoinHostPort(c.Host, fmt.Sprint(c.Port))
 }
 
 func (c ServiceConfig) listener() net.Listener {

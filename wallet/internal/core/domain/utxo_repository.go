@@ -55,7 +55,9 @@ type UtxoRepository interface {
 	GetAllUtxosForAccount(ctx context.Context, account string) ([]*Utxo, error)
 	// GetSpendableUtxosForAccount returns the list of spendable utxos for the
 	// given account. The list incldues only confirmed and unlocked utxos.
-	// Can be filtered by output scripts.
+	// Can be filtered by output scripts. The account reads (this one, the
+	// locked utxos and the balance) may leave out each utxo's range and
+	// surjection proofs: read a utxo by its key (GetUtxosByKey) to spend it.
 	GetSpendableUtxosForAccount(ctx context.Context, account string, scripts [][]byte) ([]*Utxo, error)
 	// GetLockedUtxosForAccount returns the list of all currently locked utxos
 	// for the given account. Can be filtered by output scripts.

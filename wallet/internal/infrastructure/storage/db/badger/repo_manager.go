@@ -42,21 +42,21 @@ func NewRepoManager(baseDbDir string, logger badger.Logger) (ports.RepoManager, 
 		scriptDir = filepath.Join(baseDbDir, "scripts")
 	}
 
-	walletDb, err := createDb(walletdbDir, logger)
+	walletDb, err := createDb(walletdbDir, logger, smallDb)
 	if err != nil {
 		return nil, fmt.Errorf("opening wallet db: %w", err)
 	}
 
-	utxoDb, err := createDb(utxoDir, logger)
+	utxoDb, err := createDb(utxoDir, logger, utxoDbMemory)
 	if err != nil {
 		return nil, fmt.Errorf("opening utxo db: %w", err)
 	}
 
-	txDb, err := createDb(txDir, logger)
+	txDb, err := createDb(txDir, logger, smallDb)
 	if err != nil {
 		return nil, fmt.Errorf("opening tx db: %w", err)
 	}
-	scriptDb, err := createDb(scriptDir, logger)
+	scriptDb, err := createDb(scriptDir, logger, smallDb)
 	if err != nil {
 		return nil, fmt.Errorf("opening external scripts db: %w", err)
 	}
@@ -219,11 +219,31 @@ func collectValueLog(db *badger.DB, every time.Duration, most int) {
 	}
 }
 
-func createDb(dbDir string, logger badger.Logger) (*badgerhold.Store, error) {
+// dbMemory is what one badger database may hold in memory, set explicitly rather than left
+// at badger's defaults (a 256 MB block cache each, every table index held whatever the
+// store's size, five memtables): GOMEMLIMIT does not bound them. The memtable keeps its
+// default size, which sets the largest transaction a database accepts.
+type dbMemory struct {
+	memtables  int   // memtables held at once, 64 MB each at most
+	blockCache int64 // decompressed blocks of the tables
+	indexCache int64 // the tables' indexes and bloom filters
+}
+
+var (
+	// the coins: read by every account read
+	utxoDbMemory = dbMemory{memtables: 3, blockCache: 128 << 20, indexCache: 64 << 20}
+	// the wallet (moved to its own file), transactions, watched scripts
+	smallDb = dbMemory{memtables: 2, blockCache: 16 << 20, indexCache: 16 << 20}
+)
+
+func createDb(dbDir string, logger badger.Logger, mem dbMemory) (*badgerhold.Store, error) {
 	isInMemory := len(dbDir) <= 0
 
 	opts := badger.DefaultOptions(dbDir)
 	opts.Logger = logger
+	opts.NumMemtables = mem.memtables
+	opts.BlockCacheSize = mem.blockCache
+	opts.IndexCacheSize = mem.indexCache
 
 	if isInMemory {
 		opts.InMemory = true

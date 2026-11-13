@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/aejkcs50/seqdex/wallet/internal/core/domain"
 	"github.com/dgraph-io/badger/v4"
@@ -35,8 +36,22 @@ type walletRepository struct {
 	externalChEvents chan domain.WalletEvent
 	lock             *sync.Mutex
 	// One write of the wallet at a time: each reads the stored wallet, changes it and stores
-	// it back, so two at once would each store their own change over the other's.
-	writeLock *sync.Mutex
+	// it back, so two at once would each store their own change over the other's. A write
+	// waits its turn only while its caller is there, and at most writeWait.
+	writeLock chan struct{}
+
+	// The wallet as stored in stateFile, decoded once. Every request reads the wallet, and it
+	// holds every account and every address ever derived (8.5 MB on the testnet, rewritten on
+	// each derivation): decoded again for each request, the requests of a few hundred clients
+	// at once took the daemon past its memory limit (seqdex #181). A request gets a View of it,
+	// which costs the number of accounts. It is replaced by every write of the file
+	// (insertWallet, updateWallet) and dropped by reset, the only writers of the file: the
+	// store's directory is locked by the one daemon that opened it, and a restore writes
+	// through insertWallet.
+	cacheLock sync.RWMutex
+	cached    *domain.Wallet
+
+	closed bool // set by close, under lock
 
 	log func(format string, a ...interface{})
 }
@@ -55,7 +70,7 @@ func newWalletRepository(store *badgerhold.Store, stateFile string) *walletRepos
 	}
 	return &walletRepository{
 		store: store, stateFile: stateFile, chEvents: chEvents, externalChEvents: extrernalChEvents, lock: lock,
-		writeLock: &sync.Mutex{}, log: logFn,
+		writeLock: make(chan struct{}, 1), log: logFn,
 	}
 }
 
@@ -124,8 +139,11 @@ func (r *walletRepository) LockWallet(
 func (r *walletRepository) UpdateWallet(
 	ctx context.Context, updateFn func(v *domain.Wallet) (*domain.Wallet, error),
 ) error {
-	r.writeLock.Lock()
-	defer r.writeLock.Unlock()
+	release, err := r.takeWriteLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	before, err := r.getWallet(ctx)
 	if err != nil {
@@ -283,9 +301,15 @@ func (r *walletRepository) insertWallet(
 		if _, err := r.getWallet(ctx); err == nil {
 			return fmt.Errorf("wallet is already initialized")
 		}
-		return r.writeState(wallet)
+		if err := r.writeState(wallet); err != nil {
+			r.dropCached()
+			return err
+		}
+		r.setCached(wallet)
+		return nil
 	}
 
+	r.dropCached()
 	if ctx.Value("tx") != nil {
 		tx := ctx.Value("tx").(*badger.Txn)
 		err = r.store.TxInsert(tx, walletKey, *wallet)
@@ -302,7 +326,75 @@ func (r *walletRepository) insertWallet(
 	return nil
 }
 
+// writeWait is the longest a write of the wallet waits for the one before it.
+var writeWait = 30 * time.Second
+
+// SetWalletWriteWait sets the longest a write of the wallet waits for the one before it.
+func SetWalletWriteWait(d time.Duration) {
+	if d > 0 {
+		writeWait = d
+	}
+}
+
+// ErrWalletBusy is what a write gets when the writes before it took longer than writeWait.
+var ErrWalletBusy = errors.New("the wallet is busy with other writes: try again")
+
+// takeWriteLock waits for the wallet's write lock while the caller is there, at most
+// writeWait. A derivation asked for by a client that has gone derives nothing.
+func (r *walletRepository) takeWriteLock(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	t := time.NewTimer(writeWait)
+	defer t.Stop()
+	select {
+	case r.writeLock <- struct{}{}:
+		return func() { <-r.writeLock }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-t.C:
+		return nil, ErrWalletBusy
+	}
+}
+
 func (r *walletRepository) getWallet(ctx context.Context) (*domain.Wallet, error) {
+	if r.stateFile != "" && ctx.Value("tx") == nil {
+		r.cacheLock.RLock()
+		w := r.cached
+		r.cacheLock.RUnlock()
+		if w != nil {
+			return w.View(), nil
+		}
+		w, err := r.loadWallet(ctx)
+		if err != nil {
+			return nil, err
+		}
+		r.cacheLock.Lock()
+		if r.cached == nil {
+			r.cached = w
+		}
+		w = r.cached
+		r.cacheLock.Unlock()
+		return w.View(), nil
+	}
+	return r.loadWallet(ctx)
+}
+
+// setCached keeps w as the stored wallet, after a write of the file.
+func (r *walletRepository) setCached(w *domain.Wallet) {
+	r.cacheLock.Lock()
+	r.cached = w.View()
+	r.cacheLock.Unlock()
+}
+
+func (r *walletRepository) dropCached() {
+	r.cacheLock.Lock()
+	r.cached = nil
+	r.cacheLock.Unlock()
+}
+
+// loadWallet reads and decodes the stored wallet.
+func (r *walletRepository) loadWallet(ctx context.Context) (*domain.Wallet, error) {
 	var err error
 	var wallet domain.Wallet
 
@@ -341,8 +433,16 @@ func (r *walletRepository) updateWallet(
 	ctx context.Context, wallet *domain.Wallet,
 ) error {
 	if r.stateFile != "" && ctx.Value("tx") == nil {
-		return r.writeState(wallet)
+		if err := r.writeState(wallet); err != nil {
+			// what the file holds now is not known: the next read decodes it again
+			r.dropCached()
+			return err
+		}
+		r.setCached(wallet)
+		return nil
 	}
+	// a write to the store's copy: read from there while the file does not exist yet
+	r.dropCached()
 	if ctx.Value("tx") != nil {
 		tx := ctx.Value("tx").(*badger.Txn)
 		return r.store.TxUpdate(tx, walletKey, *wallet)
@@ -386,6 +486,11 @@ func (r *walletRepository) writeState(wallet *domain.Wallet) error {
 func (r *walletRepository) publishEvent(event domain.WalletEvent) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
+	// an event published after the store closed has nobody to go to (a send on the closed
+	// channel would panic)
+	if r.closed {
+		return
+	}
 
 	r.log("publish event %s", event.EventType)
 	r.chEvents <- event
@@ -398,14 +503,20 @@ func (r *walletRepository) publishEvent(event domain.WalletEvent) {
 }
 
 func (r *walletRepository) reset() {
+	r.dropCached()
 	r.store.Badger().DropAll()
 	if r.stateFile != "" {
 		_ = os.Remove(r.stateFile)
 	}
+	r.dropCached()
 }
 
 func (r *walletRepository) close() {
 	r.store.Close()
+	// after any event being published now, and before any published later
+	r.lock.Lock()
+	r.closed = true
 	close(r.chEvents)
 	close(r.externalChEvents)
+	r.lock.Unlock()
 }

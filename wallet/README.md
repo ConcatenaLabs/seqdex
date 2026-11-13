@@ -87,7 +87,21 @@ Elements code, untouched. What changed:
   and at most `OCEAN_STORE_READS_PARALLEL` reads run at once (more wait their
   turn, and leave when their caller does). A build without the index writes
   coins without their index keys, so after one has run on a store, start this
-  build once with `OCEAN_REBUILD_ACCOUNT_INDEX=true`.
+  build once with `OCEAN_REBUILD_ACCOUNT_INDEX=true`. These reads leave out
+  each coin's range and surjection proofs, which only a spend needs (it reads
+  its coins by key), and a balance is summed as the coins are read.
+- **Memory bounded whatever the store holds**: the wallet is decoded from its
+  file once and kept; each request works on a copy that costs the number of
+  accounts, not the number of addresses, and every write of the file replaces
+  what is kept. At most `OCEAN_REQUESTS_PARALLEL` requests that read a whole
+  account (a balance, a list of coins or addresses, a coin selection, a spend)
+  run at once; one over the bound waits while its caller is there, at most
+  `OCEAN_REQUEST_WAIT_SECONDS`, and is then refused with `RESOURCE_EXHAUSTED`,
+  for the client to retry. A write of the wallet (a derived address) waits the
+  same way for the one before it. Coin selection ("smallest subset") finds the
+  fewest coins covering the target in one pass over the account's coins
+  sorted by value. Each badger database's caches are sized in
+  `internal/infrastructure/storage/db/badger/repo_manager.go`.
 
 ## Configuration
 
@@ -101,12 +115,15 @@ Env-only, prefix `OCEAN_` (full list in `internal/config/config.go`):
 | `OCEAN_BLOCKCHAIN_SCANNER_TYPE` | `elements` (node-RPC scanner) | `elements` |
 | `OCEAN_ESPLORA_URL` | optional Esplora endpoint (unset = node-RPC-only) | - |
 | `OCEAN_PORT` | gRPC listen port | `18000` |
+| `OCEAN_LISTEN_HOST` | the address the gRPC API listens on; `127.0.0.1` when every client runs on the same host | every interface |
 | `OCEAN_DATADIR`, `OCEAN_DB_TYPE` | state directory, `badger`/`inmemory`/`postgres` | `~/.seqdex-wallet`, `badger` |
 | `OCEAN_NO_TLS` | disable TLS (dev) | `false` |
 | `OCEAN_SCAN_CATCHUP_PARALLEL` | how many accounts' scanners read blocks at once while more than six blocks behind the tip | `4` |
 | `OCEAN_STORE_READS_PARALLEL` | how many reads of an account's coins or balance the badger store runs at once | `8` |
+| `OCEAN_REQUESTS_PARALLEL` | how many requests that read a whole account run at once | `16` |
+| `OCEAN_REQUEST_WAIT_SECONDS` | how long such a request, or a write of the wallet, waits for its turn before it is refused | `30` |
 | `OCEAN_REBUILD_ACCOUNT_INDEX` | index each account's unspent coins again at this start (after a build without the index ran on the store) | `false` |
-| `OCEAN_PROFILER_PORT`, `OCEAN_NO_PROFILER` | the pprof port (`/debug/pprof/`), or no profiler | `18001`, `false` |
+| `OCEAN_PROFILER_PORT`, `OCEAN_NO_PROFILER` | the pprof port (`/debug/pprof/`, on 127.0.0.1 only; a port another program holds is logged), or no profiler | `18001`, `false` |
 
 The Go runtime reads two variables of its own that matter under a service
 manager's limits. `go.mod` names Go 1.18, so the runtime does not size itself
