@@ -62,13 +62,20 @@ func TestGetBestPairs(t *testing.T) {
 			sort.Slice(tt.args.items, func(i, j int) bool {
 				return tt.args.items[i] > tt.args.items[j]
 			})
-			if got := getBestCombination(tt.args.items, tt.args.target); !reflect.DeepEqual(got, tt.want) {
+			got := []uint64{}
+			for _, i := range bestCombination(tt.args.items, tt.args.target) {
+				got = append(got, tt.args.items[i])
+			}
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("getBestPairs() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
+// TestFindIndexes checks oldFindIndexes, which maps the old selector's values back to
+// positions, as SelectUnspents did before seqdex #198, for the oracle in
+// coinselection_oracle_test.go.
 func TestFindIndexes(t *testing.T) {
 	type args struct {
 		list                 []uint64
@@ -107,7 +114,7 @@ func TestFindIndexes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := findIndexes(tt.args.list, tt.args.unblindedUtxosValues); !reflect.DeepEqual(got, tt.want) {
+			if got := oldFindIndexes(tt.args.list, tt.args.unblindedUtxosValues); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("findIndexes() = %v, want %v", got, tt.want)
 			}
 		})
