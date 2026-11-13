@@ -3,7 +3,7 @@ package oceanwallet
 import (
 	"context"
 	"fmt"
-	"io"
+	"sync"
 
 	log "github.com/sirupsen/logrus"
 	pb "github.com/aejkcs50/seqdex/daemon/api-spec/protobuf/gen/ocean/v1"
@@ -15,6 +15,9 @@ type notify struct {
 	client              pb.NotificationServiceClient
 	chTxNotifications   chan ports.WalletTxNotification
 	chUtxoNotifications chan ports.WalletUtxoNotification
+	// closed is closed by the service's Close: the streams are not opened again after it
+	closed    chan struct{}
+	closeOnce sync.Once
 }
 
 func newNotify(conn *grpc.ClientConn) (*notify, error) {
@@ -22,6 +25,7 @@ func newNotify(conn *grpc.ClientConn) (*notify, error) {
 		client:              pb.NewNotificationServiceClient(conn),
 		chTxNotifications:   make(chan ports.WalletTxNotification),
 		chUtxoNotifications: make(chan ports.WalletUtxoNotification),
+		closed:              make(chan struct{}),
 	}
 
 	txStream, err := svc.client.TransactionNotifications(
@@ -55,63 +59,89 @@ func (m *notify) GetUtxoNotifications() chan ports.WalletUtxoNotification {
 	return m.chUtxoNotifications
 }
 
+// giveUp ends the process when the wallet stays away longer than walletWait, as a broken
+// stream always did before.
+var giveUp = func(err error, what string) {
+	log.WithError(err).Fatalf("notification handler: error while listenting to %s notifications", what)
+}
+
+// startListeningForTxNotifications hands every tx notification on. When the stream breaks or
+// ends (the wallet daemon stopped or restarted) it is opened again as soon as the wallet answers, for up
+// to walletWait; only then is the process ended. Notifications sent while it was broken are
+// not seen, as they were not when the process ended and started again.
 func (m *notify) startListeningForTxNotifications(
 	stream pb.NotificationService_TransactionNotificationsClient,
 ) {
-	var err error
-	defer func() {
-		if err != nil {
-			log.WithError(err).Fatal(
-				"notification handler: error while listenting to tx notifications",
-			)
-		}
-	}()
-
 	for {
-		var notification *pb.TransactionNotificationsResponse
-		notification, err = stream.Recv()
-		if err != nil {
-			if err == io.EOF {
+		var err error
+		for {
+			var n *pb.TransactionNotificationsResponse
+			if n, err = stream.Recv(); err != nil {
 				break
+			}
+			select {
+			case m.chTxNotifications <- txNotifyInfo{n}:
+			default:
+			}
+		}
+		select {
+		case <-m.closed:
+			return
+		default:
+		}
+		log.WithError(err).Warn("notification handler: the tx notifications stream broke, opening it again")
+		if err = waitForWallet(m.closed, func(ctx context.Context) error {
+			s, err := m.client.TransactionNotifications(context.Background(), &pb.TransactionNotificationsRequest{})
+			if err == nil {
+				stream = s
+			}
+			return err
+		}); err != nil {
+			if err != errClosed {
+				giveUp(err, "tx")
 			}
 			return
 		}
-
-		select {
-		case m.chTxNotifications <- txNotifyInfo{notification}:
-			continue
-		default:
-		}
+		log.Info("notification handler: the tx notifications stream is open again")
 	}
 }
 
+// startListeningForUtxoNotifications is startListeningForTxNotifications for utxo
+// notifications.
 func (m *notify) startListeningForUtxoNotifications(
 	stream pb.NotificationService_UtxosNotificationsClient,
 ) {
-	var err error
-	defer func() {
-		if err != nil {
-			log.WithError(err).Fatal(
-				"notification handler: error while listenting to utxo notifications",
-			)
-		}
-	}()
-
 	for {
-		var notification *pb.UtxosNotificationsResponse
-		notification, err = stream.Recv()
-		if err != nil {
-			if err == io.EOF {
+		var err error
+		for {
+			var n *pb.UtxosNotificationsResponse
+			if n, err = stream.Recv(); err != nil {
 				break
+			}
+			select {
+			case m.chUtxoNotifications <- utxoNotifyInfo{n}:
+			default:
+			}
+		}
+		select {
+		case <-m.closed:
+			return
+		default:
+		}
+		log.WithError(err).Warn("notification handler: the utxo notifications stream broke, opening it again")
+		if err = waitForWallet(m.closed, func(ctx context.Context) error {
+			s, err := m.client.UtxosNotifications(context.Background(), &pb.UtxosNotificationsRequest{})
+			if err == nil {
+				stream = s
+			}
+			return err
+		}); err != nil {
+			if err != errClosed {
+				giveUp(err, "utxo")
 			}
 			return
 		}
-
-		select {
-		case m.chUtxoNotifications <- utxoNotifyInfo{notification}:
-			continue
-		default:
-		}
+		log.Info("notification handler: the utxo notifications stream is open again")
 	}
 }
 

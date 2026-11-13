@@ -628,7 +628,7 @@ prefix `SEQDEX_` (upstream used `TDEX_`); the main keys (see
 
 | Env | Meaning | Default |
 |---|---|---|
-| `SEQDEX_WALLET_ADDR` | ocean wallet gRPC endpoint | - |
+| `SEQDEX_WALLET_ADDR` | ocean wallet gRPC endpoint. At its start the daemon waits up to 3 minutes for the wallet to answer, and when the wallet stops or restarts it opens its notification streams again as soon as the wallet answers, for up to 3 minutes; then it exits | - |
 | `SEQDEX_TRADE_LISTENING_PORT` | Trade interface (gRPC + grpc-web + REST) | `9945` |
 | `SEQDEX_OPERATOR_LISTENING_PORT` | Operator interface | `9000` |
 | `SEQDEX_NODE_RPC` | Sequentia node RPC URL for `getfeeexchangerates` (any-asset network fees); unset = legacy native-asset fee path | - |
