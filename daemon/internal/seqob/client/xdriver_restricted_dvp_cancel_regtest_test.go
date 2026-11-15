@@ -252,9 +252,9 @@ func TestDvPAttackCancelledTrade(t *testing.T) {
 			}
 		}
 		var nothing interface{}
-		must(t, e.seq.Call(&nothing, "setfeeexchangerates", fewer, false))
+		must(t, e.seq.Call(&nothing, "setfeeexchangerates", fewer))
 		evicted := !maker.party.Node.InMempool(t1)
-		must(t, e.seq.Call(&nothing, "setfeeexchangerates", rates, false))
+		must(t, e.seq.Call(&nothing, "setfeeexchangerates", rates))
 		if !evicted {
 			t.Fatalf("delisting the fee asset did not evict the trade %s", t1)
 		}
